@@ -326,6 +326,11 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
 	if bc, ok := val.(*syntax.BuiltinCall); ok {
 		switch {
+		case bc.Name == "load" && pr.fp:
+			p := g.use(bc.Args[0])
+			g.emit("ldr q%d, [%s]", pr.n, x(p))
+			g.free(p)
+			return true
 		case bc.Name == "zero" && pr.fp:
 			g.emit("movi v%d.16b, #0", pr.n)
 			return true
@@ -358,7 +363,7 @@ func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
 		return false
 	}
 	b, ok := val.(*syntax.BinaryExpr)
-	if !ok || !opIsArith(b.Op) || t.Kind == sema.Vec || g.info.Consts[val] != (sema.Const{}) {
+	if !ok || !opIsArith(b.Op) || g.info.Consts[val] != (sema.Const{}) {
 		return false
 	}
 	if _, isConst := g.info.Consts[val]; isConst {

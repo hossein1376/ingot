@@ -283,13 +283,17 @@ func (g *gen) addr(e syntax.Expr) reg {
 			if sr, ok := g.cachedSlice(e.X); ok {
 				lenReg = fmt.Sprintf("x%d", sr[1])
 				if _, isK := g.info.Consts[e.Index]; !isK && (et.Size == 1 || et.Size == 2 || et.Size == 4 || et.Size == 8 || et.Size == 16) {
-					idx := g.use(e.Index)
+					var idx reg
+					sh := log2(et.Size)
 					if g.opt.Safe {
+						idx = g.use(e.Index)
 						g.emit("cmp %s, %s", x(idx), lenReg)
 						g.emit("b.hs %s", g.panicStub(e.Index.ESpan(), "index out of bounds"))
+					} else {
+						idx, sh = g.scaledIndex(e.Index, et.Size)
 					}
 					base = g.allocG(e.Sp)
-					g.emit("add %s, x%d, %s, lsl #%d", x(base), sr[0], x(idx), log2(et.Size))
+					g.emit("add %s, x%d, %s, lsl #%d", x(base), sr[0], x(idx), sh)
 					g.free(idx)
 					return base
 				}
@@ -308,9 +312,9 @@ func (g *gen) addr(e syntax.Expr) reg {
 			if pb.abs != 0 {
 				if _, isK := g.info.Consts[e.Index]; !isK && (et.Size == 1 || et.Size == 2 || et.Size == 4 || et.Size == 8 || et.Size == 16) {
 					// base lives in a promoted register: one add forms the address
-					idx := g.use(e.Index)
+					idx, sh := g.scaledIndex(e.Index, et.Size)
 					base = g.allocG(e.Sp)
-					g.emit("add %s, x%d, %s, lsl #%d", x(base), pb.abs, x(idx), log2(et.Size))
+					g.emit("add %s, x%d, %s, lsl #%d", x(base), pb.abs, x(idx), sh)
 					g.free(idx)
 					return base
 				}
@@ -363,6 +367,21 @@ func (g *gen) aggAddr(e syntax.Expr) reg {
 	}
 	r, _ := g.expr(e)
 	return r
+}
+
+// scaledIndex evaluates an index for an element of the given size and
+// returns it with the left shift that scales it. An index of the form
+// k * 2^m (with an unchecked bounds context) folds the multiply into the
+// shift, so &p[k * 16] is one add.
+func (g *gen) scaledIndex(e syntax.Expr, size int64) (reg, int) {
+	sh := log2(size)
+	if b, ok := unparen(e).(*syntax.BinaryExpr); ok && b.Op == "*" && g.typeOf(b).Size == 8 {
+		bx, by := g.operands(b, g.typeOf(b))
+		if k, ok := g.info.Consts[by]; ok && !k.IsFloat && k.I > 0 && k.I&(k.I-1) == 0 && sh+log2(k.I) < 64 {
+			return g.use(bx), sh + log2(k.I)
+		}
+	}
+	return g.use(e), sh
 }
 
 func (g *gen) scaledAdd(base, idx reg, size int64) {
@@ -1077,8 +1096,8 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		return r, true
 	case "store":
 		p, _ := g.expr(e.Args[0])
-		val, _ := g.expr(e.Args[1])
-		g.emit("str q%d, [%s]", fprBase+val.n, x(p))
+		val := g.use(e.Args[1])
+		g.emit("str q%d, [%s]", num(val), x(p))
 		g.free(p)
 		g.free(val)
 		return reg{}, false
