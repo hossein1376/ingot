@@ -294,6 +294,9 @@ func typeKey(t syntax.TypeExpr) string {
 		if t.Ret != nil {
 			s += "->" + typeKey(t.Ret)
 		}
+		if t.Err != nil {
+			s += "!" + typeKey(t.Err)
+		}
 		return s
 	}
 	return "?"

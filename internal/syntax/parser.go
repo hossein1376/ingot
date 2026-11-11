@@ -325,6 +325,9 @@ func (ps *Parser) typeExpr() TypeExpr {
 		ps.expect(")")
 		if ps.accept("->") {
 			ft.Ret = ps.typeExpr()
+			if ps.accept("!") {
+				ft.Err = ps.typeExpr()
+			}
 		}
 		ft.Sp = ps.from(t.Pos)
 		return ft

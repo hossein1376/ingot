@@ -125,19 +125,11 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 			ft.Ret = c.resolve(fd.Ret)
 		}
 		if fd.Err != nil {
-			et := c.resolve(fd.Err)
-			switch {
-			case fd.Extern:
+			if fd.Extern {
+				c.resolve(fd.Err)
 				c.dl.Errorf("E0242", fd.Err.TSpan(), "extern (C) functions cannot have an error type")
-			case et.Enum == nil:
-				c.dl.Errorf("E0242", fd.Err.TSpan(), "the error type after '!' must be an enum, found %s", et)
-			default:
-				for i, v := range et.Enum.Values {
-					if v == 0 {
-						c.dl.Errorf("E0242", fd.Err.TSpan(), "error enum %s has member %s = 0; 0 means success, so error values must be non-zero", et, et.Enum.Names[i])
-					}
-				}
-				ft.Err = et
+			} else {
+				ft.Err = c.errType(fd.Err)
 			}
 		}
 		if fd.Inline {
@@ -524,9 +516,32 @@ func (c *checker) resolve(te syntax.TypeExpr) *Type {
 		if t.Ret != nil {
 			ft.Ret = c.resolve(t.Ret)
 		}
+		if t.Err != nil {
+			if t.Variadic {
+				c.dl.Errorf("E0242", t.Err.TSpan(), "variadic (C) function types cannot have an error type")
+			}
+			ft.Err = c.errType(t.Err)
+		}
 		return ft
 	}
 	return TI64
+}
+
+// errType resolves and checks the error enum after '!' in a function
+// declaration or function type. It returns nil when the type is unusable.
+func (c *checker) errType(te syntax.TypeExpr) *Type {
+	et := c.resolve(te)
+	if et.Enum == nil {
+		c.dl.Errorf("E0242", te.TSpan(), "the error type after '!' must be an enum, found %s", et)
+		return nil
+	}
+	for i, v := range et.Enum.Values {
+		if v == 0 {
+			c.dl.Errorf("E0242", te.TSpan(), "error enum %s has member %s = 0; 0 means success, so error values must be non-zero", et, et.Enum.Names[i])
+			return nil
+		}
+	}
+	return et
 }
 
 // qualify finds the single module-qualified declaration "m.name" (a type

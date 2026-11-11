@@ -623,3 +623,25 @@ test "dense switches use a jump table" {
     @assert(jt_neg(-2) == 20 && jt_neg(-1) == 10 && jt_neg(0) == 0 && jt_neg(1) == 11 && jt_neg(3) == 33);
     @assert(jt_neg(2) == 99 && jt_neg(-3) == 99 && jt_neg(4) == 99 && jt_neg(1000000) == 99);
 }
+
+// fallible function pointers: '! E' is part of the fn type
+fn r_halve(v: f64) -> f64 ! MathErr {
+    if v < 0.0 {
+        return @err(MathErr.negative);
+    }
+    return v * 0.5;
+}
+
+fn r_apply(f: fn(f64) -> f64 ! MathErr, v: f64) -> f64 ! MathErr {
+    let a: f64 = try f(v);
+    return try f(a);
+}
+
+test "fallible function pointers: try and catch through fn(..) -> T ! E" {
+    var f: fn(f64) -> f64 ! MathErr = r_sqrtish;
+    @assert((f(8.0) catch _ => -1.0) == 4.0);
+    @assert((f(-1.0) catch e => (e as i64) as f64) == 1.0);
+    f = r_halve;
+    @assert((r_apply(f, 8.0) catch _ => -1.0) == 2.0);
+    @assert((r_apply(r_sqrtish, 4000.0) catch e => (e as i64) as f64) == 300.0);
+}

@@ -41,7 +41,7 @@ type        = IDENT [ "." IDENT ] [ targs ]   (* i8..i64 u8..u64 f32 f64 bool vo
             | "*" type                      (* pointer *)
             | "[" INT "]" type              (* array, fixed length *)
             | "[" "]" type                  (* slice: { ptr: *T, len: i64 } *)
-            | "fn" "(" [ type { "," type } ] ")" [ "->" type ] ;   (* C function pointer *)
+            | "fn" "(" [ type { "," type } ] ")" [ "->" type [ "!" type ] ] ;   (* function pointer; "! E" = fallible *)
 
 block       = "{" { stmt } "}" ;
 stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
@@ -97,6 +97,7 @@ match the grammar above. Chained comparisons (`a < b < c`) are also errors.
 | `struct S {...}` | C layout | fields in order, natural alignment, size rounded to alignment |
 | `enum E: T {...}` | as T (default `i32`) | distinct type; members `E.Name`; only `==`/`!=`; convert with `as` |
 | `fn(A, B) -> R` | 8 | a C function pointer. Every Ingot `fn` is a valid value of its type |
+| `fn(A) -> R ! E` | 8 | a pointer to a fallible Ingot function (error code in `x1`). Calls through it need `try` or `catch`, the same as direct calls. `! E` is part of the type, so fallible and infallible pointers do not mix |
 | `f32x4 f64x2 i32x4 i64x2 u8x16` | 16, 16 | one 128-bit NEON register |
 
 **No implicit conversions.** Values only flow between identical types. The exceptions

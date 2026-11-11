@@ -121,6 +121,7 @@ func (r *renamer) typ(t syntax.TypeExpr) syntax.TypeExpr {
 			t.Params[i] = r.typ(t.Params[i])
 		}
 		t.Ret = r.typ(t.Ret)
+		t.Err = r.typ(t.Err)
 	}
 	return t
 }

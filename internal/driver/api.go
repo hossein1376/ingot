@@ -180,6 +180,9 @@ func typeText(t syntax.TypeExpr) string {
 		if t.Ret != nil {
 			s += " -> " + typeText(t.Ret)
 		}
+		if t.Err != nil {
+			s += " ! " + typeText(t.Err)
+		}
 		return s
 	}
 	return "?"

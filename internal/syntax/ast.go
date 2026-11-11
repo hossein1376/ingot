@@ -30,6 +30,7 @@ type (
 		Params   []TypeExpr
 		Variadic bool
 		Ret      TypeExpr // nil = void
+		Err      TypeExpr // error enum after '!', nil = infallible
 		Sp       diag.Span
 	}
 )

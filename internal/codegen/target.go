@@ -99,4 +99,4 @@ func (t Target) DataSection() string {
 	return ".data"
 }
 
-var symReplacer = strings.NewReplacer(".", "__", "[", "_G_", "]", "_", ",", "_", "*", "P", "(", "_", ")", "_", "-", "_", ">", "_")
+var symReplacer = strings.NewReplacer(".", "__", "[", "_G_", "]", "_", ",", "_", "*", "P", "(", "_", ")", "_", "-", "_", ">", "_", "!", "_E_")
