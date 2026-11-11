@@ -302,6 +302,12 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 			return
 		}
 	}
+	if pr, ok := g.promoted[lv]; ok && pr.fp && t.Kind == sema.Float {
+		if k, isConst := g.info.Consts[val]; isConst {
+			g.constInto(reg{abs: pr.n, fp: true}, k, t)
+			return
+		}
+	}
 	if pr, ok := g.promoted[lv]; ok && g.arithInto(pr, t, val) {
 		return
 	}

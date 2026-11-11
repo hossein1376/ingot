@@ -3,6 +3,8 @@ package codegen
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/sema"
@@ -182,10 +184,19 @@ func (g *gen) loadLvalue(e syntax.Expr, t *sema.Type) reg {
 
 func (g *gen) constant(k sema.Const, t *sema.Type, sp diag.Span) reg {
 	r := g.alloc(t, sp)
+	return g.constInto(r, k, t)
+}
+
+// constInto materializes constant k of type t in r.
+func (g *gen) constInto(r reg, k sema.Const, t *sema.Type) reg {
 	if t.Kind == sema.Float {
 		f := k.F
 		if !k.IsFloat {
 			f = float64(k.I)
+		}
+		if imm, ok := fpImm(f); ok {
+			g.emit("fmov %s, #%s", rn(r, t), imm)
+			return r
 		}
 		if t.Size == 4 {
 			bits := math.Float32bits(float32(f))
@@ -1306,4 +1317,22 @@ func (g *gen) selectCond(c syntax.Expr) string {
 	g.emit("cmp %s, #0", w(cr))
 	g.free(cr)
 	return "ne"
+}
+
+// fpImm reports whether f fits fmov's 8-bit immediate, ±(16+m)/16·2^e with
+// m in 0..15 and e in -3..4, and returns its assembler spelling.
+func fpImm(f float64) (string, bool) {
+	a := math.Abs(f)
+	for e := -3; e <= 4; e++ {
+		for m := 0; m < 16; m++ {
+			if a == float64(16+m)/16*math.Ldexp(1, e) {
+				s := strconv.FormatFloat(f, 'f', -1, 64)
+				if !strings.Contains(s, ".") {
+					s += ".0"
+				}
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
