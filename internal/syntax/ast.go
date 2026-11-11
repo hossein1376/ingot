@@ -212,7 +212,8 @@ type (
 		Lo, Hi Expr
 		Body   *Block
 		Sp     diag.Span
-		Each   bool // desugared from `for x in s`: Hi is s.len
+		Each   bool  // desugared from `for x in s`: Hi is s.len
+		Step   int64 // `step K` (a positive literal); 0 means 1
 	}
 	ReturnStmt struct {
 		Value Expr // may be nil

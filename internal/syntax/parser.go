@@ -405,7 +405,19 @@ func (ps *Parser) stmt() Stmt {
 		}
 		ps.expect("..")
 		hi := ps.expr()
-		return &ForStmt{Var: v.Text, Lo: lo, Hi: hi, Body: ps.block(), Sp: ps.from(t.Pos)}
+		var step int64
+		if c := ps.cur(); c.Kind == Ident && c.Text == "step" {
+			ps.next()
+			lt := ps.cur()
+			n, err := parseInt(lt.Text)
+			if lt.Kind != Int || err != nil || n <= 0 {
+				ps.fail("E0103", ps.sp(lt), "for-loop step must be a positive integer literal")
+				panic(bailout{})
+			}
+			ps.next()
+			step = n
+		}
+		return &ForStmt{Var: v.Text, Lo: lo, Hi: hi, Step: step, Body: ps.block(), Sp: ps.from(t.Pos)}
 	case ps.is("return"):
 		ps.next()
 		s := &ReturnStmt{}

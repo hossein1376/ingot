@@ -178,12 +178,13 @@ func (g *gen) stmt1(s syntax.Stmt) {
 		g.loops = g.loops[:len(g.loops)-1]
 		g.label(cont)
 		ctr := fmt.Sprintf("x%d", pr.n)
-		if promoted {
-			g.emit("add %s, %s, #1", ctr, ctr)
-		} else {
+		step := max(s.Step, 1)
+		if !promoted {
 			ctr = "x9"
 			g.emit("ldr x9, %s", g.mem(g.slots[lv]))
-			g.emit("add x9, x9, #1")
+		}
+		g.addImm(ctr, ctr, step)
+		if !promoted {
 			g.emit("str x9, %s", g.mem(g.slots[lv]))
 		}
 		g.label(test)

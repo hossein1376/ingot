@@ -745,3 +745,27 @@ test "for i, x in s binds the index and the element" {
         }
     }
 }
+
+fn st_dot(a: []f32, b: []f32) -> f32 {
+    var acc: f32x4 = @zero;
+    for i in 0..a.len step 4 {
+        acc = @fma(@load(f32x4, &a[i]), @load(f32x4, &b[i]), acc);
+    }
+    return @reduce_add(acc);
+}
+
+test "for ... step K advances the counter by K" {
+    var n: i64 = 0;
+    var last: i64 = 0;
+    for i in 3..20 step 5 {
+        n += 1;
+        last = i;
+    }
+    @assert(n == 4 && last == 18);
+    for i in 0..0 step 7 {
+        n += 100;
+    }
+    @assert(n == 4);
+    var xs: [8]f32 = [8]f32.{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    @assert(st_dot(xs[0..8], xs[0..8]) == 204.0);
+}
