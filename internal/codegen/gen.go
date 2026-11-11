@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -76,8 +77,10 @@ type gen struct {
 	failed   bool
 
 	promoted  map[*sema.Var]preg
-	tempG     int  // number of pool registers available for temporaries
-	final     bool // last allocation attempt: report exhaustion as an error
+	sliceRegs map[*sema.Var][2]int // never-reassigned slices: {ptr, len} registers
+	vecSave   map[int]int64        // promoted vector register -> save slot around calls
+	tempG     int                  // number of pool registers available for temporaries
+	final     bool                 // last allocation attempt: report exhaustion as an error
 	exhausted bool
 	fprTouch  [8]bool // d8..d15
 	srcLines  []string
@@ -631,18 +634,36 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 			g.tempG--
 		}
 	}
+	g.tempG -= 2 * len(g.sliceRegs)
 	g.w = &buf
 	g.body = b
 	g.slots = map[*sema.Var]int64{}
 	g.byRef = map[*sema.Var]bool{}
 	g.frame = saveArea
 	g.outArgs = 0
+	g.vecSave = map[int]int64{}
+	if !u.leaf {
+		var ns []int
+		for lv, p := range g.promoted {
+			if p.fp && lv.Type.Kind == sema.Vec {
+				ns = append(ns, p.n)
+			}
+		}
+		sort.Ints(ns) // deterministic frame layout
+		for _, n := range ns {
+			g.vecSave[n] = g.slot(16, 16)
+		}
+	}
 	g.gpr, g.gprTouch, g.fpr = [gprCount]bool{}, [gprCount]bool{}, [fprCount]bool{}
 	for i := range g.fprSpill {
 		g.fprSpill[i] = 0
 	}
 	g.stubs.Reset()
 	g.retLabel = g.newLabel("ret")
+	for _, sr := range g.sliceRegs {
+		g.gprTouch[sr[0]-gprBase] = true
+		g.gprTouch[sr[1]-gprBase] = true
+	}
 	for _, p := range g.promoted {
 		if p.fp {
 			g.fprTouch[p.n-8] = true
@@ -732,6 +753,9 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 			g.emit("ldr x9, %s", src)
 			g.storeX9(size, g.slots[p])
 		}
+	}
+	for _, p := range b.Params {
+		g.loadSliceRegs(p)
 	}
 	g.block(b.Block)
 	if g.exhausted && !final {

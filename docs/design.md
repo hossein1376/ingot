@@ -37,8 +37,11 @@ brevity for regularity:
 * SIMD types are first-class, map 1:1 to NEON registers, and builtins map 1:1 to
   instructions (`@fma` to `fmla`, `@reduce_add` to `faddp`/`addv`).
 * Loops are rotated and conditions compile to compare and branch. Scalar locals are
-  promoted to callee-saved registers, and vector locals in leaf functions stay in
-  `v8`–`v15`.
+  promoted to callee-saved registers. Vector locals stay in `v8`–`v15`. AAPCS64 keeps
+  only their low 64 bits across a call, so a function that calls stores each promoted vector
+  before a `bl` and reloads it after. That is cheap when calls are off the hot path. A slice
+  that is never reassigned keeps `{ptr, len}` in a register pair, so `s[i]` is a
+  `cmp`/`b.hs` against the length register plus one `add`, with no reloads from the frame.
 * Safety checks (bounds and division) are explicit, cheap (`cmp` + `b.hs` to an
   out-of-line stub) and can be removed with `--unchecked`.
 * Errors are values with a fixed cost. A fallible function (`-> T ! E`) returns its

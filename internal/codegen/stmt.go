@@ -53,6 +53,7 @@ func (g *gen) stmt(s syntax.Stmt) {
 	case *syntax.LetStmt:
 		lv := g.info.Defs[s]
 		g.initVar(lv, s.Value)
+		g.loadSliceRegs(lv)
 	case *syntax.AssignStmt:
 		g.assign(s)
 	case *syntax.DeferStmt:

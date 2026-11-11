@@ -418,3 +418,47 @@ test "lane masks and per-lane @select (fcmgt/cmhi/bsl)" {
     @assert(big[9] == 0 as u8);
     @assert(@reduce_max(big) == 255 as u8);
 }
+
+fn vsum_with_calls(xs: []f32) -> f32 {
+    // acc stays in v8-v15 across the calls to helper(): saved and reloaded
+    var acc: f32x4 = @zero;
+    let one: f32x4 = @splat(f32x4, 1.0);
+    for k in 0..xs.len / 4 {
+        acc = acc + @load(f32x4, &xs.ptr[k * 4]);
+        if helper(k) {
+            acc = acc + one;
+        }
+    }
+    return @reduce_add(acc);
+}
+
+fn helper(k: i64) -> bool {
+    var junk: f32x4 = @splat(f32x4, 99.0); // clobbers vector registers
+    junk = junk * junk;
+    return k % 2 == 0 && junk[0] > 0.0;
+}
+
+fn slice_shapes(a: []i64, b: []i64) -> i64 {
+    var s: i64 = 0;
+    for i in 0..a.len {
+        s += a[i] * b[i % b.len];
+    }
+    var c: []i64 = a;   // reassigned below: not cached
+    c = c[1..c.len];
+    s += c[0] + c.len;
+    let d: []i64 = b;   // never reassigned: cached
+    s += d[d.len - 1];
+    return s;
+}
+
+test "slice caching and vectors kept across calls" {
+    var buf: [16]f32 = @zero;
+    for i in 0..16 {
+        buf[i] = i as f32;
+    }
+    @assert(vsum_with_calls(buf[0..16]) == 128.0); // 120, plus 4 lanes * 1.0 for k = 0 and 2
+    var a: [5]i64 = [5]i64.{ 1, 2, 3, 4, 5 };
+    var b: [2]i64 = [2]i64.{ 10, 100 };
+    // 1*10 + 2*100 + 3*10 + 4*100 + 5*10 = 690; c = [2..5]: 2 + 4; d[1] = 100
+    @assert(slice_shapes(a[0..5], b[0..2]) == 796);
+}

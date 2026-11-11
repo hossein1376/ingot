@@ -211,7 +211,8 @@ Vector types are first-class values. Each one occupies one 128-bit NEON register
   `@select(mask, a, b)` on vectors picks per lane (`bsl`). On scalars, `@select(cond, a, b)`
   compiles to `csel`/`fcsel`. Both operands are always evaluated.
 * Vectors convert lane-wise with `as` (`f32x4 as i32x4`, and the reverse).
-* Vector locals in leaf functions stay in `v8`–`v15` across loops. Temporaries use `v16`–`v31`.
+* Vector locals stay in `v8`–`v15` across loops, and are saved and reloaded around calls,
+  because AAPCS64 preserves only the low 64 bits. Temporaries use `v16`–`v31`.
 
 ## 8. Concurrency
 

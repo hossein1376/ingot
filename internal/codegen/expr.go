@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -89,6 +90,15 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 	case *syntax.FieldExpr:
 		xt := g.typeOf(e.X)
 		if xt.Kind == sema.Slice {
+			if sr, ok := g.cachedSlice(e.X); ok {
+				r := g.allocG(e.Sp)
+				n := sr[0]
+				if e.Name == "len" {
+					n = sr[1]
+				}
+				g.emit("mov %s, x%d", x(r), n)
+				return r, true
+			}
 			base, _ := g.expr(e.X)
 			off := 0
 			if e.Name == "len" {
@@ -270,6 +280,23 @@ func (g *gen) addr(e syntax.Expr) reg {
 		case sema.Array:
 			base = g.aggAddr(e.X)
 		case sema.Slice:
+			if sr, ok := g.cachedSlice(e.X); ok {
+				lenReg = fmt.Sprintf("x%d", sr[1])
+				if _, isK := g.info.Consts[e.Index]; !isK && (et.Size == 1 || et.Size == 2 || et.Size == 4 || et.Size == 8 || et.Size == 16) {
+					idx := g.use(e.Index)
+					if g.opt.Safe {
+						g.emit("cmp %s, %s", x(idx), lenReg)
+						g.emit("b.hs %s", g.panicStub(e.Index.ESpan(), "index out of bounds"))
+					}
+					base = g.allocG(e.Sp)
+					g.emit("add %s, x%d, %s, lsl #%d", x(base), sr[0], x(idx), log2(et.Size))
+					g.free(idx)
+					return base
+				}
+				base = g.allocG(e.Sp)
+				g.emit("mov %s, x%d", x(base), sr[0])
+				break
+			}
 			base = g.aggAddr(e.X)
 			if g.opt.Safe {
 				g.emit("ldr x15, [%s, #8]", x(base))
@@ -589,6 +616,14 @@ func (g *gen) use(e syntax.Expr) reg {
 			if pr, ok := g.promoted[lv]; ok {
 				return reg{abs: pr.n, fp: pr.fp}
 			}
+		}
+	}
+	if f, ok := e.(*syntax.FieldExpr); ok {
+		if sr, ok := g.cachedSlice(f.X); ok {
+			if f.Name == "len" {
+				return reg{abs: sr[1]}
+			}
+			return reg{abs: sr[0]}
 		}
 	}
 	r, _ := g.expr(e)
@@ -927,11 +962,22 @@ func (g *gen) emitCall(direct string, callee reg, args []argLoc, ret *sema.Type,
 		resOff = g.slot(ret.Size, ret.Align)
 		g.subImm("x8", "x29", resOff)
 	}
+	vs := make([]int, 0, len(g.vecSave))
+	for n := range g.vecSave {
+		vs = append(vs, n)
+	}
+	sort.Ints(vs) // deterministic output
+	for _, n := range vs {
+		g.emit("str q%d, %s", n, g.mem(g.vecSave[n]))
+	}
 	if direct != "" {
 		g.emit("bl %s", direct)
 	} else {
 		g.emit("blr %s", x(callee))
 		g.free(callee)
+	}
+	for _, n := range vs {
+		g.emit("ldr q%d, %s", n, g.mem(g.vecSave[n]))
 	}
 	if g.errNext {
 		// fallible call: the error code comes back in x1 (0 = success)
