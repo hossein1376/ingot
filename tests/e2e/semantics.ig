@@ -1,0 +1,146 @@
+// Language semantics checked with Ingot's own test blocks (run: ingot test).
+extern fn printf(fmt: *u8, ...) -> i32;
+
+var g_counter: i64 = 5;
+var g_buf: [32]i32 = @zero;
+const LIMIT: i64 = 1 << 10;
+
+struct Inner { a: u8, b: i64 }
+struct Outer { tag: u16, inner: Inner, vals: [3]f32 }
+
+fn many(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64, j: i32, k: f64) -> f64 {
+    return (a + b + c + d + e + f + g + h + i + (j as i64)) as f64 + k;
+}
+
+fn many_f(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32, j: f64) -> f64 {
+    return a + b + c + d + e + f + g + h + (i as f64) + j;
+}
+
+fn twice(f: fn(i64) -> i64, x: i64) -> i64 { return f(f(x)); }
+fn inc(x: i64) -> i64 { return x + 1; }
+
+fn make_outer(t: u16) -> Outer {
+    return Outer.{ tag: t, inner: Inner.{ a: 7 as u8, b: -3 }, vals: [3]f32.{ 1.0, 2.0, 3.5 } };
+}
+
+fn bump() -> bool { g_counter += 1; return true; }
+
+test "integer wrap-around and narrow types" {
+    let a: u8 = 250 as u8;
+    let b: u8 = a + 10 as u8;
+    @assert(b == 4 as u8);
+    let c: i8 = 127 as i8;
+    @assert(c + 1 as i8 == -128 as i8);
+    let d: i32 = 2147483647;
+    @assert(d + 1 == -2147483648);
+    let e: u32 = 0 as u32;
+    @assert(e - 1 as u32 == 4294967295 as u32);
+}
+
+test "signed vs unsigned comparison and division" {
+    let x: i64 = -1;
+    let y: u64 = 18446744073709551615 as u64;
+    @assert(x < 0);
+    @assert(y > 0 as u64);
+    @assert(-7 / 2 == -3);
+    @assert(-7 % 2 == -1);
+    @assert(((7 as u64) / (2 as u64)) == 3 as u64);
+}
+
+test "shifts and bitwise need parentheses" {
+    let m: i64 = (1 << 4) | (1 << 1);
+    @assert(m == 18);
+    @assert((m & 2) == 2);
+    @assert((-16 >> 2) == -4);
+    @assert((((0 - 16) as u64) >> (60 as u64)) == 15 as u64);
+    @assert(LIMIT == 1024);
+    @assert((~0 as i64) == -1);
+}
+
+test "floats and casts" {
+    let f: f64 = 3.75;
+    @assert(f as i64 == 3);
+    @assert((-f) as i64 == -3);
+    let h: f32 = (f as f32) * 2.0;
+    @assert(h == 7.5);
+    @assert(@sqrt(16.0) == 4.0);
+    @assert(@min(3, 9) == 3);
+    @assert(@max(2.5, -1.0) == 2.5);
+    @assert((1 as f64) / 4.0 == 0.25);
+    @assert(@fma(2.0, 3.0, 1.0) == 7.0);
+}
+
+test "short-circuit evaluation" {
+    g_counter = 0;
+    if false && bump() { @trap(); }
+    @assert(g_counter == 0);
+    if true || bump() { } else { @trap(); }
+    @assert(g_counter == 0);
+    let both: bool = bump() && bump();
+    @assert(both && g_counter == 2);
+}
+
+test "loops, break, continue" {
+    var s: i64 = 0;
+    for i in 0..100 {
+        if i % 2 == 0 { continue; }
+        if i > 10 { break; }
+        s += i;
+    }
+    @assert(s == 1 + 3 + 5 + 7 + 9);
+    var n: i64 = 0;
+    while true {
+        n += 1;
+        if n == 50 { break; }
+    }
+    @assert(n == 50);
+}
+
+test "globals" {
+    g_buf[31] = 9;
+    g_buf[0] = g_buf[31] * 2;
+    @assert(g_buf[0] == 18);
+    @assert(g_buf.len == 32);
+}
+
+test "stack-passed arguments" {
+    @assert(many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0.5) == 55.5);
+    @assert(many_f(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0) == 11.5);
+}
+
+test "function pointers" {
+    @assert(twice(inc, 40) == 42);
+    let f: fn(i64) -> i64 = inc;
+    @assert(f(1) == 2);
+}
+
+test "nested aggregates returned by value" {
+    let o: Outer = make_outer(9 as u16);
+    @assert(o.tag == 9 as u16);
+    @assert(o.inner.a == 7 as u8);
+    @assert(o.inner.b == -3);
+    @assert(o.vals[2] == 3.5);
+    @assert(@sizeof(Outer) == 40);
+    var p: Outer = o;
+    let q: *Outer = &p;
+    q.*.inner.b = 100;
+    @assert(p.inner.b == 100 && o.inner.b == -3);
+}
+
+test "atomics" {
+    var v: i64 = 10;
+    @assert(@atomic_add(&v, 5) == 10);
+    @assert(@atomic_cas(&v, 15, 1) == 15);
+    @assert(@atomic_load(&v) == 1);
+    @atomic_store(&v, 77);
+    @assert(v == 77);
+}
+
+test "large aggregates copy correctly" {
+    var a: [100]i64 = @zero;
+    for i in 0..100 { a[i] = i * i; }
+    let b: [100]i64 = a;
+    a[99] = 0;
+    @assert(b[99] == 9801);
+    @assert(b[50] == 2500);
+}

@@ -398,7 +398,8 @@ func (ps *Parser) checkMixing(b *BinaryExpr) {
 		ig := opGroup(inner.Op)
 		bad := false
 		switch {
-		case g == "cmp" && ig == "cmp":
+		case g == "cmp" && (ig == "cmp" || ig == "shift" || ig[:min(3, len(ig))] == "bit"):
+			// C parses `a & b == 0` as `a & (b == 0)`; Ingot refuses to guess.
 			bad = true
 		case g == "shift" || g[:min(3, len(g))] == "bit":
 			bad = ig != g && ig != "cmp" && ig != "&&" && ig != "||"

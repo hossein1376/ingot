@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0100","message":"expected \";\", found \"return\"","span":{"file":"diag/missing_semicolon.ig","start":{"line":3,"col":5},"end":{"line":3,"col":11}},"fixes":[{"message":"insert ';'","edits":[{"span":{"file":"diag/missing_semicolon.ig","start":{"line":2,"col":19},"end":{"line":2,"col":19}},"text":";"}]}]}

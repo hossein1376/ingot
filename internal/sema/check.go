@@ -690,9 +690,11 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 		return c.binary(e, want)
 	case *syntax.CastExpr:
 		to := c.resolve(e.To)
-		from := c.expr(e.X, nil)
-		if isUntyped(e.X) {
+		var from *Type
+		if isUntyped(e.X) && to.IsNumeric() {
 			from = c.expr(e.X, to)
+		} else {
+			from = c.expr(e.X, nil)
 		}
 		ok := (from.IsNumeric() && to.IsNumeric()) ||
 			(from == TBool && to.Kind == Int) ||
@@ -986,6 +988,25 @@ func (c *checker) fold(e *syntax.BinaryExpr) {
 		return
 	}
 	x, y := a.I, b.I
+	if t := c.info.Types[e.X]; t != nil && t.Kind == Int && !t.Signed {
+		ux, uy := uint64(x), uint64(y)
+		switch e.Op {
+		case "/", "%":
+			if uy == 0 {
+				c.dl.Errorf("E0223", e.Sp, "division by constant zero")
+				return
+			}
+			if e.Op == "/" {
+				c.info.Consts[e] = Const{I: int64(ux / uy)}
+			} else {
+				c.info.Consts[e] = Const{I: int64(ux % uy)}
+			}
+			return
+		case ">>":
+			c.info.Consts[e] = Const{I: int64(ux >> (uy & 63))}
+			return
+		}
+	}
 	switch e.Op {
 	case "+":
 		r.I = x + y

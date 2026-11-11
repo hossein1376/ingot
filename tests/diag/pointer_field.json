@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0217","message":"field access through a pointer must be explicit","span":{"file":"diag/pointer_field.ig","start":{"line":3,"col":12},"end":{"line":3,"col":15}},"fixes":[{"message":"dereference with '.*'","edits":[{"span":{"file":"diag/pointer_field.ig","start":{"line":3,"col":13},"end":{"line":3,"col":13}},"text":".*"}]}]}

@@ -1,0 +1,3 @@
+fn f(x: i32) -> i64 {
+    return x;
+}

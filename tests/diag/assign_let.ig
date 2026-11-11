@@ -1,0 +1,5 @@
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    return x;
+}

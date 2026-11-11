@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0203","message":"unknown type \"int\"","span":{"file":"diag/unknown_type.ig","start":{"line":1,"col":9},"end":{"line":1,"col":12}},"fixes":[{"message":"did you mean i64?","edits":[{"span":{"file":"diag/unknown_type.ig","start":{"line":1,"col":9},"end":{"line":1,"col":12}},"text":"i64"}]}]}

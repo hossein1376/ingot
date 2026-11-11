@@ -97,6 +97,7 @@ func (l *List) sorted() []*Diagnostic {
 // WriteJSON writes one JSON object per line (JSON Lines), sorted by position.
 func (l *List) WriteJSON(w io.Writer) {
 	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	for _, d := range l.sorted() {
 		_ = enc.Encode(d)
 	}
