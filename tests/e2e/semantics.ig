@@ -238,3 +238,17 @@ test "defer runs in reverse order at every exit, after the return value" {
         @assert(d_log[i] == want[i]);
     }
 }
+
+test "constant on the left of commutative operators; multiply by 2^s+1" {
+    var v: i64 = 7;
+    @assert(3 * v == 21);
+    @assert(9 * v + 1 == 64);
+    @assert(v * 17 == 119);
+    @assert((0xf0 & v) == 0);
+    @assert((1 | v) == 7);
+    @assert(100 - v == 93);
+    let neg: i32 = -5;
+    @assert(5 * neg == -25);
+    let b: u8 = 100 as u8;
+    @assert(3 as u8 * b == 44 as u8);
+}

@@ -537,12 +537,13 @@ func (g *gen) binary(e *syntax.BinaryExpr, t *sema.Type) reg {
 		g.emit("cset %s, %s", w(r), cc)
 		return r
 	}
-	a := g.use(e.X)
+	ex, ey := g.operands(e, t)
+	a := g.use(ex)
 	d := a
 	if a.abs != 0 {
 		d = g.alloc(t, e.Sp)
 	}
-	g.arithExpr3(e.Op, d, a, e.Y, t, e.Sp)
+	g.arithExpr3(e.Op, d, a, ey, t, e.Sp)
 	return d
 }
 
@@ -561,6 +562,20 @@ func (g *gen) use(e syntax.Expr) reg {
 	}
 	r, _ := g.expr(e)
 	return r
+}
+
+// operands puts an integer constant on the right of a commutative operator,
+// where the immediate forms can use it.
+func (g *gen) operands(e *syntax.BinaryExpr, t *sema.Type) (syntax.Expr, syntax.Expr) {
+	switch e.Op {
+	case "+", "*", "&", "|", "^":
+		_, kx := g.info.Consts[e.X]
+		_, ky := g.info.Consts[e.Y]
+		if kx && !ky && t.Kind == sema.Int {
+			return e.Y, e.X
+		}
+	}
+	return e.X, e.Y
 }
 
 // arithExpr computes a = a op y.
@@ -585,6 +600,11 @@ func (g *gen) arithExpr3(op string, d, a reg, y syntax.Expr, t *sema.Type, sp di
 			return
 		case op == "*" && k.I > 0 && k.I&(k.I-1) == 0:
 			g.emit("lsl %s, %s, #%d", x(d), x(a), log2(k.I))
+			g.normalize(d, t)
+			return
+		case op == "*" && k.I > 2 && (k.I-1)&(k.I-2) == 0:
+			// 2^s+1: a + (a << s)
+			g.emit("add %s, %s, %s, lsl #%d", x(d), x(a), x(a), log2(k.I-1))
 			g.normalize(d, t)
 			return
 		case (op == "<<" || op == ">>") && k.I >= 0 && k.I < t.Size*8:

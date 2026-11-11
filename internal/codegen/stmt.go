@@ -317,8 +317,9 @@ func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
 	if _, isConst := g.info.Consts[val]; isConst {
 		return false
 	}
-	a := g.use(b.X)
-	g.arithExpr3(b.Op, reg{abs: pr.n, fp: pr.fp}, a, b.Y, t, b.Sp)
+	bx, by := g.operands(b, t)
+	a := g.use(bx)
+	g.arithExpr3(b.Op, reg{abs: pr.n, fp: pr.fp}, a, by, t, b.Sp)
 	g.free(a)
 	return true
 }
