@@ -17,6 +17,7 @@ type APIEntry struct {
 	Doc       string `json:"doc,omitempty"` // the // comment lines right above it
 	File      string `json:"file"`
 	Line      int    `json:"line"`
+	Private   bool   `json:"private,omitempty"` // a '_' name: usable only inside its module
 }
 
 // StdFiles lists the embedded standard library as "std/NAME.ig" paths.
@@ -55,7 +56,7 @@ func API(path string, src []byte, dl *diag.List) []APIEntry {
 	}
 	var es []APIEntry
 	add := func(kind, name, sig string, sp diag.Span) {
-		es = append(es, APIEntry{Kind: kind, Name: name, Signature: sig, Doc: doc(sp.Start.Line), File: path, Line: sp.Start.Line})
+		es = append(es, APIEntry{Kind: kind, Name: name, Signature: sig, Doc: doc(sp.Start.Line), File: path, Line: sp.Start.Line, Private: strings.HasPrefix(name, "_")})
 	}
 	for _, s := range f.Structs {
 		var fs []string

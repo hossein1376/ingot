@@ -39,3 +39,19 @@ func TestAPI(t *testing.T) {
 		t.Errorf("vec_pop doc: %q", found["vec_pop"].Doc)
 	}
 }
+
+// TestAPIPrivate checks that '_' names are flagged as module-private.
+func TestAPIPrivate(t *testing.T) {
+	src, ok := driver.ReadSource("e2e/mod/priv_lib.ig")
+	if !ok {
+		t.Fatal("cannot read priv_lib.ig")
+	}
+	var dl diag.List
+	got := map[string]bool{}
+	for _, e := range driver.API("e2e/mod/priv_lib.ig", src, &dl) {
+		got[e.Name] = e.Private
+	}
+	if !got["_bump"] || !got["_State"] || got["count_to"] {
+		t.Errorf("private flags: %v", got)
+	}
+}

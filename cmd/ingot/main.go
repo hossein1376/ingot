@@ -358,6 +358,9 @@ func apiCmd(args []string) int {
 				fmt.Println("// " + l)
 			}
 		}
+		if e.Private {
+			fmt.Println("// private to this module")
+		}
 		fmt.Println(e.Signature)
 		fmt.Println()
 	}
