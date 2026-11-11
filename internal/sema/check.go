@@ -664,6 +664,12 @@ func (c *checker) stmt(s syntax.Stmt) {
 		c.block(s.Body, true)
 		c.loops--
 	case *syntax.ForStmt:
+		if fe, ok := s.Hi.(*syntax.FieldExpr); ok && s.Each {
+			if xt := c.expr(fe.X, nil); xt.Kind != Array && xt.Kind != Slice {
+				c.dl.Errorf("E0304", fe.X.ESpan(), "for x in s needs an array or slice to iterate, found %s", xt)
+				return
+			}
+		}
 		lt := c.expr(s.Lo, nil)
 		var t *Type
 		if isUntyped(s.Lo) {

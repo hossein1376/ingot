@@ -212,6 +212,7 @@ type (
 		Lo, Hi Expr
 		Body   *Block
 		Sp     diag.Span
+		Each   bool // desugared from `for x in s`: Hi is s.len
 	}
 	ReturnStmt struct {
 		Value Expr // may be nil

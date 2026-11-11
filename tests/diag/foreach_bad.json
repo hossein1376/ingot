@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0304","message":"for x in s needs an array or slice to iterate, found i64","span":{"file":"diag/foreach_bad.ig","start":{"line":10,"col":14},"end":{"line":10,"col":15}}}

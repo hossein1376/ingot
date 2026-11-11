@@ -691,3 +691,43 @@ test "proven for-loop indices drop bounds checks without changing results" {
     @assert(u == 9 as u64);
     @assert(bc_sum(a[0..6]) == 280 + 30);
 }
+
+// for x in s: element loops over arrays and slices (desugared to a counted loop)
+struct FeP { x: i64, y: i64 }
+
+fn fe_total(s: []i64) -> i64 {
+    var acc: i64 = 0;
+    for v in s {
+        acc += v;
+    }
+    return acc;
+}
+
+fn fe_mk() -> [3]FeP {
+    return [3]FeP.{ FeP.{ x: 1, y: 2 }, FeP.{ x: 3, y: 4 }, FeP.{ x: 5, y: 6 } };
+}
+
+test "for x in s iterates arrays and slices" {
+    let a: [5]i64 = [5]i64.{ 1, 2, 3, 4, 5 };
+    @assert(fe_total(a[0..5]) == 15);
+    @assert(fe_total(a[1..3]) == 5);
+    var n: i64 = 0;
+    for v in a {
+        if v == 4 {
+            break;
+        }
+        n += v;
+    }
+    @assert(n == 6);
+    var sx: i64 = 0;
+    for p in fe_mk() {
+        sx += p.x * p.y;
+    }
+    @assert(sx == 44);
+    for v in a[2..5] {
+        for w in a[0..2] {
+            n += v * w;
+        }
+    }
+    @assert(n == 6 + 36);
+}

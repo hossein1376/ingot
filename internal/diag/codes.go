@@ -75,7 +75,7 @@ var Codes = []Code{
 	{"E0301", "assignment to immutable", "Bindings declared with `let` cannot be assigned; the fix changes the declaration to `var`."},
 	{"E0302", "invalid operator", "The operator is not defined for this type (e.g. arithmetic on enums or pointers, shift by a non-integer)."},
 	{"E0303", "no-effect statement", "Only calls may be used as expression statements."},
-	{"E0304", "bad for range", "for-range bounds must be integers of one type."},
+	{"E0304", "bad for range", "for-range bounds must be integers of one type, and `for x in s` needs an array or slice s."},
 	{"E0305", "bad return", "A return value is missing, or given in a void function."},
 	{"E0306", "break outside loop", "break and continue must be inside while or for."},
 	{"E0307", "non-bool condition", "Ingot has no truthiness. Compare explicitly: x != 0, p != null."},

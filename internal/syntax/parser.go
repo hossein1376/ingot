@@ -18,6 +18,7 @@ type Parser struct {
 	dl   *diag.List
 	// aliases are the module names bound by `import "..." as name;` so far.
 	aliases map[string]bool
+	eachN   int // counter for the hidden names of `for x in s` loops
 }
 
 type bailout struct{}
@@ -390,6 +391,9 @@ func (ps *Parser) stmt() Stmt {
 		v := ps.ident()
 		ps.expect("in")
 		lo := ps.expr()
+		if !ps.is("..") {
+			return ps.forEach(v, lo, t)
+		}
 		ps.expect("..")
 		hi := ps.expr()
 		return &ForStmt{Var: v.Text, Lo: lo, Hi: hi, Body: ps.block(), Sp: ps.from(t.Pos)}
@@ -790,4 +794,32 @@ func (ps *Parser) typeArgs() []TypeExpr {
 	}
 	ps.expect("]")
 	return out
+}
+
+// forEach desugars `for x in s { B }` (s an array or slice) into
+//
+//	{ let %eN = s; for %iN in 0..%eN.len { let x = %eN[%iN]; B } }
+//
+// A plain identifier s is used directly, without the copy, so a slice that is
+// never reassigned stays in registers and s[i] needs no bounds check.
+// The % names cannot be written in source, so they never collide.
+func (ps *Parser) forEach(v Tok, coll Expr, t Tok) Stmt {
+	ps.eachN++
+	n := strconv.Itoa(ps.eachN) // before the body, which may hold nested loops
+	vs, cs := ps.sp(v), coll.ESpan()
+	body := ps.block()
+	sp := ps.from(t.Pos)
+	outer := &Block{Sp: sp}
+	src := coll
+	if _, isIdent := coll.(*IdentExpr); !isIdent {
+		name := "%e" + n
+		outer.Stmts = append(outer.Stmts, &LetStmt{Name: name, Value: coll, Sp: cs, NameSp: cs})
+		src = &IdentExpr{Name: name, Sp: cs}
+	}
+	idx := "%i" + n
+	elem := &LetStmt{Name: v.Text, Value: &IndexExpr{X: src, Index: &IdentExpr{Name: idx, Sp: vs}, Sp: cs}, Sp: vs, NameSp: vs}
+	inner := &Block{Stmts: append([]Stmt{elem}, body.Stmts...), Sp: body.Sp}
+	loop := &ForStmt{Var: idx, Lo: &IntLit{Text: "0", Sp: cs}, Hi: &FieldExpr{X: src, Name: "len", Sp: cs}, Body: inner, Sp: sp, Each: true}
+	outer.Stmts = append(outer.Stmts, loop)
+	return outer
 }
