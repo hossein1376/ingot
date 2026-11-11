@@ -929,7 +929,8 @@ func (g *gen) freeTemps(fp bool) int {
 // failures with a spill.
 func (g *gen) hold(r reg, t *sema.Type, next syntax.Expr) held {
 	h := held{r: r, t: t}
-	if r.abs != 0 || isLeaf(next) || g.freeTemps(r.fp) > 3 {
+	free := g.freeTemps(r.fp)
+	if r.abs != 0 || isLeaf(next) || free > 3 || (free == 3 && isSmall(next)) {
 		return h
 	}
 	if r.fp {
@@ -956,6 +957,29 @@ func (g *gen) unhold(h held, sp diag.Span) reg {
 	r := g.allocG(sp)
 	g.emit("ldr %s, %s", x(r), g.mem(h.off))
 	return r
+}
+
+// isSmall reports expressions that need at most three temporaries: an index,
+// unary or binary node whose operands are leaves (or leaf-only binaries).
+func isSmall(e syntax.Expr) bool {
+	leafish := func(e syntax.Expr) bool {
+		if isLeaf(e) {
+			return true
+		}
+		b, ok := e.(*syntax.BinaryExpr)
+		return ok && isLeaf(b.X) && isLeaf(b.Y)
+	}
+	switch e := e.(type) {
+	case *syntax.ParenExpr:
+		return isSmall(e.X)
+	case *syntax.IndexExpr:
+		return isLeaf(e.X) && leafish(e.Index)
+	case *syntax.UnaryExpr:
+		return leafish(e.X)
+	case *syntax.BinaryExpr:
+		return isLeaf(e.X) && isLeaf(e.Y)
+	}
+	return false
 }
 
 func isLeaf(e syntax.Expr) bool {
