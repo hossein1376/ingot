@@ -54,7 +54,7 @@ func TestMutate(t *testing.T) {
 			case 0:
 				s = s[:i] + s[j:]
 			case 1:
-				toks := []string{"(", ")", "{", "}", ";", "as i64", "try ", "@zero", ".*", "&", "*", "[", "]", "0", "1.5", "defer {", "catch e => 0", "inline ", "x", "u8", "!", "->", "f32x4", ","}
+				toks := []string{"(", ")", "{", "}", ";", "as i64", "try ", "@select(true, ", "@zero", ".*", "&", "*", "[", "]", "0", "1.5", "defer {", "catch e => 0", "inline ", "x", "u8", "!", "->", "f32x4", ","}
 				s = s[:i] + toks[rng.Intn(len(toks))] + s[i:]
 			case 2:
 				s = s[:i] + s[j:] + s[i:j]

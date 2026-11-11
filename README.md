@@ -100,9 +100,10 @@ fails if the compiler emits a code that the catalog does not document.
 | [`examples/errors.ig`](examples/errors.ig) | a bounds-check panic with `file:line:col` |
 | [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
 | [`examples/result.ig`](examples/result.ig) | error unions: `-> i64 ! ParseErr`, `try` through `defer`, `catch e => value` and `catch e => { break; }` |
+| [`examples/hashjoin.ig`](examples/hashjoin.ig) | `import "std/map.ig"`: 1M-key build and 2M-key probe, errors via `catch`, `continue` from a catch block |
 | [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
 
-The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`) is embedded in the compiler,
+The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`, `std/map.ig`) is embedded in the compiler,
 so `import "std/par.ig";` works with no setup.
 
 ## Status and test results

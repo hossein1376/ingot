@@ -256,6 +256,7 @@ compiler binary**, so nothing needs installing. All files share one namespace in
 | `std/libc.ig` | `printf`, `snprintf`, `malloc`/`free`, `memcpy`, `strlen`, `write`, `sysconf`, ... |
 | `std/mem.ig` | `page_size()` (queried at run time: 16 KiB on Apple silicon), `Arena` bump allocator |
 | `std/par.ig` | `parallel_for(n, threads, qos, ctx, body)` with dynamic chunking, `cpu_count()`, `perf_core_count()` (`hw.perflevel0.physicalcpu`), and QoS constants |
+| `std/map.ig` | `U64Map`: open addressing with linear probing, splitmix64 hash, growth at 70% load. `map_init`, `map_put`, `map_get` (fail with `MapErr`), and `map_free` |
 
 **Target-conditional code.** `@is_macos()` is a compile-time constant. In
 `if @is_macos() { A } else { B }`, only the branch for the current target is compiled,
