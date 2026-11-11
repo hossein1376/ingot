@@ -103,6 +103,7 @@ fails if the compiler emits a code that the catalog does not document.
 | [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
 | [`examples/result.ig`](examples/result.ig) | error unions: `-> i64 ! ParseErr`, `try` through `defer`, `catch e => value` and `catch e => { break; }` |
 | [`examples/hashjoin.ig`](examples/hashjoin.ig) | `import "std/map.ig"`: 1M-key build and 2M-key probe, errors via `catch`, `continue` from a catch block |
+| [`examples/linecount.ig`](examples/linecount.ig) | `import "std/io.ig" as io;`: write and read an 8 MB file, count newlines with `@lanes_eq` masks (NEON) vs scalar, time both with `time.now_ns()` |
 | [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
 
 [`examples/sme/`](examples/sme) calls a hand-written **SME** FP32 matmul kernel (`sgemm_sme.S`,
