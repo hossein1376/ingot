@@ -123,21 +123,21 @@ type (
 	}
 )
 
-func (e *IdentExpr) ESpan() diag.Span    { return e.Sp }
-func (e *IntLit) ESpan() diag.Span       { return e.Sp }
-func (e *FloatLit) ESpan() diag.Span     { return e.Sp }
-func (e *BoolLit) ESpan() diag.Span      { return e.Sp }
-func (e *NullLit) ESpan() diag.Span      { return e.Sp }
-func (e *StringLit) ESpan() diag.Span    { return e.Sp }
-func (e *UnaryExpr) ESpan() diag.Span    { return e.Sp }
-func (e *BinaryExpr) ESpan() diag.Span   { return e.Sp }
-func (e *CallExpr) ESpan() diag.Span     { return e.Sp }
-func (e *BuiltinCall) ESpan() diag.Span  { return e.Sp }
-func (e *FieldExpr) ESpan() diag.Span    { return e.Sp }
-func (e *DerefExpr) ESpan() diag.Span    { return e.Sp }
-func (e *IndexExpr) ESpan() diag.Span    { return e.Sp }
-func (e *SliceExpr) ESpan() diag.Span    { return e.Sp }
-func (e *CastExpr) ESpan() diag.Span     { return e.Sp }
+func (e *IdentExpr) ESpan() diag.Span   { return e.Sp }
+func (e *IntLit) ESpan() diag.Span      { return e.Sp }
+func (e *FloatLit) ESpan() diag.Span    { return e.Sp }
+func (e *BoolLit) ESpan() diag.Span     { return e.Sp }
+func (e *NullLit) ESpan() diag.Span     { return e.Sp }
+func (e *StringLit) ESpan() diag.Span   { return e.Sp }
+func (e *UnaryExpr) ESpan() diag.Span   { return e.Sp }
+func (e *BinaryExpr) ESpan() diag.Span  { return e.Sp }
+func (e *CallExpr) ESpan() diag.Span    { return e.Sp }
+func (e *BuiltinCall) ESpan() diag.Span { return e.Sp }
+func (e *FieldExpr) ESpan() diag.Span   { return e.Sp }
+func (e *DerefExpr) ESpan() diag.Span   { return e.Sp }
+func (e *IndexExpr) ESpan() diag.Span   { return e.Sp }
+func (e *SliceExpr) ESpan() diag.Span   { return e.Sp }
+func (e *CastExpr) ESpan() diag.Span    { return e.Sp }
 
 // TryExpr is `try f(...)`: on error, run defers and return the error.
 type TryExpr struct {
@@ -156,8 +156,8 @@ type CatchExpr struct {
 	Sp       diag.Span
 }
 
-func (e *TryExpr) ESpan() diag.Span   { return e.Sp }
-func (e *CatchExpr) ESpan() diag.Span { return e.Sp }
+func (e *TryExpr) ESpan() diag.Span      { return e.Sp }
+func (e *CatchExpr) ESpan() diag.Span    { return e.Sp }
 func (e *CompositeLit) ESpan() diag.Span { return e.Sp }
 func (e *ParenExpr) ESpan() diag.Span    { return e.Sp }
 
