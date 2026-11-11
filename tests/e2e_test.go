@@ -139,12 +139,23 @@ func TestMachO(t *testing.T) {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			tests := !bytes.Contains(must(os.ReadFile(src)), []byte("pub fn main"))
 			bin := buildBin(t, src, driver.Config{Target: codegen.MacOS, Safe: true, Tests: tests})
-			hdr := must(os.ReadFile(bin))[:16]
-			magic := binary.LittleEndian.Uint32(hdr[0:])
-			cpu := binary.LittleEndian.Uint32(hdr[4:])
-			ftype := binary.LittleEndian.Uint32(hdr[12:])
+			data := must(os.ReadFile(bin))
+			le := binary.LittleEndian
+			magic, cpu, ftype, ncmds := le.Uint32(data[0:]), le.Uint32(data[4:]), le.Uint32(data[12:]), le.Uint32(data[16:])
 			if magic != 0xfeedfacf || cpu != 0x0100000c || ftype != 2 {
-				t.Errorf("bad Mach-O header: magic=%#x cpu=%#x filetype=%d", magic, cpu, ftype)
+				t.Fatalf("bad Mach-O header: magic=%#x cpu=%#x filetype=%d", magic, cpu, ftype)
+			}
+			seen := map[uint32]bool{}
+			off := uint32(32)
+			for i := uint32(0); i < ncmds; i++ {
+				seen[le.Uint32(data[off:])] = true
+				off += le.Uint32(data[off+4:])
+			}
+			const lcMain, lcCodeSig, lcBuildVersion = 0x80000028, 0x1d, 0x32
+			for _, lc := range []uint32{lcMain, lcCodeSig, lcBuildVersion} {
+				if !seen[lc] {
+					t.Errorf("missing load command %#x", lc)
+				}
 			}
 		})
 	}

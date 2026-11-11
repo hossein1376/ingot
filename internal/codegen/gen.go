@@ -335,6 +335,28 @@ func (g *gen) normalize(r reg, t *sema.Type) {
 	}
 }
 
+// normalizeX extends a narrow integer held in register xN.
+func (g *gen) normalizeX(n int, t *sema.Type) {
+	if t.Kind != sema.Int || t.Size == 8 {
+		return
+	}
+	xs, ws := fmt.Sprintf("x%d", n), fmt.Sprintf("w%d", n)
+	switch {
+	case t.Signed && t.Size == 1:
+		g.emit("sxtb %s, %s", xs, ws)
+	case t.Signed && t.Size == 2:
+		g.emit("sxth %s, %s", xs, ws)
+	case t.Signed:
+		g.emit("sxtw %s, %s", xs, ws)
+	case t.Size == 1:
+		g.emit("and %s, %s, #0xff", xs, xs)
+	case t.Size == 2:
+		g.emit("and %s, %s, #0xffff", xs, xs)
+	default:
+		g.emit("mov %s, %s", ws, ws)
+	}
+}
+
 // copyMem copies size bytes from src to dst (both GPR names). Clobbers x9-x13.
 func (g *gen) copyMem(dst, src string, size int64) {
 	if size > 128 {
@@ -618,6 +640,7 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 				nf++
 			} else {
 				g.emit("mov x%d, x%d", pr.n, ng)
+				g.normalizeX(pr.n, t) // AAPCS64 leaves the callee to extend narrow args
 				ng++
 			}
 			continue

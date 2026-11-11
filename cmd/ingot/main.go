@@ -24,6 +24,7 @@ usage:
   ingot build FILE [-o OUT]   compile to a native executable
   ingot run   FILE [-- ARGS]  compile and run (Linux targets run under qemu on x86 hosts)
   ingot test  FILE            compile and run the file's test blocks
+  ingot fix   FILE            apply the compiler's suggested fixes in place
   ingot builtins              list @builtins
   ingot version
 
@@ -105,6 +106,9 @@ func run(args []string) int {
 		return 2
 	}
 	cfg.Tests = cmd == "test"
+	if cmd == "fix" {
+		return fix(file, src, cfg, diagFmt)
+	}
 	var dl diag.List
 	asm, ok := driver.Compile(file, src, cfg, &dl)
 	if diagFmt == "json" {
@@ -161,6 +165,38 @@ func run(args []string) int {
 			return ee.ExitCode()
 		}
 		fmt.Fprintln(os.Stderr, "ingot:", err)
+		return 1
+	}
+	return 0
+}
+
+// fix applies suggested fixes until none apply (at most 8 rounds).
+func fix(file string, src []byte, cfg driver.Config, diagFmt string) int {
+	cfg.Tests = true // type-check test blocks too; main is not required
+	total := 0
+	var dl diag.List
+	for round := 0; round < 8; round++ {
+		dl = diag.List{}
+		driver.Compile(file, src, cfg, &dl)
+		next, n := diag.ApplyFixes(src, file, dl.Items)
+		if n == 0 {
+			break
+		}
+		total += n
+		src = next
+	}
+	if total > 0 {
+		if rc := writeOrFail(file, string(src)); rc != 0 {
+			return rc
+		}
+	}
+	fmt.Fprintf(os.Stderr, "ingot: applied %d fix(es) to %s\n", total, file)
+	if diagFmt == "json" {
+		dl.WriteJSON(os.Stdout)
+	} else {
+		dl.WriteText(os.Stderr)
+	}
+	if dl.HasErrors() {
 		return 1
 	}
 	return 0
