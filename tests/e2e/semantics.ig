@@ -581,3 +581,45 @@ test "aggregate and vector results from fallible functions" {
         @assert(q.x == i as f64);
     }
 }
+
+enum JtOp: u8 {
+    push = 1,
+    add,
+    sub,
+    mul,
+    dup,
+    swap,
+    jmpz,
+    halt,
+}
+fn jt_step(op: JtOp, x: i64) -> i64 {
+    switch op {
+        JtOp.push => { return x + 1; }
+        JtOp.add => { return x + 2; }
+        JtOp.sub => { return x - 3; }
+        JtOp.mul => { return x * 4; }
+        JtOp.dup, JtOp.swap => { return x * 100; }
+        else => { return -1; }
+    }
+    return 0;
+}
+fn jt_neg(k: i64) -> i64 {
+    switch k {
+        -2 => { return 20; }
+        -1 => { return 10; }
+        0 => { return 0; }
+        1 => { return 11; }
+        3 => { return 33; }
+        else => { return 99; }
+    }
+    return 99;
+}
+test "dense switches use a jump table" {
+    @assert(jt_step(JtOp.push, 5) == 6);
+    @assert(jt_step(JtOp.mul, 5) == 20);
+    @assert(jt_step(JtOp.swap, 5) == 500);
+    @assert(jt_step(JtOp.halt, 5) == -1);
+    @assert(jt_step(JtOp.jmpz, 5) == -1);
+    @assert(jt_neg(-2) == 20 && jt_neg(-1) == 10 && jt_neg(0) == 0 && jt_neg(1) == 11 && jt_neg(3) == 33);
+    @assert(jt_neg(2) == 99 && jt_neg(-3) == 99 && jt_neg(4) == 99 && jt_neg(1000000) == 99);
+}

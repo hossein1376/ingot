@@ -42,6 +42,9 @@ brevity for regularity:
   before a `bl` and reloads it after. That is cheap when calls are off the hot path. A slice
   that is never reassigned keeps `{ptr, len}` in a register pair, so `s[i]` is a
   `cmp`/`b.hs` against the length register plus one `add`, with no reloads from the frame.
+* A dense `switch` (at least 4 values spanning at most 3× their count) compiles to one
+  bounds check and a `br` through a table of 32-bit offsets. A sparse one becomes a
+  compare chain.
 * Safety checks (bounds and division) are explicit, cheap (`cmp` + `b.hs` to an
   out-of-line stub) and can be removed with `--unchecked`.
 * Errors are values with a fixed cost. A fallible function (`-> T ! E`) returns its

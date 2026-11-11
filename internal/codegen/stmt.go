@@ -225,8 +225,28 @@ func (g *gen) stmt(s syntax.Stmt) {
 		r, _ := g.expr(s.X)
 		end := g.newLabel("swend")
 		labels := make([]string, len(s.Cases))
-		for i, cs := range s.Cases {
+		for i := range s.Cases {
 			labels[i] = g.newLabel("case")
+		}
+		els := end
+		if s.Else != nil {
+			els = g.newLabel("swelse")
+		}
+		if g.jumpTable(s, r, labels, els) {
+			g.free(r)
+			for i, cs := range s.Cases {
+				g.label(labels[i])
+				g.block(cs.Body)
+				g.emit("b %s", end)
+			}
+			if s.Else != nil {
+				g.label(els)
+				g.block(s.Else)
+			}
+			g.label(end)
+			return
+		}
+		for i, cs := range s.Cases {
 			for _, v := range cs.Values {
 				k := g.info.Consts[v].I
 				if k >= 0 && k < 4096 {
@@ -239,10 +259,6 @@ func (g *gen) stmt(s syntax.Stmt) {
 			}
 		}
 		g.free(r)
-		els := end
-		if s.Else != nil {
-			els = g.newLabel("swelse")
-		}
 		g.emit("b %s", els)
 		for i, cs := range s.Cases {
 			g.label(labels[i])
@@ -503,5 +519,63 @@ func (g *gen) intoReg(d reg, t *sema.Type, val syntax.Expr) bool {
 	a := g.use(bx)
 	g.arithExpr3(b.Op, d, a, by, t, b.Sp)
 	g.free(a)
+	return true
+}
+
+// jumpTable lowers a dense switch (at least 4 values spanning at most 3x
+// their count) to a bounds check and an indirect branch through a table of
+// 32-bit offsets, instead of a compare chain.
+func (g *gen) jumpTable(s *syntax.SwitchStmt, r reg, labels []string, els string) bool {
+	type kv struct {
+		k int64
+		l string
+	}
+	var vs []kv
+	for i, cs := range s.Cases {
+		for _, v := range cs.Values {
+			vs = append(vs, kv{g.info.Consts[v].I, labels[i]})
+		}
+	}
+	if len(vs) < 4 {
+		return false
+	}
+	lo, hi := vs[0].k, vs[0].k
+	for _, v := range vs {
+		lo, hi = min(lo, v.k), max(hi, v.k)
+	}
+	span := hi - lo + 1
+	if span <= 0 || span > 3*int64(len(vs)) || span > 4095 {
+		return false
+	}
+	slots := make([]string, span)
+	for i := range slots {
+		slots[i] = els
+	}
+	for _, v := range vs {
+		slots[v.k-lo] = v.l
+	}
+	switch {
+	case lo == 0:
+		g.emit("mov x17, %s", x(r))
+	case lo > 0 && lo < 4096:
+		g.emit("sub x17, %s, #%d", x(r), lo)
+	case lo < 0 && -lo < 4096:
+		g.emit("add x17, %s, #%d", x(r), -lo)
+	default:
+		g.movImm("x16", uint64(lo))
+		g.emit("sub x17, %s, x16", x(r))
+	}
+	g.emit("cmp x17, #%d", span)
+	g.emit("b.hs %s", els)
+	tbl := g.newLabel("jt")
+	g.emit("adr x16, %s", tbl)
+	g.emit("ldrsw x17, [x16, x17, lsl #2]")
+	g.emit("add x16, x16, x17")
+	g.emit("br x16")
+	g.emit(".p2align 2")
+	g.label(tbl)
+	for _, l := range slots {
+		g.emit(".long %s - %s", l, tbl)
+	}
 	return true
 }
