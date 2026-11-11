@@ -424,6 +424,23 @@ func (g *gen) assign(s *syntax.AssignStmt) {
 		g.arithExpr3(s.Op[:len(s.Op)-1], self, self, s.Value, t, s.Sp)
 		return
 	}
+	if mode, regs, ok := g.indexMode(s.Target); ok {
+		if s.Op == "=" {
+			r := g.use(s.Value)
+			g.store(r, mode, t)
+			g.free(r)
+		} else {
+			cur := g.alloc(t, s.Sp)
+			g.load(cur, mode, t)
+			g.arithExpr(s.Op[:len(s.Op)-1], cur, s.Value, t, s.Sp)
+			g.store(cur, mode, t)
+			g.free(cur)
+		}
+		for _, r := range regs {
+			g.free(r)
+		}
+		return
+	}
 	addr := g.addr(s.Target)
 	if t.IsAggregate() {
 		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "zero" {

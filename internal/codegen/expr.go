@@ -182,6 +182,14 @@ func (g *gen) funcSym(f *sema.Func) string {
 }
 
 func (g *gen) loadLvalue(e syntax.Expr, t *sema.Type) reg {
+	if mode, regs, ok := g.indexMode(e); ok {
+		r := g.alloc(t, e.ESpan())
+		g.load(r, mode, t)
+		for _, x := range regs {
+			g.free(x)
+		}
+		return r
+	}
 	a := g.addr(e)
 	if t.IsAggregate() {
 		return a
@@ -367,6 +375,54 @@ func (g *gen) aggAddr(e syntax.Expr) reg {
 	}
 	r, _ := g.expr(e)
 	return r
+}
+
+// indexMode returns a register-offset addressing mode "[xB, xI, lsl #s]"
+// for a scalar element p[i] (p a pointer), a[i] (an array) or s[i] (a
+// cached slice) with a non-constant index, so the load or store needs no
+// separate add. Bounds checks are emitted as for addr. The returned
+// registers must be freed after the access.
+func (g *gen) indexMode(e syntax.Expr) (string, []reg, bool) {
+	ie, ok := unparen(e).(*syntax.IndexExpr)
+	if !ok {
+		return "", nil, false
+	}
+	xt := g.typeOf(ie.X)
+	et := xt.Elem
+	if et == nil || et.IsAggregate() || (et.Size != 1 && et.Size != 2 && et.Size != 4 && et.Size != 8) {
+		return "", nil, false
+	}
+	if _, isK := g.info.Consts[ie.Index]; isK {
+		return "", nil, false
+	}
+	var base, idx reg
+	switch xt.Kind {
+	case sema.Ptr:
+		base = g.use(ie.X)
+		idx = g.use(ie.Index)
+	case sema.Array:
+		base = g.aggAddr(ie.X)
+		idx = g.use(ie.Index)
+		if g.opt.Safe {
+			g.movImm("x15", uint64(xt.Len))
+			g.emit("cmp %s, x15", x(idx))
+			g.emit("b.hs %s", g.panicStub(ie.Index.ESpan(), "index out of bounds"))
+		}
+	case sema.Slice:
+		sr, ok := g.cachedSlice(ie.X)
+		if !ok {
+			return "", nil, false
+		}
+		base = reg{abs: sr[0]}
+		idx = g.use(ie.Index)
+		if g.opt.Safe {
+			g.emit("cmp %s, x%d", x(idx), sr[1])
+			g.emit("b.hs %s", g.panicStub(ie.Index.ESpan(), "index out of bounds"))
+		}
+	default:
+		return "", nil, false
+	}
+	return fmt.Sprintf("[%s, %s, lsl #%d]", x(base), x(idx), log2(et.Size)), []reg{base, idx}, true
 }
 
 // scaledIndex evaluates an index for an element of the given size and

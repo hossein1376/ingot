@@ -462,3 +462,31 @@ test "slice caching and vectors kept across calls" {
     // 1*10 + 2*100 + 3*10 + 4*100 + 5*10 = 690; c = [2..5]: 2 + 4; d[1] = 100
     @assert(slice_shapes(a[0..5], b[0..2]) == 796);
 }
+
+test "register-offset loads and stores for every element size" {
+    var h: [8]u16 = @zero;
+    var w: [8]i32 = @zero;
+    var d: [8]f64 = @zero;
+    var bb: [8]bool = @zero;
+    for i in 0..8 {
+        h[i] = (60000 + i) as u16;
+        w[i] = (0 - i) as i32;
+        d[i] = i as f64 * 0.5;
+        bb[i] = i % 3 == 0;
+        w[i] -= 1 as i32;
+        d[i] += 1.0;
+    }
+    let p: *i32 = &w[0];
+    var j: i64 = 7;
+    p[j] *= 2 as i32;
+    @assert(h[j] == 60007 as u16);
+    @assert(w[7] == -16 as i32 && w[3] == -4 as i32);
+    @assert(d[j] == 4.5);
+    @assert(bb[6] && !bb[j]);
+    let hs: []u16 = h[0..8];
+    var s: i64 = 0;
+    for i in 0..hs.len {
+        s += hs[i] as i64;
+    }
+    @assert(s == 480028);
+}
