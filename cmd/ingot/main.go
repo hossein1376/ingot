@@ -20,7 +20,7 @@ const version = "0.1.0-dev"
 const usage = `ingot ` + version + ` - a low-overhead systems language for AI agents (AArch64 / Apple Silicon)
 
 usage:
-  ingot check FILE            type-check only
+  ingot check FILE            check everything, including test blocks (no main needed)
   ingot asm   FILE            print AArch64 assembly
   ingot build FILE [-o OUT]   compile to a native executable
   ingot run   FILE [-- ARGS]  compile and run (Linux targets run under qemu on x86 hosts)
@@ -109,7 +109,8 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "ingot:", err)
 		return 2
 	}
-	cfg.Tests = cmd == "test"
+	// check and fix also accept library files (no main) and cover test blocks
+	cfg.Tests = cmd == "test" || cmd == "check" || cmd == "fix"
 	if cmd == "fix" {
 		return fix(file, src, cfg, diagFmt)
 	}
