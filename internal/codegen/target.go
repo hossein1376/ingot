@@ -2,7 +2,10 @@
 // macOS (Mach-O, Apple arm64 ABI) or Linux (ELF, AAPCS64).
 package codegen
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Target describes an output platform.
 type Target struct {
@@ -27,7 +30,9 @@ func ParseTarget(s string) (Target, error) {
 }
 
 // Sym is the assembly name of a C-level symbol.
+// Module-qualified names ("map.put") become "map__put".
 func (t Target) Sym(name string) string {
+	name = strings.ReplaceAll(name, ".", "__")
 	if t.Darwin {
 		return "_" + name
 	}

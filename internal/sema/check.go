@@ -3,6 +3,7 @@ package sema
 import (
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/syntax"
@@ -346,6 +347,8 @@ func (c *checker) resolve(te syntax.TypeExpr) *Type {
 		d := c.dl.Errorf("E0203", t.Sp, "unknown type %q", t.Name)
 		if sug := suggest(t.Name); sug != "" {
 			d.Fix("did you mean "+sug+"?", t.Sp, sug)
+		} else if q := c.qualify(t.Name, true); q != "" {
+			d.Fix("did you mean "+q+"? (it lives in an imported module)", t.Sp, q)
 		}
 		return TI64
 	case *syntax.PtrType:
@@ -370,6 +373,36 @@ func (c *checker) resolve(te syntax.TypeExpr) *Type {
 		return ft
 	}
 	return TI64
+}
+
+// qualify finds the single module-qualified declaration "m.name" (a type
+// when types is set, otherwise a value) for an unqualified name.
+func (c *checker) qualify(name string, types bool) string {
+	if strings.Contains(name, ".") {
+		return ""
+	}
+	var found []string
+	add := func(k string) {
+		if _, rest, ok := strings.Cut(k, "."); ok && rest == name {
+			found = append(found, k)
+		}
+	}
+	if types {
+		for k := range c.structs {
+			add(k)
+		}
+		for k := range c.enums {
+			add(k)
+		}
+	} else {
+		for k := range c.global.names {
+			add(k)
+		}
+	}
+	if len(found) != 1 {
+		return ""
+	}
+	return found[0]
 }
 
 func suggest(name string) string {
@@ -863,7 +896,10 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 	case *syntax.IdentExpr:
 		sym := c.sc.lookup(e.Name)
 		if sym == nil {
-			c.dl.Errorf("E0212", e.Sp, "undefined name %q", e.Name)
+			d := c.dl.Errorf("E0212", e.Sp, "undefined name %q", e.Name)
+			if q := c.qualify(e.Name, false); q != "" {
+				d.Fix("did you mean "+q+"? (it lives in an imported module)", e.Sp, q)
+			}
 			return nil
 		}
 		c.info.Uses[e] = sym

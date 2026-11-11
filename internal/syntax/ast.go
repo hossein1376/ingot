@@ -320,9 +320,10 @@ type File struct {
 	Enums   []*EnumDecl
 }
 
-// ImportDecl is `import "path";`.
+// ImportDecl is `import "path";` or `import "path" as name;`.
 type ImportDecl struct {
-	Path string
+	Path  string
+	Alias string // `import "p" as alias;`, "" when merged
 	Sp   diag.Span
 }
 

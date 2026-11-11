@@ -16,6 +16,8 @@ type Parser struct {
 	toks []Tok
 	p    int
 	dl   *diag.List
+	// aliases are the module names bound by `import "..." as name;` so far.
+	aliases map[string]bool
 }
 
 type bailout struct{}
@@ -120,8 +122,17 @@ func (ps *Parser) decl(f *File) {
 			panic(bailout{})
 		}
 		ps.next()
+		imp := &ImportDecl{Path: pt.Text}
+		if ps.accept("as") {
+			imp.Alias = ps.ident().Text
+			if ps.aliases == nil {
+				ps.aliases = map[string]bool{}
+			}
+			ps.aliases[imp.Alias] = true
+		}
 		ps.expect(";")
-		f.Imports = append(f.Imports, &ImportDecl{Path: pt.Text, Sp: ps.from(t.Pos)})
+		imp.Sp = ps.from(t.Pos)
+		f.Imports = append(f.Imports, imp)
 	case ps.is("test"):
 		ps.next()
 		name := ps.cur()
@@ -312,7 +323,7 @@ func (ps *Parser) typeExpr() TypeExpr {
 		return ft
 	case t.Kind == Ident:
 		ps.next()
-		return &NamedType{Name: t.Text, Sp: ps.sp(t)}
+		return &NamedType{Name: ps.qualified(t), Sp: ps.from(t.Pos)}
 	}
 	ps.fail("E0104", ps.sp(t), "expected a type, found %s", t)
 	panic(bailout{})
@@ -623,7 +634,7 @@ func (ps *Parser) primary() Expr {
 	switch t.Kind {
 	case Ident:
 		ps.next()
-		return &IdentExpr{Name: t.Text, Sp: ps.sp(t)}
+		return &IdentExpr{Name: ps.qualified(t), Sp: ps.from(t.Pos)}
 	case Int:
 		ps.next()
 		return &IntLit{Text: t.Text, Sp: ps.sp(t)}
@@ -712,4 +723,14 @@ func ParseIntLit(s string) (uint64, error) {
 		}
 	}
 	return strconv.ParseUint(string(clean), 0, 64)
+}
+
+// qualified extends the just-consumed identifier t to "alias.name" when t
+// is a module alias followed by ".name".
+func (ps *Parser) qualified(t Tok) string {
+	if !ps.aliases[t.Text] || !ps.is(".") || ps.peek().Kind != Ident {
+		return t.Text
+	}
+	ps.next()
+	return t.Text + "." + ps.next().Text
 }

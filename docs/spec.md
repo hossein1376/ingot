@@ -23,7 +23,7 @@ file        = { decl } ;
 decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | test_decl ;
 enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
 member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
-import_decl = "import" STRING ";" ;
+import_decl = "import" STRING [ "as" IDENT ] ";" ;
 fn_decl     = [ "pub" ] [ "extern" ] [ "inline" ] "fn" IDENT "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
                                               (* "! E": fallible, E is an enum with non-zero members *)
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
@@ -254,8 +254,18 @@ and the failing source expression, then exits with 101.
 `import "path.ig";` adds another file's declarations to the program. A relative path resolves
 against the importing file, and each file is loaded once even if several files import it.
 Paths that start with `std/` come from the standard library, which is **embedded in the
-compiler binary**, so nothing needs installing. All files share one namespace in v0.1, and
-`test` blocks are compiled only from the root file. Several files may declare the same
+compiler binary**, so nothing needs installing. `test` blocks are compiled only from the
+root file.
+
+**Namespaced modules.** `import "path.ig" as m;` keeps that file's names out of the importer's
+namespace: they are reached as `m.name` in expressions and types (`m.Vec`, `m.Vec.{ ... }`,
+`m.Axis.x`, `m.dot(a, b)`, `try m.map_put(...)`, `@sizeof(m.T)`). Inside the module its own
+names stay unqualified. Each module file is instantiated once, however many files import it
+and under whichever aliases, so its globals are shared. Without `as`, an import merges into
+one shared namespace as before. A plain name that only exists inside a module gets an E0203
+or E0212 fix that qualifies it, which `ingot fix` applies. Symbols are mangled `m.f` to
+`ingot__m__f` (a `pub fn` in a module exports `m__f`). Two aliases with the same name in one
+file are E0005. Extern functions are never namespaced. Several files may declare the same
 `extern fn` as long as the signatures are identical.
 
 | Module | Contents |

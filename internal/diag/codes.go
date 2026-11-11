@@ -14,6 +14,7 @@ var Codes = []Code{
 	{"E0002", "bad string literal", "A string is unterminated or has an unknown escape. Supported escapes: \\n \\t \\r \\0 \\\\ \\\" \\' \\xHH."},
 	{"E0003", "import not found", "Import paths are relative to the importing file, or start with std/ for the embedded standard library."},
 	{"E0004", "no entry point", "A program needs `pub fn main() -> i32`. Use `ingot test` to run a file's test blocks without a main."},
+	{"E0005", "duplicate module alias", "Each `import \"p\" as name;` in a file needs a different name."},
 	{"E0100", "unexpected token", "The parser expected a specific token (often ';' or a closing bracket). The fix inserts it when that is unambiguous."},
 	{"E0101", "expected identifier", "A name is required here (declaration, field, parameter or loop variable)."},
 	{"E0102", "import needs a path", "Write `import \"path.ig\";` with a string literal."},
