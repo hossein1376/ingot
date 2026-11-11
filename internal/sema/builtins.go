@@ -21,6 +21,10 @@ var Builtins = map[string]string{
 	"reduce_min":   "@reduce_min(v: V) -> E          horizontal min",
 	"reduce_max":   "@reduce_max(v: V) -> E          horizontal max",
 	"sqrt":         "@sqrt(x: F) -> F                square root (scalar or float vector)",
+	"clz":          "@clz(x: I) -> I                 count leading zero bits (CLZ); the width of I for 0",
+	"ctz":          "@ctz(x: I) -> I                 count trailing zero bits (RBIT+CLZ); the width of I for 0",
+	"popcount":     "@popcount(x: I) -> I            number of set bits (CNT+ADDV)",
+	"abs":          "@abs(x: T) -> T                 absolute value (CNEG / FABS / ABS); wraps for the minimum signed value",
 	"fma":          "@fma(a, b, c) -> T              fused a*b + c (scalar or float vector)",
 	"min":          "@min(a: T, b: T) -> T           minimum",
 	"select":       "@select(c: bool, a: T, b: T) -> T  branchless choice (csel/fcsel); both a and b are always evaluated. With a lane mask M and vectors: per-lane choice (BSL)",
@@ -154,6 +158,25 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@%s is not available for %s on AArch64 NEON", e.Name, vt)
 		}
 		return vt.Elem
+	case "clz", "ctz", "popcount":
+		if !nargs(1) {
+			return TI64
+		}
+		t := c.expr(e.Args[0], want)
+		if t.Kind != Int {
+			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@%s expects an integer, found %s", e.Name, t)
+		}
+		return t
+	case "abs":
+		if !nargs(1) {
+			return TI64
+		}
+		t := c.expr(e.Args[0], want)
+		ok := t.Kind == Float || (t.Kind == Int && t.Signed) || (t.Kind == Vec && (t.Elem.Kind == Float || t.Elem.Signed))
+		if !ok {
+			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@abs expects a signed integer, a float or a signed/float vector, found %s", t)
+		}
+		return t
 	case "sqrt":
 		if !nargs(1) {
 			return TF64

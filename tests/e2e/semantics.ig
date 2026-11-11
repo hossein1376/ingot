@@ -769,3 +769,35 @@ test "for ... step K advances the counter by K" {
     var xs: [8]f32 = [8]f32.{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     @assert(st_dot(xs[0..8], xs[0..8]) == 204.0);
 }
+
+test "bit builtins: @clz, @ctz, @popcount, @abs" {
+    @assert(@clz(1) == 63);
+    @assert(@clz(0) == 64);
+    @assert(@ctz(8) == 3);
+    @assert(@ctz(0) == 64);
+    @assert(@popcount(255) == 8);
+    @assert(@popcount(-1) == 64);
+    let b: u8 = 16 as u8;
+    @assert(@clz(b) == 3 as u8);
+    @assert(@ctz(0 as u8) == 8 as u8);
+    let n: i8 = -1 as i8;
+    @assert(@popcount(n) == 8 as i8);
+    @assert(@clz(n) == 0 as i8);
+    let m: i32 = -2 as i32;
+    @assert(@popcount(m) == 31 as i32);
+    @assert(@ctz(m) == 1 as i32);
+    @assert(@clz(1 as u16) == 15 as u16);
+    var k: i64 = -8;
+    var t: i64 = 0;
+    for i in 0..3 {
+        t += @ctz(k) + @abs(k) + @popcount(k);
+    }
+    @assert(k == -8 && t == 3 * (3 + 8 + 61)); // the argument is not modified
+    @assert(@abs(-7) == 7);
+    @assert(@abs(5 as i32) == 5 as i32);
+    @assert(@abs(-2.5) == 2.5);
+    let v: i32x4 = @splat(i32x4, -3 as i32);
+    @assert(@reduce_add(@abs(v)) == 12 as i32);
+    let fv: f32x4 = @splat(f32x4, -1.5 as f32);
+    @assert(@reduce_add(@abs(fv)) == 6.0 as f32);
+}

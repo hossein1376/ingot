@@ -317,7 +317,8 @@ Run `ingot builtins` for the list the compiler actually implements:
 
 ```
 @assert(cond [, msg])   @panic(msg)   @trap()   @unreachable()   @zero   @sizeof(T)
-@splat(V, x)  @load(V, p)  @store(p, v)  @reduce_add/min/max(v)  @fma(a,b,c)  @min  @max  @sqrt
+@splat(V, x)  @load(V, p)  @store(p, v)  @reduce_add/min/max(v)  @fma(a,b,c)  @min  @max  @sqrt  @abs
+@clz(x)  @ctz(x)  @popcount(x)    (integers; result has the type of x; @clz/@ctz of 0 is its bit width)
 @atomic_load(p)  @atomic_store(p, v)  @atomic_add(p, v)  @atomic_cas(p, old, new)  @fence()
 @ticks() (CNTVCT_EL0)  @tick_freq() (CNTFRQ_EL0)  @prefetch(p)  @qos(class)
 ```

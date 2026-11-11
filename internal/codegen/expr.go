@@ -1203,6 +1203,62 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		g.free(a)
 		g.normalize(r, vt.Elem)
 		return r, true
+	case "clz", "ctz", "popcount":
+		a, _ := g.expr(e.Args[0])
+		bits := t.Size * 8
+		rr := w(a)
+		if t.Size == 8 {
+			rr = x(a)
+		}
+		if t.Size < 4 {
+			g.emit("and %s, %s, #%d", rr, rr, (int64(1)<<bits)-1) // drop sign-extension bits
+		}
+		switch e.Name {
+		case "clz":
+			g.emit("clz %s, %s", rr, rr)
+			if t.Size < 4 {
+				g.emit("sub %s, %s, #%d", rr, rr, 32-bits)
+			}
+		case "ctz":
+			if t.Size < 4 {
+				g.emit("orr %s, %s, #%d", rr, rr, int64(1)<<bits) // 0 counts as the width
+			}
+			g.emit("rbit %s, %s", rr, rr)
+			g.emit("clz %s, %s", rr, rr)
+		default:
+			f := g.allocF(e.Sp)
+			n := num(f)
+			if t.Size == 8 {
+				g.emit("fmov d%d, %s", n, x(a))
+			} else {
+				g.emit("fmov s%d, %s", n, w(a)) // the low 32 bits only
+			}
+			g.emit("cnt v%d.8b, v%d.8b", n, n)
+			g.emit("addv b%d, v%d.8b", n, n)
+			g.emit("fmov %s, s%d", w(a), n)
+			g.free(f)
+		}
+		g.normalize(a, t)
+		return a, true
+	case "abs":
+		a, _ := g.expr(e.Args[0])
+		switch {
+		case t.Kind == sema.Vec && t.Elem.Kind == sema.Float:
+			g.emit("fabs %s.%s, %s.%s", v(a), arr(t), v(a), arr(t))
+		case t.Kind == sema.Vec:
+			g.emit("abs %s.%s, %s.%s", v(a), arr(t), v(a), arr(t))
+		case t.Kind == sema.Float:
+			g.emit("fabs %s, %s", rn(a, t), rn(a, t))
+		default:
+			rr := w(a)
+			if t.Size == 8 {
+				rr = x(a)
+			}
+			g.emit("cmp %s, #0", rr)
+			g.emit("cneg %s, %s, mi", rr, rr)
+			g.normalize(a, t)
+		}
+		return a, true
 	case "sqrt":
 		a, _ := g.expr(e.Args[0])
 		if t.Kind == sema.Vec {
