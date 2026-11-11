@@ -95,7 +95,7 @@ func (ps *Parser) decl(f *File) {
 			// resync at next top-level keyword
 			for ps.cur().Kind != EOF {
 				t := ps.cur()
-				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import") && t.Pos.Col == 1 {
+				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import" || t.Text == "enum") && t.Pos.Col == 1 {
 					break
 				}
 				ps.next()
@@ -108,6 +108,8 @@ func (ps *Parser) decl(f *File) {
 		f.Fns = append(f.Fns, ps.fnDecl())
 	case ps.is("struct"):
 		f.Structs = append(f.Structs, ps.structDecl())
+	case ps.is("enum"):
+		f.Enums = append(f.Enums, ps.enumDecl())
 	case ps.is("const") || ps.is("var"):
 		f.Globals = append(f.Globals, ps.globalDecl())
 	case ps.is("import"):
@@ -191,6 +193,61 @@ func (ps *Parser) structDecl() *StructDecl {
 	ps.expect("}")
 	sd.Sp = ps.from(start)
 	return sd
+}
+
+func (ps *Parser) enumDecl() *EnumDecl {
+	start := ps.next().Pos
+	ed := &EnumDecl{Name: ps.ident().Text}
+	if ps.accept(":") {
+		ed.Base = ps.typeExpr()
+	}
+	ps.expect("{")
+	for !ps.is("}") {
+		mt := ps.ident()
+		m := EnumMember{Name: mt.Text}
+		if ps.accept("=") {
+			m.Value = ps.expr()
+		}
+		m.Sp = ps.from(mt.Pos)
+		ed.Members = append(ed.Members, m)
+		if !ps.accept(",") {
+			break
+		}
+	}
+	ps.expect("}")
+	ed.Sp = ps.from(start)
+	return ed
+}
+
+func (ps *Parser) switchStmt() *SwitchStmt {
+	start := ps.next().Pos
+	s := &SwitchStmt{X: ps.expr()}
+	ps.expect("{")
+	for !ps.is("}") && ps.cur().Kind != EOF {
+		ct := ps.cur()
+		if ps.accept("else") {
+			ps.expect("=>")
+			if s.Else != nil {
+				ps.fail("E0110", ps.sp(ct), "switch has more than one 'else' arm")
+			}
+			s.Else = ps.block()
+			continue
+		}
+		c := &SwitchCase{}
+		for {
+			c.Values = append(c.Values, ps.expr())
+			if !ps.accept(",") {
+				break
+			}
+		}
+		ps.expect("=>")
+		c.Body = ps.block()
+		c.Sp = ps.from(ct.Pos)
+		s.Cases = append(s.Cases, c)
+	}
+	ps.expect("}")
+	s.Sp = ps.from(start)
+	return s
 }
 
 func (ps *Parser) globalDecl() *GlobalDecl {
@@ -290,6 +347,8 @@ func (ps *Parser) stmt() Stmt {
 		return s
 	case ps.is("if"):
 		return ps.ifStmt()
+	case ps.is("switch"):
+		return ps.switchStmt()
 	case ps.is("while"):
 		ps.next()
 		c := ps.expr()

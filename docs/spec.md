@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum switch fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -20,7 +20,9 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 
 ```ebnf
 file        = { decl } ;
-decl        = import_decl | fn_decl | struct_decl | global_decl | test_decl ;
+decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | test_decl ;
+enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
+member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
 import_decl = "import" STRING ";" ;
 fn_decl     = [ "pub" ] [ "extern" ] "fn" IDENT "(" [ params ] ")" [ "->" type ] ( block | ";" ) ;
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
@@ -40,6 +42,7 @@ block       = "{" { stmt } "}" ;
 stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
             | "if" expr block [ "else" ( block | if_stmt ) ]
             | "while" expr block
+            | "switch" expr "{" { expr { "," expr } "=>" block } [ "else" "=>" block ] "}"
             | "for" IDENT "in" expr ".." expr block
             | "return" [ expr ] ";"
             | "break" ";" | "continue" ";"
@@ -86,6 +89,7 @@ match the grammar above. Chained comparisons (`a < b < c`) are also errors.
 | `[N]T` | N·size(T), align(T) | value type; assignment copies |
 | `[]T` | 16, 8 | `{ ptr: *T, len: i64 }`; `.ptr` and `.len` are read-only |
 | `struct S {...}` | C layout | fields in order, natural alignment, size rounded to alignment |
+| `enum E: T {...}` | as T (default `i32`) | distinct type; members `E.Name`; only `==`/`!=`; convert with `as` |
 | `fn(A, B) -> R` | 8 | a C function pointer. Every Ingot `fn` is a valid value of its type |
 | `f32x4 f64x2 i32x4 i64x2 u8x16` | 16, 16 | one 128-bit NEON register |
 
@@ -120,6 +124,10 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
   Ingot-to-Ingot calls pass aggregates by hidden reference to a caller-owned copy and return them
   through `x8` (the AAPCS64 indirect-result register).
 * **Control flow**: a function with a non-`void` result must return on every path (E0401).
+* **switch**: case values must be compile-time constants of the scrutinee's type, with no duplicates (E0502).
+  There is no fallthrough. A switch on an enum must cover every member or have an `else` arm (E0504,
+  whose fix inserts the missing arms). A switch on a plain integer must have an `else` arm (E0503).
+  `break` and `continue` inside a switch refer to the enclosing loop.
 * **Field access through a pointer is explicit**: `p.*.x`, never `p.x` (E0217 suggests the fix).
 
 ## 5. Memory model

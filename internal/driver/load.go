@@ -24,6 +24,7 @@ func Load(path string, src []byte, dl *diag.List) *syntax.File {
 		queue = queue[1:]
 		merged.Fns = append(merged.Fns, f.Fns...)
 		merged.Structs = append(merged.Structs, f.Structs...)
+		merged.Enums = append(merged.Enums, f.Enums...)
 		merged.Globals = append(merged.Globals, f.Globals...)
 		for _, imp := range f.Imports {
 			ipath, data, ok := resolve(f.Name, imp.Path)

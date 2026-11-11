@@ -45,6 +45,23 @@ type Type struct {
 	Params   []*Type
 	Ret      *Type
 	Variadic bool
+	Enum     *EnumInfo // non-nil for enum types (Kind == Int)
+}
+
+// EnumInfo lists an enum's members in declaration order.
+type EnumInfo struct {
+	Names  []string
+	Values []int64
+}
+
+// Member returns the value of a named member.
+func (e *EnumInfo) Member(name string) (int64, bool) {
+	for i, n := range e.Names {
+		if n == name {
+			return e.Values[i], true
+		}
+	}
+	return 0, false
 }
 
 var (

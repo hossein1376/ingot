@@ -123,6 +123,14 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 			if s.Value != nil {
 				expr(s.Value, w)
 			}
+		case *syntax.SwitchStmt:
+			expr(s.X, w)
+			for _, cs := range s.Cases {
+				stmt(cs.Body, w)
+			}
+			if s.Else != nil {
+				stmt(s.Else, w)
+			}
 		}
 	}
 	stmt(b.Block, 1)

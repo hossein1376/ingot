@@ -26,7 +26,7 @@ var keywords = map[string]bool{
 	"fn": true, "pub": true, "extern": true, "struct": true, "let": true, "var": true,
 	"const": true, "if": true, "else": true, "while": true, "for": true, "in": true,
 	"return": true, "break": true, "continue": true, "true": true, "false": true,
-	"null": true, "as": true, "test": true, "import": true,
+	"null": true, "as": true, "test": true, "import": true, "enum": true, "switch": true,
 }
 
 // Tok is a token.
@@ -50,7 +50,7 @@ func (t Tok) String() string {
 // longest first
 var puncts = []string{
 	"<<=", ">>=", "...",
-	"->", "==", "!=", "<=", ">=", "&&", "||", "<<", ">>", "+=", "-=", "*=", "/=", "%=",
+	"->", "=>", "==", "!=", "<=", ">=", "&&", "||", "<<", ">>", "+=", "-=", "*=", "/=", "%=",
 	"&=", "|=", "^=", "..", ".*", ".{",
 	"+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "<", ">", "=", "(", ")", "{", "}",
 	"[", "]", ",", ";", ":", ".",

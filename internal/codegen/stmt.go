@@ -126,6 +126,39 @@ func (g *gen) stmt(s syntax.Stmt) {
 			g.free(r)
 		}
 		g.emit("b %s", g.retLabel)
+	case *syntax.SwitchStmt:
+		r, _ := g.expr(s.X)
+		end := g.newLabel("swend")
+		labels := make([]string, len(s.Cases))
+		for i, cs := range s.Cases {
+			labels[i] = g.newLabel("case")
+			for _, v := range cs.Values {
+				k := g.info.Consts[v].I
+				if k >= 0 && k < 4096 {
+					g.emit("cmp %s, #%d", x(r), k)
+				} else {
+					g.movImm("x16", uint64(k))
+					g.emit("cmp %s, x16", x(r))
+				}
+				g.emit("b.eq %s", labels[i])
+			}
+		}
+		g.free(r)
+		els := end
+		if s.Else != nil {
+			els = g.newLabel("swelse")
+		}
+		g.emit("b %s", els)
+		for i, cs := range s.Cases {
+			g.label(labels[i])
+			g.block(cs.Body)
+			g.emit("b %s", end)
+		}
+		if s.Else != nil {
+			g.label(els)
+			g.block(s.Else)
+		}
+		g.label(end)
 	case *syntax.BreakStmt:
 		g.emit("b %s", g.loops[len(g.loops)-1].brk)
 	case *syntax.ContinueStmt:

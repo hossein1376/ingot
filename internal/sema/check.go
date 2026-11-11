@@ -75,6 +75,7 @@ func (s *scope) lookup(n string) any {
 type checker struct {
 	dl      *diag.List
 	info    *Info
+	enums   map[string]*Type
 	structs map[string]*Type
 	global  *scope
 	sc      *scope
@@ -84,11 +85,15 @@ type checker struct {
 
 // Check type-checks f.
 func Check(f *syntax.File, dl *diag.List) *Info {
-	c := &checker{dl: dl, structs: map[string]*Type{}, global: &scope{names: map[string]any{}}}
+	c := &checker{dl: dl, structs: map[string]*Type{}, enums: map[string]*Type{}, global: &scope{names: map[string]any{}}}
 	c.info = &Info{Types: map[syntax.Expr]*Type{}, Consts: map[syntax.Expr]Const{}, Uses: map[*syntax.IdentExpr]any{}, Defs: map[syntax.Node]*Var{}}
+	// 0. enums
+	for _, ed := range f.Enums {
+		c.enumDecl(ed)
+	}
 	// 1. struct names, then layouts (in order; fields must reference earlier or pointer types)
 	for _, sd := range f.Structs {
-		if _, dup := c.structs[sd.Name]; dup || primitives[sd.Name] != nil {
+		if _, dup := c.structs[sd.Name]; dup || primitives[sd.Name] != nil || c.enums[sd.Name] != nil {
 			c.dl.Errorf("E0200", sd.Sp, "duplicate type name %q", sd.Name)
 			continue
 		}
@@ -246,6 +251,49 @@ func (c *checker) layout(sd *syntax.StructDecl, visiting map[string]bool) {
 	t.Size = alignUp(off, align)
 }
 
+func (c *checker) enumDecl(ed *syntax.EnumDecl) {
+	if c.enums[ed.Name] != nil || primitives[ed.Name] != nil {
+		c.dl.Errorf("E0200", ed.Sp, "duplicate type name %q", ed.Name)
+		return
+	}
+	base := TI32
+	if ed.Base != nil {
+		base = c.resolve(ed.Base)
+		if base.Kind != Int || base.Enum != nil {
+			c.dl.Errorf("E0240", ed.Base.TSpan(), "enum base type must be an integer type, found %s", base)
+			base = TI32
+		}
+	}
+	info := &EnumInfo{}
+	t := &Type{Kind: Int, Name: ed.Name, Size: base.Size, Align: base.Align, Signed: base.Signed, Enum: info}
+	next := int64(0)
+	c.sc = c.global
+	for _, m := range ed.Members {
+		if _, dup := info.Member(m.Name); dup {
+			c.dl.Errorf("E0200", m.Sp, "duplicate enum member %q", m.Name)
+			continue
+		}
+		if m.Value != nil {
+			c.expr(m.Value, base)
+			k, ok := c.info.Consts[m.Value]
+			if !ok || k.IsFloat {
+				c.dl.Errorf("E0209", m.Value.ESpan(), "enum value must be an integer constant")
+			} else {
+				next = k.I
+			}
+		}
+		for i, v := range info.Values {
+			if v == next {
+				c.dl.Errorf("E0241", m.Sp, "enum members %s and %s have the same value %d", info.Names[i], m.Name, v)
+			}
+		}
+		info.Names = append(info.Names, m.Name)
+		info.Values = append(info.Values, next)
+		next++
+	}
+	c.enums[ed.Name] = t
+}
+
 func alignUp(x, a int64) int64 { return (x + a - 1) / a * a }
 
 func (c *checker) resolve(te syntax.TypeExpr) *Type {
@@ -256,6 +304,9 @@ func (c *checker) resolve(te syntax.TypeExpr) *Type {
 		}
 		if s := c.structs[t.Name]; s != nil {
 			return s
+		}
+		if en := c.enums[t.Name]; en != nil {
+			return en
 		}
 		d := c.dl.Errorf("E0203", t.Sp, "unknown type %q", t.Name)
 		if sug := suggest(t.Name); sug != "" {
@@ -404,6 +455,8 @@ func (c *checker) stmt(s syntax.Stmt) {
 			return
 		}
 		c.assignable(c.expr(s.Value, c.body.Ret), c.body.Ret, s.Value)
+	case *syntax.SwitchStmt:
+		c.switchStmt(s)
 	case *syntax.BreakStmt, *syntax.ContinueStmt:
 		if c.loops == 0 {
 			c.dl.Errorf("E0306", s.SSpan(), "break/continue outside of a loop")
@@ -411,6 +464,58 @@ func (c *checker) stmt(s syntax.Stmt) {
 	case *syntax.Block:
 		c.block(s, true)
 	}
+}
+
+func (c *checker) switchStmt(s *syntax.SwitchStmt) {
+	xt := c.expr(s.X, nil)
+	if xt.Kind != Int {
+		c.dl.Errorf("E0500", s.X.ESpan(), "switch requires an integer or enum value, found %s", xt)
+		return
+	}
+	seen := map[int64]bool{}
+	for _, cs := range s.Cases {
+		for _, v := range cs.Values {
+			vt := c.expr(v, xt)
+			c.assignable(vt, xt, v)
+			k, ok := c.info.Consts[v]
+			if !ok || k.IsFloat {
+				c.dl.Errorf("E0501", v.ESpan(), "switch case must be a compile-time constant")
+				continue
+			}
+			if seen[k.I] {
+				c.dl.Errorf("E0502", v.ESpan(), "duplicate switch case %d", k.I)
+			}
+			seen[k.I] = true
+		}
+		c.block(cs.Body, true)
+	}
+	if s.Else != nil {
+		c.block(s.Else, true)
+		return
+	}
+	end := s.Sp.End
+	at := diag.Span{File: s.Sp.File, Start: diag.Pos{Line: end.Line, Col: end.Col - 1}, End: diag.Pos{Line: end.Line, Col: end.Col - 1}}
+	if xt.Enum == nil {
+		d := c.dl.Errorf("E0503", s.X.ESpan(), "switch on %s must have an 'else' arm", xt)
+		d.Fix("add an else arm", at, "else => { @unreachable(); } ")
+		return
+	}
+	var missing []string
+	for i, n := range xt.Enum.Names {
+		if !seen[xt.Enum.Values[i]] {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		d := c.dl.Errorf("E0504", s.X.ESpan(), "switch on enum %s is not exhaustive; missing %v", xt.Name, missing)
+		text := ""
+		for _, m := range missing {
+			text += xt.Name + "." + m + " => { } "
+		}
+		d.Fix("handle the missing members", at, text)
+		return
+	}
+	s.Exhaustive = true
 }
 
 func (c *checker) cond(e syntax.Expr) {
@@ -436,6 +541,16 @@ func terminates(s syntax.Stmt) bool {
 	case *syntax.WhileStmt:
 		b, ok := s.Cond.(*syntax.BoolLit)
 		return ok && b.Val && !hasBreak(s.Body)
+	case *syntax.SwitchStmt:
+		if s.Else == nil && !s.Exhaustive {
+			return false
+		}
+		for _, cs := range s.Cases {
+			if !terminates(cs.Body) {
+				return false
+			}
+		}
+		return s.Else == nil || terminates(s.Else)
 	case *syntax.ExprStmt:
 		if b, ok := s.X.(*syntax.BuiltinCall); ok && (b.Name == "trap" || b.Name == "panic" || b.Name == "unreachable") {
 			return true
@@ -456,6 +571,13 @@ func hasBreak(s syntax.Stmt) bool {
 		}
 	case *syntax.IfStmt:
 		return hasBreak(s.Then) || (s.Else != nil && hasBreak(s.Else))
+	case *syntax.SwitchStmt:
+		for _, cs := range s.Cases {
+			if hasBreak(cs.Body) {
+				return true
+			}
+		}
+		return s.Else != nil && hasBreak(s.Else)
 	}
 	return false // nested loops own their breaks
 }
@@ -508,7 +630,7 @@ func (c *checker) assignable(from, to *Type, e syntax.Expr) {
 		return
 	}
 	d := c.dl.Errorf("E0205", e.ESpan(), "type mismatch: expected %s, found %s (Ingot has no implicit conversions)", to, from)
-	if from.IsNumeric() && to.IsNumeric() {
+	if from.IsNumeric() && to.IsNumeric() && from.Enum == nil && to.Enum == nil {
 		sp := e.ESpan()
 		d.Fixes = append(d.Fixes, diag.Fix{Message: "convert explicitly with 'as'", Edits: []diag.Edit{
 			{Span: diag.Span{File: sp.File, Start: sp.Start, End: sp.Start}, Text: "("},
@@ -559,6 +681,9 @@ func (c *checker) expr(e syntax.Expr, want *Type) *Type {
 }
 
 func (c *checker) binOpOK(op string, t *Type) bool {
+	if t.Enum != nil {
+		return false // enums support only == and != (cast with 'as' for arithmetic)
+	}
 	switch op {
 	case "+", "-", "*":
 		return t.Kind == Int || t.Kind == Float || t.Kind == Vec
@@ -578,6 +703,9 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 	switch e := e.(type) {
 	case *syntax.IntLit:
 		u, err := syntax.ParseIntLit(e.Text)
+		if want != nil && want.Enum != nil {
+			want = nil // integers never silently become enum values; use 'as'
+		}
 		if want == nil {
 			want = TI64
 			if err == nil {
@@ -749,6 +877,17 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 		}
 		return ft.Ret
 	case *syntax.FieldExpr:
+		if id, ok := e.X.(*syntax.IdentExpr); ok && c.sc.lookup(id.Name) == nil && c.enums[id.Name] != nil {
+			et := c.enums[id.Name]
+			v, ok := et.Enum.Member(e.Name)
+			if !ok {
+				d := c.dl.Errorf("E0217", e.Sp, "enum %s has no member %q", et.Name, e.Name)
+				d.Note("members: %v", et.Enum.Names)
+				return et
+			}
+			c.info.Consts[e] = Const{I: v}
+			return et
+		}
 		xt := c.expr(e.X, nil)
 		switch xt.Kind {
 		case Struct:
@@ -938,9 +1077,14 @@ func (c *checker) binary(e *syntax.BinaryExpr, want *Type) *Type {
 		xt = c.expr(e.X, w)
 		yt = c.expr(e.Y, xt)
 	}
+	if !cmp && (xt.Enum != nil || yt.Enum != nil) {
+		d := c.dl.Errorf("E0302", e.Sp, "operator %q is not defined for enum values", e.Op)
+		d.Note("convert explicitly, e.g. ((v as i64) + 1) as %s", map[bool]*Type{true: xt, false: yt}[xt.Enum != nil])
+		return map[bool]*Type{true: xt, false: yt}[xt.Enum != nil]
+	}
 	if !shift && !Identical(xt, yt) && !(xt == TNull && yt.Kind == Ptr) && !(yt == TNull && xt.Kind == Ptr) {
 		d := c.dl.Errorf("E0205", e.Sp, "mismatched operand types %s and %s for %q (Ingot has no implicit conversions)", xt, yt, e.Op)
-		if xt.IsNumeric() && yt.IsNumeric() {
+		if xt.IsNumeric() && yt.IsNumeric() && xt.Enum == nil && yt.Enum == nil {
 			sp := e.Y.ESpan()
 			d.Fixes = append(d.Fixes, diag.Fix{Message: "convert the right operand", Edits: []diag.Edit{
 				{Span: diag.Span{File: sp.File, Start: sp.Start, End: sp.Start}, Text: "("},
@@ -952,7 +1096,7 @@ func (c *checker) binary(e *syntax.BinaryExpr, want *Type) *Type {
 	if cmp {
 		ok := xt.IsNumeric() || xt == TBool || xt.Kind == Ptr || xt == TNull || xt.Kind == Fn
 		if e.Op != "==" && e.Op != "!=" {
-			ok = xt.IsNumeric() || xt.Kind == Ptr
+			ok = (xt.IsNumeric() && xt.Enum == nil) || xt.Kind == Ptr
 		}
 		if !ok {
 			c.dl.Errorf("E0302", e.Sp, "operator %q is not defined for %s", e.Op, xt)

@@ -144,3 +144,36 @@ test "large aggregates copy correctly" {
     @assert(b[99] == 9801);
     @assert(b[50] == 2500);
 }
+
+enum Op: u8 { Add, Sub, Mul = 10, Neg }
+
+fn apply(op: Op, a: i64, b: i64) -> i64 {
+    switch op {
+        Op.Add => { return a + b; }
+        Op.Sub => { return a - b; }
+        Op.Mul => { return a * b; }
+        Op.Neg => { return -a; }
+    }
+}
+
+fn classify(n: i64) -> i64 {
+    switch n {
+        0 => { return 0; }
+        1, 2, 3 => { return 1; }
+        -5 => { return -1; }
+        else => { return 99; }
+    }
+}
+
+test "enums and exhaustive switch" {
+    @assert(apply(Op.Add, 2, 3) == 5);
+    @assert(apply(Op.Mul, 4, 5) == 20);
+    @assert(apply(Op.Neg, 7, 0) == -7);
+    @assert((Op.Neg as i64) == 11);
+    @assert(@sizeof(Op) == 1);
+    let o: Op = 1 as Op;
+    @assert(o == Op.Sub);
+    @assert(classify(2) == 1);
+    @assert(classify(-5) == -1);
+    @assert(classify(1000) == 99);
+}

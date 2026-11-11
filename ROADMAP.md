@@ -7,6 +7,7 @@
 - JSON diagnostics with fix edits, and `ingot fix`.
 - C FFI with the Darwin variadic and stack-packing rules. pthreads, LSE atomics, `@qos`.
 - Register promotion of locals, immediate operands, rotated loops.
+- `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
 - `import`, an embedded `std` (libc, mem arena, par `parallel_for` with QoS), and compile-time `@is_macos()` branches.
 - Tests: diagnostic goldens, e2e goldens under qemu, in-language tests, Mach-O header checks, determinism.
 
@@ -17,7 +18,8 @@
    locals, keeps expression results in registers across statements, and adds spilling instead of the
    "expression too deep" error (E0900).
 3. **Error unions**: `!T`, `try`, `catch`, and exhaustive `switch` on integer and enum values.
-4. **Enums and tagged unions**, plus `switch` with exhaustiveness checking (matching the diagnostics style).
+4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
+4b. **`ingot fmt`**: a canonical formatter that keeps comments, so that machine-applied fixes stay tidy.
 5. **Modules**: namespaced imports (`par.parallel_for`), visibility, and a deterministic package hash. v0.1 merges all imports into one namespace.
 6. **Generics**: explicit monomorphized `fn sum[T: Num](xs: []T) -> T`, with no inference across calls.
 7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool

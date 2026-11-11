@@ -111,9 +111,11 @@ func (l *List) WriteText(w io.Writer) {
 			fmt.Fprintf(w, "  note: %s\n", n)
 		}
 		for _, f := range d.Fixes {
+			fmt.Fprintf(w, "  fix: %s:", f.Message)
 			for _, e := range f.Edits {
-				fmt.Fprintf(w, "  fix: %s (replace %d:%d-%d:%d with %q)\n", f.Message, e.Span.Start.Line, e.Span.Start.Col, e.Span.End.Line, e.Span.End.Col, e.Text)
+				fmt.Fprintf(w, " [%d:%d-%d:%d -> %q]", e.Span.Start.Line, e.Span.Start.Col, e.Span.End.Line, e.Span.End.Col, e.Text)
 			}
+			fmt.Fprintln(w)
 		}
 	}
 }

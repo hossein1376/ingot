@@ -185,6 +185,14 @@ type (
 		Value Expr // may be nil
 		Sp    diag.Span
 	}
+	SwitchStmt struct {
+		X     Expr
+		Cases []*SwitchCase
+		Else  *Block // nil if absent
+		Sp    diag.Span
+		// Exhaustive is set by the checker when every enum member is covered.
+		Exhaustive bool
+	}
 	BreakStmt    struct{ Sp diag.Span }
 	ContinueStmt struct{ Sp diag.Span }
 	Block        struct {
@@ -201,6 +209,14 @@ func (s *WhileStmt) SSpan() diag.Span    { return s.Sp }
 func (s *ForStmt) SSpan() diag.Span      { return s.Sp }
 func (s *ReturnStmt) SSpan() diag.Span   { return s.Sp }
 func (s *BreakStmt) SSpan() diag.Span    { return s.Sp }
+func (s *SwitchStmt) SSpan() diag.Span   { return s.Sp }
+
+// SwitchCase is `v1, v2 => { ... }`.
+type SwitchCase struct {
+	Values []Expr
+	Body   *Block
+	Sp     diag.Span
+}
 func (s *ContinueStmt) SSpan() diag.Span { return s.Sp }
 func (s *Block) SSpan() diag.Span        { return s.Sp }
 
@@ -244,6 +260,19 @@ type GlobalDecl struct { // const NAME: T = expr;  or  var NAME: T = @zero;
 	Sp    diag.Span
 }
 
+type EnumDecl struct {
+	Name    string
+	Base    TypeExpr // underlying integer type; nil = i32
+	Members []EnumMember
+	Sp      diag.Span
+}
+
+type EnumMember struct {
+	Name  string
+	Value Expr // optional explicit value
+	Sp    diag.Span
+}
+
 type TestDecl struct {
 	Name string
 	Body *Block
@@ -258,6 +287,7 @@ type File struct {
 	Globals []*GlobalDecl
 	Tests   []*TestDecl
 	Imports []*ImportDecl
+	Enums   []*EnumDecl
 }
 
 // ImportDecl is `import "path";`.
