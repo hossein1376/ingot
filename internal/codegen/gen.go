@@ -22,9 +22,13 @@ type Options struct {
 const (
 	gprBase  = 19 // pool: x19..x28 (callee-saved: survive calls)
 	gprCount = 10
-	fprBase  = 16 // pool: v16..v31 (caller-saved: spilled around calls)
-	fprCount = 16
-	saveArea = 144 // bytes below x29 reserved for x19..x28 and d8..d15
+	// leaf functions (no calls) also hand out caller-saved x2..x7 as
+	// temporaries: they need no save/restore and nothing clobbers them.
+	leafBase  = 2
+	leafCount = 6
+	fprBase   = 16 // pool: v16..v31 (caller-saved: spilled around calls)
+	fprCount  = 16
+	saveArea  = 144 // bytes below x29 reserved for x19..x28 and d8..d15
 )
 
 // reg is an allocated pool register, or (abs != 0) a borrowed read-only
@@ -59,8 +63,9 @@ type gen struct {
 	byRef    map[*sema.Var]bool
 	frame    int64
 	outArgs  int64
-	gpr      [gprCount]bool
+	gpr      [gprCount + leafCount]bool
 	gprTouch [gprCount]bool
+	leafG    int // caller-saved temporaries available (leafCount in leaf functions)
 	fpr      [fprCount]bool
 	fprSpill [fprCount]int64
 	loops    []loopLabels
@@ -148,6 +153,12 @@ func (g *gen) errorf(sp diag.Span, format string, args ...any) {
 // ---- registers ----
 
 func (g *gen) allocG(sp diag.Span) reg {
+	for i := gprCount; i < gprCount+g.leafG; i++ { // free to use: no save needed
+		if !g.gpr[i] {
+			g.gpr[i] = true
+			return reg{n: i}
+		}
+	}
 	for i := 0; i < g.tempG; i++ {
 		if !g.gpr[i] {
 			g.gpr[i], g.gprTouch[i] = true, true
@@ -207,6 +218,9 @@ func num(r reg) int {
 		return r.abs
 	case r.fp:
 		return fprBase + r.n
+	}
+	if r.n >= gprCount {
+		return leafBase + r.n - gprCount
 	}
 	return gprBase + r.n
 }
@@ -617,7 +631,11 @@ func (g *gen) srcText(sp diag.Span) string {
 // remaining temporaries are not enough for its deepest expression.
 func (g *gen) function(b *sema.Body) {
 	u := g.analyze(b)
-	for maxG := 6; maxG >= 0; maxG-- {
+	start := 6
+	if u.leaf {
+		start = 8 // x2..x7 cover the temporaries
+	}
+	for maxG := start; maxG >= 0; maxG-- {
 		if g.functionTry(b, u, maxG, maxG == 0) {
 			return
 		}
@@ -656,7 +674,11 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 			g.vecSave[n] = g.slot(16, 16)
 		}
 	}
-	g.gpr, g.gprTouch, g.fpr = [gprCount]bool{}, [gprCount]bool{}, [fprCount]bool{}
+	g.gpr, g.gprTouch, g.fpr = [gprCount + leafCount]bool{}, [gprCount]bool{}, [fprCount]bool{}
+	g.leafG = 0
+	if u.leaf {
+		g.leafG = leafCount
+	}
 	for i := range g.fprSpill {
 		g.fprSpill[i] = 0
 	}
@@ -916,6 +938,11 @@ func (g *gen) freeTemps(fp bool) int {
 		return n
 	}
 	for i := 0; i < g.tempG; i++ {
+		if !g.gpr[i] {
+			n++
+		}
+	}
+	for i := gprCount; i < gprCount+g.leafG; i++ {
 		if !g.gpr[i] {
 			n++
 		}

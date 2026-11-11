@@ -42,6 +42,9 @@ brevity for regularity:
   before a `bl` and reloads it after. That is cheap when calls are off the hot path. A slice
   that is never reassigned keeps `{ptr, len}` in a register pair, so `s[i]` is a
   `cmp`/`b.hs` against the length register plus one `add`, with no reloads from the frame.
+  A leaf function (one that makes no calls) also uses the caller-saved `x2`–`x7` as
+  temporaries. They need no save or restore, and they leave room to promote up to eight
+  locals or slice registers.
 * A dense `switch` (at least 4 values spanning at most 3× their count) compiles to one
   bounds check and a `br` through a table of 32-bit offsets. A sparse one becomes a
   compare chain.
