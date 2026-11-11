@@ -134,7 +134,12 @@ relative order means anything:
 | kernel | Ingot | C -O0 | C -O2 (zig cc / clang) |
 |---|---|---|---|
 | collatz (integer; `inline fn` helper, branchless `@select` step) | 0.36 s | 2.40 s | 0.33 s |
-| dot (NEON f32x4 FMA) | 1.30 s | 3.04 s | 1.28 s |
+| dot (NEON f32x4 FMA) | 1.50 s | 3.39 s | 1.48–1.73 s |
+| vm (stack-VM bytecode interpreter, dense `switch` jump table) | 0.75–0.82 s (0.47–0.53 s `--unchecked`) | 5.05–5.26 s | 0.44–0.45 s |
+
+The box was noisier for the dot and vm runs (Nov 11, 2026) than for the collatz row. The vm
+kernel's gap to C -O2 comes from the bounds checks and from operands that still live in the
+frame. An SSA register allocator (roadmap item 2) is the fix.
 
 **Not verified on real Apple hardware yet:** running the Mach-O binaries (they link, carry
 `LC_MAIN`, `LC_CODE_SIGNATURE` and `LC_BUILD_VERSION`, and pass header checks), actual P/E
