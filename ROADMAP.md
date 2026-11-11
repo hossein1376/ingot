@@ -10,6 +10,7 @@
 - `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
 - Error unions: `-> T ! E`, `return @err(E.x)`, `try`, `catch e => value | { block }`; error code in x1, one `cbz` per check.
 - `std/map.ig`: open-addressing u64 hash map with error-union API; `examples/hashjoin.ig`.
+- Spilling under register pressure: binary operands and call arguments are parked in the frame, so deep expressions (tested to 120 levels) compile instead of failing with E0900.
 - `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
 - `inline fn`: explicit call-site expansion; callee locals join the caller's register promotion.
 - `ingot explain`: documented catalog of every diagnostic code.
@@ -22,9 +23,8 @@
 ## Next
 1. **Verify on real M4 Pro hardware.** Run `go test ./...` with `INGOT_CC=clang`, run `bench/run.sh TARGET=macos-arm64`,
    and confirm `@qos` placement with `powermetrics`.
-2. **SSA IR and a real register allocator** (linear scan). This removes the temp copies of promoted
-   locals, keeps expression results in registers across statements, and adds spilling instead of the
-   "expression too deep" error (E0900).
+2. **SSA IR and a real register allocator** (linear scan). This keeps values in registers across
+   statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
 3. **Error unions, part 2**: aggregate results (via x8), `errdefer`, `!` in fn-pointer types, and error enums shared across modules.
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
 4b. **`ingot fmt`**: a canonical formatter that keeps comments, so that machine-applied fixes stay tidy.

@@ -68,7 +68,8 @@ type gen struct {
 	errReg   reg
 	bodies   map[*sema.Func]*sema.Body // for inline expansion
 	inl      *inlineCtx                // non-nil while expanding an inline fn body
-	errNext  bool                      // the next emitted call is errFor (its arguments are already evaluated)
+	errNext  bool
+	regErr   bool // E0900 already reported for this function                      // the next emitted call is errFor (its arguments are already evaluated)
 	retLabel string
 	retSlot  int64 // slot holding x8 for aggregate returns
 	stubs    strings.Builder
@@ -153,7 +154,10 @@ func (g *gen) allocG(sp diag.Span) reg {
 		g.exhausted = true
 		return reg{n: 0}
 	}
-	g.errorf(sp, "expression is too deeply nested for the register allocator (more than %d live integer temporaries); split it into 'let' bindings", gprCount)
+	if !g.regErr {
+		g.regErr = true
+		g.errorf(sp, "expression is too deeply nested for the register allocator (more than %d live integer temporaries); split it into 'let' bindings", gprCount)
+	}
 	return reg{n: 0}
 }
 
@@ -164,7 +168,14 @@ func (g *gen) allocF(sp diag.Span) reg {
 			return reg{n: i, fp: true}
 		}
 	}
-	g.errorf(sp, "expression is too deeply nested for the register allocator (more than %d live vector temporaries); split it into 'let' bindings", fprCount)
+	if !g.final {
+		g.exhausted = true
+		return reg{n: 0, fp: true}
+	}
+	if !g.regErr {
+		g.regErr = true
+		g.errorf(sp, "expression is too deeply nested for the register allocator (more than %d live vector temporaries); split it into 'let' bindings", fprCount)
+	}
 	return reg{n: 0, fp: true}
 }
 
@@ -611,7 +622,7 @@ func (g *gen) function(b *sema.Body) {
 
 func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	var buf strings.Builder
-	g.final, g.exhausted = final, false
+	g.final, g.exhausted, g.regErr = final, false, false
 	g.promoted = g.choosePromotions(b, u, maxG, 8)
 	g.tempG = gprCount
 	g.fprTouch = [8]bool{}
@@ -858,4 +869,75 @@ func (g *gen) testMain() {
 	}
 	write(fmt.Sprintf("%d tests passed\n", len(g.info.Tests)))
 	fmt.Fprintf(&g.mod, "\n\t.p2align 4\n\t.globl %[1]s\n%[1]s:\n\tstp x29, x30, [sp, #-16]!\n\tmov x29, sp\n%[2]s\tmov w0, #0\n\tldp x29, x30, [sp], #16\n\tret\n", g.t.Sym("main"), buf.String())
+}
+
+// held is a temporary that may have been parked in a frame slot.
+type held struct {
+	r      reg
+	t      *sema.Type
+	off    int64
+	parked bool
+}
+
+func (g *gen) freeTemps(fp bool) int {
+	n := 0
+	if fp {
+		for i := 0; i < fprCount; i++ {
+			if !g.fpr[i] {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < g.tempG; i++ {
+		if !g.gpr[i] {
+			n++
+		}
+	}
+	return n
+}
+
+// hold keeps r alive across the evaluation of next. Under register pressure
+// (and when next is more than a leaf) r is stored to the frame and its
+// register released; unhold reloads it. This replaces "expression too deep"
+// failures with a spill.
+func (g *gen) hold(r reg, t *sema.Type, next syntax.Expr) held {
+	h := held{r: r, t: t}
+	if r.abs != 0 || isLeaf(next) || g.freeTemps(r.fp) > 3 {
+		return h
+	}
+	if r.fp {
+		h.off = g.slot(16, 16)
+		g.emit("str q%d, %s", num(r), g.mem(h.off))
+	} else {
+		h.off = g.slot(8, 8)
+		g.emit("str %s, %s", x(r), g.mem(h.off))
+	}
+	g.free(r)
+	h.parked = true
+	return h
+}
+
+func (g *gen) unhold(h held, sp diag.Span) reg {
+	if !h.parked {
+		return h.r
+	}
+	if h.r.fp {
+		r := g.allocF(sp)
+		g.emit("ldr q%d, %s", num(r), g.mem(h.off))
+		return r
+	}
+	r := g.allocG(sp)
+	g.emit("ldr %s, %s", x(r), g.mem(h.off))
+	return r
+}
+
+func isLeaf(e syntax.Expr) bool {
+	switch e := e.(type) {
+	case *syntax.IdentExpr, *syntax.IntLit, *syntax.FloatLit, *syntax.BoolLit, *syntax.NullLit, *syntax.StringLit:
+		return true
+	case *syntax.ParenExpr:
+		return isLeaf(e.X)
+	}
+	return false
 }

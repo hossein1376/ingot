@@ -554,6 +554,22 @@ func (g *gen) binary(e *syntax.BinaryExpr, t *sema.Type) reg {
 	}
 	ex, ey := g.operands(e, t)
 	a := g.use(ex)
+	if h := g.hold(a, t, ey); h.parked {
+		b := g.use(ey)
+		a = g.unhold(h, e.Sp)
+		g.arith3(e.Op, a, a, b, t, e.Sp)
+		g.free(b)
+		return a
+	}
+	if a.abs != 0 && !isLeaf(ey) {
+		// a lives in a promoted register: evaluate the right side before
+		// taking a destination register
+		b := g.use(ey)
+		d := g.alloc(t, e.Sp)
+		g.arith3(e.Op, d, a, b, t, e.Sp)
+		g.free(b)
+		return d
+	}
 	d := a
 	if a.abs != 0 {
 		d = g.alloc(t, e.Sp)
@@ -789,6 +805,7 @@ func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
 		callee, _ = g.expr(e.Fn)
 	}
 	var args []argLoc
+	var parked []held
 	for i, a := range e.Args {
 		at := g.typeOf(a)
 		if at == sema.TNull {
@@ -808,6 +825,14 @@ func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
 			g.subImm(x(r), "x29", off)
 		}
 		args = append(args, argLoc{r: r, t: at, vari: i >= len(ft.Params)})
+		if next := firstNonLeaf(e.Args[i+1:]); next != nil && !at.IsAggregate() {
+			parked = append(parked, g.hold(r, at, next))
+		} else {
+			parked = append(parked, held{r: r})
+		}
+	}
+	for i := range args {
+		args[i].r = g.unhold(parked[i], e.Sp)
 	}
 	if g.errFor == e {
 		g.errNext, g.errFor = true, nil
@@ -1335,4 +1360,13 @@ func fpImm(f float64) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func firstNonLeaf(es []syntax.Expr) syntax.Expr {
+	for _, e := range es {
+		if !isLeaf(e) {
+			return e
+		}
+	}
+	return nil
 }

@@ -75,7 +75,7 @@ var Codes = []Code{
 	{"E0502", "duplicate case", "A value appears in more than one case."},
 	{"E0503", "switch needs else", "A switch on a plain integer must have an `else =>` arm."},
 	{"E0504", "non-exhaustive switch", "A switch on an enum must cover every member or have an else arm; the fix inserts the missing arms."},
-	{"E0900", "expression too deep", "The expression needs more temporary registers than the code generator has. Split it into named locals."},
+	{"E0900", "expression too deep", "The code generator parks temporaries in the frame when registers run low (binary operands and call arguments), so this only remains for shapes it cannot spill yet, such as calls with more than 10 non-leaf arguments. Split the expression into named locals."},
 }
 
 // LookupCode returns the catalog entry for code.
