@@ -45,8 +45,27 @@ type Type struct {
 	Params   []*Type
 	Ret      *Type
 	Variadic bool
-	Enum     *EnumInfo // non-nil for enum types (Kind == Int)
-	Err      *Type     // Fn: error enum of a fallible function, else nil
+	Enum     *EnumInfo  // non-nil for enum types (Kind == Int)
+	Err      *Type      // Fn: error enum of a fallible function, else nil
+	Union    *UnionInfo // non-nil for tagged unions (Kind == Struct, no Fields)
+}
+
+// UnionInfo describes a tagged union: a u32 tag at offset 0 (the variant's
+// index) and the payload at PayloadOff.
+type UnionInfo struct {
+	Names      []string
+	Types      []*Type // TVoid for a variant without payload
+	PayloadOff int64
+}
+
+// Variant returns the index of a named variant.
+func (u *UnionInfo) Variant(name string) (int, bool) {
+	for i, n := range u.Names {
+		if n == name {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // EnumInfo lists an enum's members in declaration order.

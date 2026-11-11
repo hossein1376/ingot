@@ -11,7 +11,7 @@ import (
 
 // APIEntry describes one top-level declaration for `ingot api`.
 type APIEntry struct {
-	Kind      string `json:"kind"` // fn | struct | enum | const | var
+	Kind      string `json:"kind"` // fn | struct | union | enum | const | var
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
 	Doc       string `json:"doc,omitempty"` // the // comment lines right above it
@@ -60,9 +60,17 @@ func API(path string, src []byte, dl *diag.List) []APIEntry {
 	for _, s := range f.Structs {
 		var fs []string
 		for _, fl := range s.Fields {
-			fs = append(fs, fl.Name+": "+typeText(fl.Type))
+			if fl.Type == nil {
+				fs = append(fs, fl.Name)
+			} else {
+				fs = append(fs, fl.Name+": "+typeText(fl.Type))
+			}
 		}
-		add("struct", s.Name, "struct "+s.Name+tparams(s.TypeParams)+" { "+strings.Join(fs, ", ")+" }", s.Sp)
+		kind := "struct"
+		if s.Union {
+			kind = "union"
+		}
+		add(kind, s.Name, kind+" "+s.Name+tparams(s.TypeParams)+" { "+strings.Join(fs, ", ")+" }", s.Sp)
 	}
 	for _, e := range f.Enums {
 		var ms []string

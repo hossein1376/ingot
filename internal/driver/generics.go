@@ -190,6 +190,10 @@ func (m *mono) instFn(in *syntax.InstExpr) (string, bool) {
 	var fn *syntax.FnDecl
 	if ok {
 		fn = m.fns[id.Name]
+		if _, isStruct := m.structs[id.Name]; isStruct && fn == nil {
+			// a generic struct or union named in an expression: Option.[i64].some(x)
+			return m.instStruct(&syntax.NamedType{Name: id.Name, Args: in.Types, Sp: in.Sp}), true
+		}
 	}
 	if fn == nil {
 		m.dl.Errorf("E0260", in.Sp, "type arguments given to something that is not a generic function")

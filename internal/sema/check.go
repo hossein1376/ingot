@@ -50,14 +50,18 @@ type Body struct {
 
 // Info is the result of type checking.
 type Info struct {
-	Types   map[syntax.Expr]*Type
-	Consts  map[syntax.Expr]Const // folded constant expressions
-	Uses    map[*syntax.IdentExpr]any
-	Defs    map[syntax.Node]*Var // *LetStmt, *ForStmt
-	Funcs   []*Func
-	Bodies  []*Body
-	Globals []*Var
-	Tests   []*Body
+	Types  map[syntax.Expr]*Type
+	Consts map[syntax.Expr]Const // folded constant expressions
+	Uses   map[*syntax.IdentExpr]any
+	Defs   map[syntax.Node]*Var // *LetStmt, *ForStmt, union case bindings (the case value)
+	// UnionCons maps U.variant(payload) to the variant index.
+	UnionCons map[*syntax.CallExpr]int
+	// UnionCases maps each case value of a switch on a union to its variant index.
+	UnionCases map[syntax.Expr]int
+	Funcs      []*Func
+	Bodies     []*Body
+	Globals    []*Var
+	Tests      []*Body
 }
 
 type scope struct {
@@ -94,7 +98,8 @@ type checker struct {
 // Check type-checks f.
 func Check(f *syntax.File, dl *diag.List) *Info {
 	c := &checker{dl: dl, structs: map[string]*Type{}, enums: map[string]*Type{}, global: &scope{names: map[string]any{}}}
-	c.info = &Info{Types: map[syntax.Expr]*Type{}, Consts: map[syntax.Expr]Const{}, Uses: map[*syntax.IdentExpr]any{}, Defs: map[syntax.Node]*Var{}}
+	c.info = &Info{Types: map[syntax.Expr]*Type{}, Consts: map[syntax.Expr]Const{}, Uses: map[*syntax.IdentExpr]any{}, Defs: map[syntax.Node]*Var{},
+		UnionCons: map[*syntax.CallExpr]int{}, UnionCases: map[syntax.Expr]int{}}
 	// 0. enums
 	for _, ed := range f.Enums {
 		c.enumDecl(ed)
@@ -260,6 +265,10 @@ func (c *checker) layout(sd *syntax.StructDecl, visiting map[string]bool) {
 	if t == nil || t.Align != 0 {
 		return
 	}
+	if sd.Union {
+		c.unionLayout(sd, t)
+		return
+	}
 	var off, align int64 = 0, 1
 	seen := map[string]bool{}
 	for _, f := range sd.Fields {
@@ -283,6 +292,153 @@ func (c *checker) layout(sd *syntax.StructDecl, visiting map[string]bool) {
 	}
 	t.Align = align
 	t.Size = alignUp(off, align)
+}
+
+func (c *checker) unionLayout(sd *syntax.StructDecl, t *Type) {
+	u := &UnionInfo{}
+	var size, align int64 = 0, 4
+	for _, f := range sd.Fields {
+		if _, dup := u.Variant(f.Name); dup {
+			c.dl.Errorf("E0200", f.Sp, "duplicate variant %q", f.Name)
+		}
+		ft := TVoid
+		if f.Type != nil {
+			ft = c.resolve(f.Type)
+			if ft.Kind == Struct && ft.Align == 0 {
+				c.dl.Errorf("E0201", f.Sp, "union %q contains itself (directly or via an earlier-incomplete type); declare it before use or use a pointer", sd.Name)
+				ft = TI64
+			}
+		}
+		u.Names = append(u.Names, f.Name)
+		u.Types = append(u.Types, ft)
+		size, align = max(size, ft.Size), max(align, ft.Align)
+	}
+	if len(u.Names) == 0 {
+		c.dl.Errorf("E0270", sd.Sp, "union %q needs at least one variant", sd.Name)
+	}
+	u.PayloadOff = alignUp(4, align)
+	t.Union = u
+	t.Align = align
+	t.Size = alignUp(u.PayloadOff+size, align)
+}
+
+// unionCons checks U.variant(payload); ok is false when e is not one.
+func (c *checker) unionCons(e *syntax.CallExpr) (*Type, bool) {
+	fe, ok := e.Fn.(*syntax.FieldExpr)
+	if !ok {
+		return nil, false
+	}
+	id, ok := fe.X.(*syntax.IdentExpr)
+	if !ok || c.sc.lookup(id.Name) != nil {
+		return nil, false
+	}
+	t := c.structs[id.Name]
+	if t == nil || t.Union == nil {
+		return nil, false
+	}
+	i, ok := t.Union.Variant(fe.Name)
+	if !ok {
+		c.dl.Errorf("E0271", fe.Sp, "union %s has no variant %q", t.Name, fe.Name).Note("variants: %v", t.Union.Names)
+		return t, true
+	}
+	pt := t.Union.Types[i]
+	want := 1
+	if pt == TVoid {
+		want = 0
+	}
+	if len(e.Args) != want {
+		c.dl.Errorf("E0272", e.Sp, "%s.%s takes %d payload value(s), got %d", t.Name, fe.Name, want, len(e.Args))
+		return t, true
+	}
+	if want == 1 {
+		c.assignable(c.expr(e.Args[0], pt), pt, e.Args[0])
+	}
+	c.info.UnionCons[e] = i
+	return t, true
+}
+
+// unionSwitch checks `switch u { U.a(x) => { ... } U.b => { ... } }`.
+func (c *checker) unionSwitch(s *syntax.SwitchStmt, xt *Type) {
+	u := xt.Union
+	seen := map[int]bool{}
+	for _, cs := range s.Cases {
+		var bind *syntax.IdentExpr
+		var bindKey syntax.Expr
+		vi := -1
+		for _, v := range cs.Values {
+			fe, ok := v.(*syntax.FieldExpr)
+			var arg *syntax.IdentExpr
+			if call, isCall := v.(*syntax.CallExpr); isCall {
+				fe, ok = call.Fn.(*syntax.FieldExpr)
+				if ok && len(call.Args) == 1 {
+					arg, ok = call.Args[0].(*syntax.IdentExpr)
+				} else {
+					ok = false
+				}
+			}
+			var id *syntax.IdentExpr
+			if ok {
+				id, ok = fe.X.(*syntax.IdentExpr)
+			}
+			if !ok || id.Name != xt.Name {
+				c.dl.Errorf("E0273", v.ESpan(), "a case of a switch on union %s is %s.variant or %s.variant(name)", xt.Name, xt.Name, xt.Name)
+				continue
+			}
+			i, found := u.Variant(fe.Name)
+			if !found {
+				c.dl.Errorf("E0271", fe.Sp, "union %s has no variant %q", xt.Name, fe.Name).Note("variants: %v", u.Names)
+				continue
+			}
+			if seen[i] {
+				c.dl.Errorf("E0502", v.ESpan(), "duplicate switch case %s.%s", xt.Name, fe.Name)
+			}
+			seen[i] = true
+			c.info.UnionCases[v] = i
+			c.info.Types[v] = xt
+			if arg != nil {
+				if len(cs.Values) > 1 {
+					c.dl.Errorf("E0273", v.ESpan(), "a case that binds a payload must list a single variant")
+				} else if u.Types[i] == TVoid {
+					c.dl.Errorf("E0272", v.ESpan(), "%s.%s has no payload to bind", xt.Name, fe.Name)
+				} else {
+					bind, bindKey, vi = arg, v, i
+				}
+			}
+		}
+		if bind != nil {
+			c.sc = &scope{parent: c.sc, names: map[string]any{}}
+			bv := &Var{Name: bind.Name, Type: u.Types[vi]}
+			c.declare(bind.Name, bv, bind.Sp)
+			c.info.Defs[bindKey] = bv
+			c.body.Locals = append(c.body.Locals, bv)
+			c.block(cs.Body, true)
+			c.sc = c.sc.parent
+		} else {
+			c.block(cs.Body, true)
+		}
+	}
+	if s.Else != nil {
+		c.block(s.Else, true)
+		return
+	}
+	var missing []string
+	for i, n := range u.Names {
+		if !seen[i] {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		end := s.Sp.End
+		at := diag.Span{File: s.Sp.File, Start: diag.Pos{Line: end.Line, Col: end.Col - 1}, End: diag.Pos{Line: end.Line, Col: end.Col - 1}}
+		d := c.dl.Errorf("E0504", s.X.ESpan(), "switch on union %s is not exhaustive; missing %v", xt.Name, missing)
+		text := ""
+		for _, m := range missing {
+			text += xt.Name + "." + m + " => { } "
+		}
+		d.Fix("handle the missing variants", at, text)
+		return
+	}
+	s.Exhaustive = true
 }
 
 func (c *checker) enumDecl(ed *syntax.EnumDecl) {
@@ -566,6 +722,10 @@ func (c *checker) stmt(s syntax.Stmt) {
 
 func (c *checker) switchStmt(s *syntax.SwitchStmt) {
 	xt := c.expr(s.X, nil)
+	if xt.Union != nil {
+		c.unionSwitch(s, xt)
+		return
+	}
 	if xt.Kind != Int {
 		c.dl.Errorf("E0500", s.X.ESpan(), "switch requires an integer or enum value, found %s", xt)
 		return
@@ -985,6 +1145,9 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 		}
 		return to
 	case *syntax.CallExpr:
+		if t, ok := c.unionCons(e); ok {
+			return t
+		}
 		ft := c.expr(e.Fn, nil)
 		if ft.Kind != Fn {
 			c.dl.Errorf("E0214", e.Fn.ESpan(), "cannot call a value of type %s", ft)
@@ -1172,6 +1335,10 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 		t := c.resolve(e.Type)
 		switch t.Kind {
 		case Struct:
+			if t.Union != nil {
+				c.dl.Errorf("E0270", e.Sp, "construct a union value with %s.variant(payload), not a literal", t.Name)
+				return t
+			}
 			if len(e.Names) == 0 && len(e.Values) > 0 {
 				c.dl.Errorf("E0221", e.Sp, "struct literals must name their fields")
 				return t

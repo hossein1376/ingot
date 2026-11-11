@@ -188,9 +188,15 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 // choosePromotions picks up to maxG integer and maxF float/vector locals.
 func (g *gen) choosePromotions(b *sema.Body, u useInfo, maxG, maxF int) map[*sema.Var]preg {
 	var gc, fc []*sema.Var
+	binds := map[*sema.Var]bool{} // union case bindings live in the frame
+	for k := range g.info.UnionCases {
+		if v := g.info.Defs[k]; v != nil {
+			binds[v] = true
+		}
+	}
 	for _, v := range g.frameLocals(b) {
 		t := v.Type
-		if u.addrTaken[v] || t.IsAggregate() || u.weight[v] == 0 && !contains(b.Params, v) {
+		if u.addrTaken[v] || binds[v] || t.IsAggregate() || u.weight[v] == 0 && !contains(b.Params, v) {
 			continue
 		}
 		switch {

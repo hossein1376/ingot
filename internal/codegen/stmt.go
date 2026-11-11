@@ -222,6 +222,10 @@ func (g *gen) stmt(s syntax.Stmt) {
 		}
 		g.emit("b %s", g.retLabel)
 	case *syntax.SwitchStmt:
+		if g.typeOf(s.X).Union != nil {
+			g.unionSwitch(s)
+			return
+		}
 		r, _ := g.expr(s.X)
 		end := g.newLabel("swend")
 		labels := make([]string, len(s.Cases))
@@ -578,4 +582,85 @@ func (g *gen) jumpTable(s *syntax.SwitchStmt, r reg, labels []string, els string
 		g.emit(".long %s - %s", l, tbl)
 	}
 	return true
+}
+
+// unionCons builds U.variant(payload) in a fresh frame slot: the payload at
+// PayloadOff, then the u32 tag at offset 0. It returns the slot's address.
+func (g *gen) unionCons(e *syntax.CallExpr, t *sema.Type, i int) reg {
+	u := t.Union
+	off := g.slot(t.Size, t.Align)
+	if pt := u.Types[i]; pt != sema.TVoid {
+		v, _ := g.expr(e.Args[0])
+		dst := g.allocG(e.Sp)
+		g.subImm(x(dst), "x29", off-u.PayloadOff)
+		if pt.IsAggregate() {
+			g.copyMem(x(dst), x(v), pt.Size)
+		} else {
+			g.store(v, "["+x(dst)+"]", pt)
+		}
+		g.free(dst)
+		g.free(v)
+	}
+	r := g.allocG(e.Sp)
+	g.subImm(x(r), "x29", off)
+	g.movImm("x16", uint64(i))
+	g.emit("str w16, [%s]", x(r))
+	return r
+}
+
+// unionSwitch dispatches on a union's tag and copies the payload into the
+// case's binding (a frame local) before its body runs.
+func (g *gen) unionSwitch(s *syntax.SwitchStmt) {
+	t := g.typeOf(s.X)
+	u := t.Union
+	r, _ := g.expr(s.X)
+	as := g.slot(8, 8)
+	g.emit("str %s, %s", x(r), g.mem(as))
+	g.emit("ldr %s, [%s]", w(r), x(r))
+	end := g.newLabel("swend")
+	els := end
+	if s.Else != nil {
+		els = g.newLabel("swelse")
+	}
+	labels := make([]string, len(s.Cases))
+	for i, cs := range s.Cases {
+		labels[i] = g.newLabel("case")
+		for _, v := range cs.Values {
+			g.emit("cmp %s, #%d", w(r), g.info.UnionCases[v])
+			g.emit("b.eq %s", labels[i])
+		}
+	}
+	g.free(r)
+	g.emit("b %s", els)
+	for i, cs := range s.Cases {
+		g.label(labels[i])
+		for _, v := range cs.Values {
+			bv := g.info.Defs[v]
+			if bv == nil {
+				continue
+			}
+			pt := bv.Type
+			src := g.allocG(s.Sp)
+			g.emit("ldr %s, %s", x(src), g.mem(as))
+			g.addImm(x(src), x(src), u.PayloadOff)
+			if pt.IsAggregate() {
+				dst := g.varAddr(bv, s.Sp)
+				g.copyMem(x(dst), x(src), pt.Size)
+				g.free(dst)
+			} else {
+				tmp := g.alloc(pt, s.Sp)
+				g.load(tmp, "["+x(src)+"]", pt)
+				g.store(tmp, g.mem(g.slots[bv]), pt)
+				g.free(tmp)
+			}
+			g.free(src)
+		}
+		g.block(cs.Body)
+		g.emit("b %s", end)
+	}
+	if s.Else != nil {
+		g.label(els)
+		g.block(s.Else)
+	}
+	g.label(end)
 }

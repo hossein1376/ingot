@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import enum switch defer errdefer try catch inline fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum union switch defer errdefer try catch inline fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -20,7 +20,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 
 ```ebnf
 file        = { decl } ;
-decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | test_decl ;
+decl        = import_decl | fn_decl | struct_decl | union_decl | enum_decl | global_decl | test_decl ;
 enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
 member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
 import_decl = "import" STRING [ "as" IDENT ] ";" ;
@@ -29,6 +29,8 @@ fn_decl     = [ "pub" ] [ "extern" ] [ "inline" ] "fn" IDENT [ tparams ] "(" [ p
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
 param       = IDENT ":" type ;
 struct_decl = "struct" IDENT [ tparams ] "{" [ field { "," field } [ "," ] ] "}" ;
+union_decl  = "union" IDENT [ tparams ] "{" [ variant { "," variant } [ "," ] ] "}" ;
+variant     = IDENT [ ":" type ] ;                (* no type = no payload *)
 tparams     = "[" IDENT { "," IDENT } "]" ;     (* generic template, see section 3a *)
 targs       = ".[" type { "," type } "]" ;
 field       = IDENT ":" type ;
@@ -111,6 +113,32 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
 * f32 to f64: widening or rounding.
 * bool to int: 0 or 1.
 * pointer, `fn`, and `i64`/`u64` convert among each other, as do vectors of equal size (bit reinterpretation).
+
+## 3b. Tagged unions
+
+```
+union Shape { circle: f64, rect: Rect, point }
+
+let s: Shape = Shape.rect(Rect.{ w: 3.0, h: 4.0 });   // Shape.point() for a bare variant
+switch s {
+    Shape.circle(r) => { ... }    // binds a copy of the payload
+    Shape.rect(q) => { ... }
+    Shape.point => { ... }
+}
+```
+
+* Layout: a `u32` tag (the variant's index, in declaration order) at offset 0, then the
+  payload at the first offset aligned for the largest payload alignment. The size is
+  rounded to that alignment. `@zero` is the first variant with a zero payload.
+* The payload can only be read through a `switch`, so a mismatched read is impossible. A
+  switch without `else` must cover every variant (E0504, with a fix). A binding case names
+  one variant. Bindings are immutable copies.
+* Unions are aggregates: they can be passed and returned by value (`x8`), stored in
+  structs, arrays and slices, and returned from fallible functions. They can be generic
+  (`union Option[T] { some: T, none }`, used as `Option.[i64].some(3)`). They cannot cross
+  the C ABI by value.
+* Errors: a literal or missing variant is E0270. An unknown variant is E0271. A wrong
+  payload count, or binding a bare variant, is E0272. A malformed case is E0273.
 
 ## 3a. Generics
 

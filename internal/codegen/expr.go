@@ -80,6 +80,9 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 	case *syntax.CastExpr:
 		return g.cast(e, t), true
 	case *syntax.CallExpr:
+		if i, ok := g.info.UnionCons[e]; ok {
+			return g.unionCons(e, t, i), true
+		}
 		return g.call(e, t)
 	case *syntax.TryExpr:
 		return g.tryExpr(e, t)

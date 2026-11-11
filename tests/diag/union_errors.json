@@ -1,0 +1,5 @@
+{"severity":"error","code":"E0271","message":"union U has no variant \"d\"","span":{"file":"diag/union_errors.ig","start":{"line":8,"col":16},"end":{"line":8,"col":19}},"notes":["variants: [a b c]"]}
+{"severity":"error","code":"E0272","message":"U.c takes 0 payload value(s), got 1","span":{"file":"diag/union_errors.ig","start":{"line":9,"col":16},"end":{"line":9,"col":22}}}
+{"severity":"error","code":"E0270","message":"construct a union value with U.variant(payload), not a literal","span":{"file":"diag/union_errors.ig","start":{"line":10,"col":16},"end":{"line":10,"col":26}}}
+{"severity":"error","code":"E0504","message":"switch on union U is not exhaustive; missing [b]","span":{"file":"diag/union_errors.ig","start":{"line":11,"col":12},"end":{"line":11,"col":13}},"fixes":[{"message":"handle the missing variants","edits":[{"span":{"file":"diag/union_errors.ig","start":{"line":14,"col":5},"end":{"line":14,"col":5}},"text":"U.b => { } "}]}]}
+{"severity":"error","code":"E0272","message":"U.c has no payload to bind","span":{"file":"diag/union_errors.ig","start":{"line":13,"col":9},"end":{"line":13,"col":15}}}

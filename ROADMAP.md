@@ -28,7 +28,7 @@
 2. **SSA IR and a real register allocator** (linear scan). This keeps values in registers across
    statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
 3. **Error unions, part 2**: `errdefer` and aggregate/vector results are done. Still to do: `!` in fn-pointer types, and error enums shared across modules.
-4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`.
+4. **Tagged unions, part 2**: `union` with payloads, exhaustive `switch` and payload binding are done. Next are mutable payload access through a pointer binding (`U.v(*p)`), a niche-optimized `Option` for pointers, and jump tables on union tags.
 4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
 5. **Modules, part 2**: namespaced imports (`import "p" as m;`) are done. Still to do: `pub` visibility for non-exported names, a module-relative suggestion when the alias differs from the module prefix, and a deterministic package hash.
 6. **Generics, part 2**: explicit monomorphized templates (`fn sum[T]`, `struct S[T]`, `sum.[f64](xs)`) are done. Next are optional bounds (`T: Num`), which would check a template once rather than per instance, and constant parameters (`[N: i64]`).

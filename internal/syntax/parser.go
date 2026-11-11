@@ -97,7 +97,7 @@ func (ps *Parser) decl(f *File) {
 			// resync at next top-level keyword
 			for ps.cur().Kind != EOF {
 				t := ps.cur()
-				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import" || t.Text == "enum" || t.Text == "inline") && t.Pos.Col == 1 {
+				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "union" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import" || t.Text == "enum" || t.Text == "inline") && t.Pos.Col == 1 {
 					break
 				}
 				ps.next()
@@ -108,7 +108,7 @@ func (ps *Parser) decl(f *File) {
 	switch {
 	case ps.is("pub") || ps.is("fn") || ps.is("extern") || ps.is("inline"):
 		f.Fns = append(f.Fns, ps.fnDecl())
-	case ps.is("struct"):
+	case ps.is("struct") || ps.is("union"):
 		f.Structs = append(f.Structs, ps.structDecl())
 	case ps.is("enum"):
 		f.Enums = append(f.Enums, ps.enumDecl())
@@ -197,14 +197,19 @@ func (ps *Parser) fnDecl() *FnDecl {
 }
 
 func (ps *Parser) structDecl() *StructDecl {
-	start := ps.next().Pos
-	sd := &StructDecl{Name: ps.ident().Text}
+	kw := ps.next()
+	start := kw.Pos
+	sd := &StructDecl{Name: ps.ident().Text, Union: kw.Text == "union"}
 	sd.TypeParams = ps.typeParams()
 	ps.expect("{")
 	for !ps.is("}") {
 		ft := ps.ident()
-		ps.expect(":")
-		sd.Fields = append(sd.Fields, Field{Name: ft.Text, Type: ps.typeExpr(), Sp: ps.from(ft.Pos)})
+		if sd.Union && (ps.is(",") || ps.is("}")) {
+			sd.Fields = append(sd.Fields, Field{Name: ft.Text, Sp: ps.from(ft.Pos)}) // no payload
+		} else {
+			ps.expect(":")
+			sd.Fields = append(sd.Fields, Field{Name: ft.Text, Type: ps.typeExpr(), Sp: ps.from(ft.Pos)})
+		}
 		if !ps.accept(",") {
 			break
 		}

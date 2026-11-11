@@ -292,6 +292,9 @@ type Field struct {
 }
 
 type StructDecl struct {
+	// Union marks `union U { a: A, b }`: a tagged union whose variants are
+	// the Fields (Type nil = no payload).
+	Union      bool
 	Name       string
 	TypeParams []string // struct Pair[T] { ... }, instantiated as Pair.[f64]
 	Fields     []Field
