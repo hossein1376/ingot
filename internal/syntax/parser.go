@@ -426,14 +426,19 @@ func contains(s []string, x string) bool {
 	return false
 }
 
-func (ps *Parser) unary() Expr {
+// prefix parses prefix operators; '&x as T' means '(&x) as T'.
+func (ps *Parser) prefix() Expr {
 	t := ps.cur()
 	if t.Kind == Punct && (t.Text == "-" || t.Text == "!" || t.Text == "~" || t.Text == "&") {
 		ps.next()
-		x := ps.unary()
+		x := ps.prefix()
 		return &UnaryExpr{Op: t.Text, X: x, Sp: diag.Span{File: ps.file, Start: t.Pos, End: x.ESpan().End}}
 	}
-	x := ps.postfix()
+	return ps.postfix()
+}
+
+func (ps *Parser) unary() Expr {
+	x := ps.prefix()
 	for ps.is("as") {
 		ps.next()
 		to := ps.typeExpr()

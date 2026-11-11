@@ -88,8 +88,8 @@ func (g *gen) stmt(s syntax.Stmt) {
 			r, _ := g.expr(s.Value)
 			switch {
 			case t.IsAggregate():
-				g.emit("ldr x9, %s", g.mem(g.retSlot))
-				g.copyMem("x9", x(r), t.Size)
+				g.emit("ldr x14, %s", g.mem(g.retSlot))
+				g.copyMem("x14", x(r), t.Size)
 			case r.fp:
 				if t.Kind == sema.Vec {
 					g.emit("mov v0.16b, %s.16b", v(r))
@@ -121,8 +121,8 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 	t := lv.Type
 	off := g.slots[lv]
 	if t.IsAggregate() {
-		g.subImm("x14", "x29", off)
 		if b, ok := val.(*syntax.BuiltinCall); ok && b.Name == "zero" {
+			g.subImm("x14", "x29", off)
 			g.zeroMem("x14", t.Size)
 			return
 		}
