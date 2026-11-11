@@ -1,0 +1,4 @@
+{"severity":"error","code":"E0231","message":"@clz expects an integer, found f64","span":{"file":"diag/bit_builtins_bad.ig","start":{"line":2,"col":23},"end":{"line":2,"col":26}}}
+{"severity":"error","code":"E0231","message":"@bswap expects a 16-, 32- or 64-bit integer, found u8","span":{"file":"diag/bit_builtins_bad.ig","start":{"line":3,"col":24},"end":{"line":3,"col":31}}}
+{"severity":"error","code":"E0231","message":"@abs expects a signed integer, a float or a signed/float vector, found u32","span":{"file":"diag/bit_builtins_bad.ig","start":{"line":4,"col":23},"end":{"line":4,"col":31}}}
+{"severity":"error","code":"E0215","message":"@popcount: wrong number of arguments (2); signature: @popcount(x: I) -> I            number of set bits (CNT+ADDV)","span":{"file":"diag/bit_builtins_bad.ig","start":{"line":5,"col":18},"end":{"line":5,"col":33}}}
