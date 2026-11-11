@@ -201,15 +201,15 @@ type (
 	}
 )
 
-func (s *LetStmt) SSpan() diag.Span      { return s.Sp }
-func (s *AssignStmt) SSpan() diag.Span   { return s.Sp }
-func (s *ExprStmt) SSpan() diag.Span     { return s.Sp }
-func (s *IfStmt) SSpan() diag.Span       { return s.Sp }
-func (s *WhileStmt) SSpan() diag.Span    { return s.Sp }
-func (s *ForStmt) SSpan() diag.Span      { return s.Sp }
-func (s *ReturnStmt) SSpan() diag.Span   { return s.Sp }
-func (s *BreakStmt) SSpan() diag.Span    { return s.Sp }
-func (s *SwitchStmt) SSpan() diag.Span   { return s.Sp }
+func (s *LetStmt) SSpan() diag.Span    { return s.Sp }
+func (s *AssignStmt) SSpan() diag.Span { return s.Sp }
+func (s *ExprStmt) SSpan() diag.Span   { return s.Sp }
+func (s *IfStmt) SSpan() diag.Span     { return s.Sp }
+func (s *WhileStmt) SSpan() diag.Span  { return s.Sp }
+func (s *ForStmt) SSpan() diag.Span    { return s.Sp }
+func (s *ReturnStmt) SSpan() diag.Span { return s.Sp }
+func (s *BreakStmt) SSpan() diag.Span  { return s.Sp }
+func (s *SwitchStmt) SSpan() diag.Span { return s.Sp }
 
 // SwitchCase is `v1, v2 => { ... }`.
 type SwitchCase struct {
@@ -217,6 +217,7 @@ type SwitchCase struct {
 	Body   *Block
 	Sp     diag.Span
 }
+
 func (s *ContinueStmt) SSpan() diag.Span { return s.Sp }
 func (s *Block) SSpan() diag.Span        { return s.Sp }
 
