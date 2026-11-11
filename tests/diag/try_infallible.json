@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0251","message":"try needs the enclosing function to be fallible with E; declare -> i64 ! E or use catch","span":{"file":"diag/try_infallible.ig","start":{"line":10,"col":12},"end":{"line":10,"col":19}},"notes":["tests and main cannot fail; use catch there"]}

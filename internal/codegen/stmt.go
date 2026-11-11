@@ -150,6 +150,14 @@ func (g *gen) stmt(s syntax.Stmt) {
 		}
 		g.label(end)
 	case *syntax.ReturnStmt:
+		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "err" {
+			code, _ := g.expr(b.Args[0])
+			g.runDefers(0)
+			g.emit("mov x1, %s", x(code))
+			g.free(code)
+			g.emit("b %s", g.retLabel)
+			return
+		}
 		if s.Value != nil {
 			t := g.typeOf(s.Value)
 			r, _ := g.expr(s.Value)
@@ -174,6 +182,9 @@ func (g *gen) stmt(s syntax.Stmt) {
 			g.free(r)
 		} else {
 			g.runDefers(0)
+		}
+		if g.body.Err != nil {
+			g.emit("mov x1, #0")
 		}
 		g.emit("b %s", g.retLabel)
 	case *syntax.SwitchStmt:

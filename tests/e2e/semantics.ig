@@ -252,3 +252,61 @@ test "constant on the left of commutative operators; multiply by 2^s+1" {
     let b: u8 = 100 as u8;
     @assert(3 as u8 * b == 44 as u8);
 }
+
+enum MathErr: u16 {
+    negative = 1,
+    too_big = 300,
+}
+
+var r_defers: i64 = 0;
+
+fn r_sqrtish(v: f64) -> f64 ! MathErr {
+    if v < 0.0 {
+        return @err(MathErr.negative);
+    }
+    if v > 1000.0 {
+        return @err(MathErr.too_big);
+    }
+    return v * 0.5;
+}
+
+fn r_chain(v: f64) -> f64 ! MathErr {
+    defer { r_defers += 1; }
+    let a: f64 = try r_sqrtish(v);
+    let b: f64 = try r_sqrtish(a * 4000.0);
+    return a + b;
+}
+
+fn r_count_ok(n: i64) -> i64 ! MathErr {
+    var ok: i64 = 0;
+    for i in 0..n {
+        let x: f64 = r_sqrtish((i * 100) as f64) catch e => {
+            if e == MathErr.too_big {
+                break;
+            }
+            continue;
+        };
+        if x >= 0.0 {
+            ok += 1;
+        }
+    }
+    return ok;
+}
+
+fn r_wrap(v: f64) -> i32 ! MathErr {
+    let x: f64 = try r_sqrtish(v);
+    return x as i32;
+}
+
+test "error unions: try propagates through defers, catch binds the code" {
+    r_defers = 0;
+    @assert((r_chain(0.25) catch _ => -1.0) == 250.125);
+    let big: f64 = r_chain(2.0) catch e => (e as i64) as f64;
+    @assert(big == 300.0);
+    let neg: f64 = r_chain(-3.0) catch e => (e as i64) as f64;
+    @assert(neg == 1.0);
+    @assert(r_defers == 3);
+    @assert((r_count_ok(50) catch _ => -1) == 11);
+    @assert((r_wrap(9.0) catch _ => -1 as i32) == 4 as i32);
+    @assert((r_wrap(-9.0) catch _ => -1 as i32) == -1 as i32);
+}

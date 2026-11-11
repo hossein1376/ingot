@@ -13,6 +13,7 @@ var Builtins = map[string]string{
 	"panic":        "@panic(msg: []u8)               prints msg with location and exits(101)",
 	"trap":         "@trap()                          brk #1",
 	"unreachable":  "@unreachable()                   traps if reached",
+	"err":          "return @err(E.member);           fail with an error from a function declared -> T ! E",
 	"splat":        "@splat(V, x: E) -> V            broadcast scalar to all lanes",
 	"load":         "@load(V, p: *E) -> V            unaligned 128-bit vector load",
 	"store":        "@store(p: *E, v: V)             unaligned 128-bit vector store",
@@ -94,6 +95,12 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 				c.dl.Errorf("E0231", e.Args[0].ESpan(), "@panic message must be a string literal")
 			}
 			c.expr(e.Args[0], nil)
+		}
+		return TVoid
+	case "err":
+		c.dl.Errorf("E0253", e.Sp, "@err is only valid as the operand of return: return @err(E.member);")
+		for _, a := range e.Args {
+			c.expr(a, nil)
 		}
 		return TVoid
 	case "trap", "unreachable", "fence":

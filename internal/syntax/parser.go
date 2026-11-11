@@ -168,6 +168,9 @@ func (ps *Parser) fnDecl() *FnDecl {
 	ps.expect(")")
 	if ps.accept("->") {
 		fd.Ret = ps.typeExpr()
+		if ps.accept("!") {
+			fd.Err = ps.typeExpr()
+		}
 	}
 	if fd.Extern {
 		ps.expect(";")
@@ -427,7 +430,24 @@ func opGroup(op string) string {
 	return op
 }
 
-func (ps *Parser) expr() Expr { return ps.binary(0) }
+func (ps *Parser) expr() Expr {
+	x := ps.binary(0)
+	if ps.is("catch") {
+		ps.next()
+		name := ps.ident()
+		ps.expect("=>")
+		c := &CatchExpr{X: x, Name: name.Text, NameSp: ps.sp(name)}
+		if ps.is("{") {
+			c.Handler = ps.block()
+			c.Sp = diag.Span{File: ps.file, Start: x.ESpan().Start, End: c.Handler.Sp.End}
+		} else {
+			c.Fallback = ps.binary(0)
+			c.Sp = diag.Span{File: ps.file, Start: x.ESpan().Start, End: c.Fallback.ESpan().End}
+		}
+		return c
+	}
+	return x
+}
 
 var levels = [][]string{
 	{"||"},
@@ -502,6 +522,11 @@ func contains(s []string, x string) bool {
 // prefix parses prefix operators; '&x as T' means '(&x) as T'.
 func (ps *Parser) prefix() Expr {
 	t := ps.cur()
+	if ps.is("try") {
+		ps.next()
+		x := ps.prefix()
+		return &TryExpr{X: x, Sp: diag.Span{File: ps.file, Start: t.Pos, End: x.ESpan().End}}
+	}
 	if t.Kind == Punct && (t.Text == "-" || t.Text == "!" || t.Text == "~" || t.Text == "&") {
 		ps.next()
 		x := ps.prefix()

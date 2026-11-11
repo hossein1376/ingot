@@ -64,6 +64,9 @@ type gen struct {
 	fprSpill [fprCount]int64
 	loops    []loopLabels
 	defers   [][]*syntax.Block // per open block, in declaration order
+	errFor   *syntax.CallExpr  // fallible call whose error code (x1) goes to errReg
+	errReg   reg
+	errNext  bool // the next emitted call is errFor (its arguments are already evaluated)
 	retLabel string
 	retSlot  int64 // slot holding x8 for aggregate returns
 	stubs    strings.Builder
@@ -716,7 +719,10 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 		return false
 	}
 	if b.Ret == sema.TVoid || b.Test != nil {
-		// fallthrough return
+		// fallthrough return (success for a fallible void function)
+		if b.Err != nil {
+			g.emit("mov x1, #0")
+		}
 	} else {
 		g.emit("brk #1") // unreachable: checker guarantees a return
 	}

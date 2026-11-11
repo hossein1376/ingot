@@ -138,6 +138,26 @@ func (e *DerefExpr) ESpan() diag.Span    { return e.Sp }
 func (e *IndexExpr) ESpan() diag.Span    { return e.Sp }
 func (e *SliceExpr) ESpan() diag.Span    { return e.Sp }
 func (e *CastExpr) ESpan() diag.Span     { return e.Sp }
+
+// TryExpr is `try f(...)`: on error, run defers and return the error.
+type TryExpr struct {
+	X  Expr // a call to a fallible function
+	Sp diag.Span
+}
+
+// CatchExpr is `f(...) catch e => { ... }` (the block must leave) or
+// `f(...) catch e => fallback` (a value of the call's result type).
+type CatchExpr struct {
+	X        Expr
+	Name     string // "_" to ignore the error
+	NameSp   diag.Span
+	Handler  *Block // nil when Fallback is used
+	Fallback Expr
+	Sp       diag.Span
+}
+
+func (e *TryExpr) ESpan() diag.Span   { return e.Sp }
+func (e *CatchExpr) ESpan() diag.Span { return e.Sp }
 func (e *CompositeLit) ESpan() diag.Span { return e.Sp }
 func (e *ParenExpr) ESpan() diag.Span    { return e.Sp }
 
@@ -243,6 +263,7 @@ type FnDecl struct {
 	Params   []Param
 	Variadic bool
 	Ret      TypeExpr // nil = void
+	Err      TypeExpr // error enum after '!', nil if the function cannot fail
 	Body     *Block   // nil for extern
 	Sp       diag.Span
 	NameSp   diag.Span

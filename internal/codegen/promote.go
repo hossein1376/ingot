@@ -26,6 +26,7 @@ type useInfo struct {
 func (g *gen) analyze(b *sema.Body) useInfo {
 	u := useInfo{addrTaken: map[*sema.Var]bool{}, weight: map[*sema.Var]int{}, leaf: true}
 	var expr func(e syntax.Expr, w int)
+	var stmt func(s syntax.Stmt, w int)
 	expr = func(e syntax.Expr, w int) {
 		switch e := e.(type) {
 		case *syntax.IdentExpr:
@@ -84,9 +85,20 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 			}
 		case *syntax.ParenExpr:
 			expr(e.X, w)
+		case *syntax.TryExpr:
+			expr(e.X, w)
+		case *syntax.CatchExpr:
+			expr(e.X, w)
+			if v := g.info.Defs[e]; v != nil {
+				u.weight[v] += w
+			}
+			if e.Handler != nil {
+				stmt(e.Handler, w)
+			} else {
+				expr(e.Fallback, w)
+			}
 		}
 	}
-	var stmt func(s syntax.Stmt, w int)
 	stmt = func(s syntax.Stmt, w int) {
 		switch s := s.(type) {
 		case *syntax.Block:

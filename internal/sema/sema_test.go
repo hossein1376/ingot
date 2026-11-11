@@ -40,6 +40,13 @@ func TestRules(t *testing.T) {
 		{"break out of defer", "fn f() { while true { defer { break; } } }", "E0308"},
 		{"loop inside defer", "fn f() { defer { while true { break; } } }", ""},
 		{"nested defer", "fn f() { defer { defer { } } }", "E0308"},
+		{"unhandled error", "enum E: u8 { a = 1 }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 { return g(); }", "E0250"},
+		{"try in infallible fn", "enum E: u8 { a = 1 }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 { return try g(); }", "E0251"},
+		{"catch must leave", "enum E: u8 { a = 1 }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 { let v: i64 = g() catch e => { }; return v; }", "E0252"},
+		{"void catch may fall through", "enum E: u8 { a = 1 }\nfn g() -> void ! E { return; }\nfn f() { g() catch e => { }; }", ""},
+		{"err outside return", "enum E: u8 { a = 1 }\nfn f() { @err(E.a); }", "E0253"},
+		{"zero error member", "enum E: u8 { a = 0 }\nfn g() -> i64 ! E { return 1; }", "E0242"},
+		{"try on infallible call", "enum E: u8 { a = 1 }\nfn h() -> i64 { return 1; }\nfn g() -> i64 ! E { return try h(); }", "E0250"},
 		{"undefined name", "fn f() -> i64 { return y; }", "E0212"},
 		{"literal overflow", "fn f() -> u8 { return 300; }", "E0206"},
 	}

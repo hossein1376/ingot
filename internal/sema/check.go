@@ -43,6 +43,7 @@ type Body struct {
 	Params []*Var
 	Locals []*Var // includes params
 	Ret    *Type
+	Err    *Type // error enum if the function is fallible
 	Block  *syntax.Block
 }
 
@@ -84,6 +85,7 @@ type checker struct {
 	// inDefer is set while checking a defer body; loopsAtDefer is the loop
 	// depth outside it (break/continue may not leave the defer body).
 	inDefer      bool
+	handled      map[*syntax.CallExpr]bool // fallible calls wrapped in try/catch
 	loopsAtDefer int
 }
 
@@ -114,6 +116,24 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 		}
 		if fd.Ret != nil {
 			ft.Ret = c.resolve(fd.Ret)
+		}
+		if fd.Err != nil {
+			et := c.resolve(fd.Err)
+			switch {
+			case fd.Extern:
+				c.dl.Errorf("E0242", fd.Err.TSpan(), "extern (C) functions cannot have an error type")
+			case et.Enum == nil:
+				c.dl.Errorf("E0242", fd.Err.TSpan(), "the error type after '!' must be an enum, found %s", et)
+			case ft.Ret.IsAggregate() || ft.Ret.Kind == Vec:
+				c.dl.Errorf("E0242", fd.Ret.TSpan(), "a fallible function must return a scalar, pointer or void (aggregate results are not supported yet); return through an out-pointer")
+			default:
+				for i, v := range et.Enum.Values {
+					if v == 0 {
+						c.dl.Errorf("E0242", fd.Err.TSpan(), "error enum %s has member %s = 0; 0 means success, so error values must be non-zero", et, et.Enum.Names[i])
+					}
+				}
+				ft.Err = et
+			}
 		}
 		if fd.Variadic && !fd.Extern {
 			c.dl.Errorf("E0207", fd.NameSp, "only extern functions may be variadic")
@@ -166,7 +186,7 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 			continue
 		}
 		fn := c.info.Funcs[i]
-		b := &Body{Name: fd.Name, Func: fn, Ret: fn.Type.Ret, Block: fd.Body}
+		b := &Body{Name: fd.Name, Func: fn, Ret: fn.Type.Ret, Err: fn.Type.Err, Block: fd.Body}
 		c.body = b
 		c.sc = &scope{parent: c.global, names: map[string]any{}}
 		for j, p := range fd.Params {
@@ -181,7 +201,7 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 			end := fd.Body.Sp.End
 			d.Fix("add a return at the end", diag.Span{File: end2(fd.Body.Sp).File, Start: diag.Pos{Line: end.Line, Col: end.Col - 1}, End: diag.Pos{Line: end.Line, Col: end.Col - 1}}, "return @zero; ")
 		}
-		if fd.Name == "main" && (!fd.Pub || len(fd.Params) != 0 || fn.Type.Ret != TI32) {
+		if fd.Name == "main" && (!fd.Pub || len(fd.Params) != 0 || fn.Type.Ret != TI32 || fn.Type.Err != nil) {
 			d := c.dl.Errorf("E0210", fd.NameSp, "main must be declared as 'pub fn main() -> i32'")
 			d.Fix("use the canonical signature", diag.Span{File: fd.Sp.File, Start: fd.Sp.Start, End: fd.Body.Sp.Start}, "pub fn main() -> i32 ")
 		}
@@ -402,7 +422,7 @@ func (c *checker) stmt(s syntax.Stmt) {
 		}
 	case *syntax.ExprStmt:
 		switch s.X.(type) {
-		case *syntax.CallExpr, *syntax.BuiltinCall:
+		case *syntax.CallExpr, *syntax.BuiltinCall, *syntax.TryExpr, *syntax.CatchExpr:
 		default:
 			c.dl.Errorf("E0303", s.Sp, "expression statement has no effect; only calls may be used as statements")
 		}
@@ -447,6 +467,19 @@ func (c *checker) stmt(s syntax.Stmt) {
 	case *syntax.ReturnStmt:
 		if c.inDefer {
 			c.dl.Errorf("E0308", s.Sp, "return is not allowed inside a defer body")
+		}
+		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "err" {
+			c.info.Types[b] = TVoid
+			if c.body.Err == nil {
+				c.dl.Errorf("E0253", b.Sp, "@err in a function that cannot fail; declare the error type: -> %s ! E", c.body.Ret)
+				return
+			}
+			if len(b.Args) != 1 {
+				c.dl.Errorf("E0215", b.Sp, "@err takes one argument: return @err(%s.member);", c.body.Err)
+				return
+			}
+			c.assignable(c.expr(b.Args[0], c.body.Err), c.body.Err, b.Args[0])
+			return
 		}
 		if s.Value == nil {
 			if c.body.Ret != TVoid {
@@ -547,6 +580,40 @@ func (c *checker) cond(e syntax.Expr) {
 			d.Fix("compare against null", diag.Span{File: e.ESpan().File, Start: e.ESpan().End, End: e.ESpan().End}, " != null")
 		}
 	}
+}
+
+// fallibleCall returns the call that try/catch wraps, reporting E0250 if x is
+// not a call to a fallible function.
+func (c *checker) fallibleCall(x syntax.Expr, kw string) *syntax.CallExpr {
+	for {
+		p, ok := x.(*syntax.ParenExpr)
+		if !ok {
+			break
+		}
+		x = p.X
+	}
+	call, ok := x.(*syntax.CallExpr)
+	if !ok {
+		c.dl.Errorf("E0250", x.ESpan(), "%s needs a call to a fallible function (one declared -> T ! E)", kw)
+		return nil
+	}
+	if c.handled == nil {
+		c.handled = map[*syntax.CallExpr]bool{}
+	}
+	c.handled[call] = true
+	return call
+}
+
+// leavesLoop reports whether a block ends in break or continue.
+func leavesLoop(b *syntax.Block) bool {
+	if len(b.Stmts) == 0 {
+		return false
+	}
+	switch b.Stmts[len(b.Stmts)-1].(type) {
+	case *syntax.BreakStmt, *syntax.ContinueStmt:
+		return true
+	}
+	return false
 }
 
 func terminates(s syntax.Stmt) bool {
@@ -894,7 +961,65 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 				d.Fix("convert to f64", diag.Span{File: a.ESpan().File, Start: a.ESpan().End, End: a.ESpan().End}, " as f64")
 			}
 		}
+		if ft.Err != nil && !c.handled[e] {
+			d := c.dl.Errorf("E0250", e.Sp, "this call can fail with %s; handle the error with try or catch", ft.Err)
+			if c.body != nil && c.body.Err == ft.Err && !c.inDefer {
+				d.Fix("propagate the error with try", diag.Span{File: e.Sp.File, Start: e.Sp.Start, End: e.Sp.Start}, "try ")
+			}
+		}
 		return ft.Ret
+	case *syntax.TryExpr:
+		call := c.fallibleCall(e.X, "try")
+		t := c.expr(e.X, want)
+		if call == nil {
+			return t
+		}
+		ft := c.info.Types[call.Fn]
+		switch {
+		case ft == nil || ft.Kind != Fn:
+		case ft.Err == nil:
+			c.dl.Errorf("E0250", e.Sp, "try on a call that cannot fail; remove try")
+		case c.inDefer:
+			c.dl.Errorf("E0308", e.Sp, "try is not allowed inside a defer body (it may return)")
+		case c.body.Err == nil:
+			d := c.dl.Errorf("E0251", e.Sp, "try needs the enclosing function to be fallible with %s; declare -> %s ! %s or use catch", ft.Err, c.body.Ret, ft.Err)
+			d.Notes = append(d.Notes, "tests and main cannot fail; use catch there")
+		case c.body.Err != ft.Err:
+			c.dl.Errorf("E0251", e.Sp, "try propagates %s, but the enclosing function fails with %s; use catch and return @err(...) to convert", ft.Err, c.body.Err)
+		}
+		return t
+	case *syntax.CatchExpr:
+		call := c.fallibleCall(e.X, "catch")
+		t := c.expr(e.X, want)
+		if call == nil {
+			return t
+		}
+		ft := c.info.Types[call.Fn]
+		if ft == nil || ft.Kind != Fn || ft.Err == nil {
+			c.dl.Errorf("E0250", e.Sp, "catch on a call that cannot fail; remove the catch")
+			return t
+		}
+		c.sc = &scope{parent: c.sc, names: map[string]any{}}
+		if e.Name != "_" {
+			v := &Var{Name: e.Name, Type: ft.Err}
+			c.info.Defs[e] = v
+			c.body.Locals = append(c.body.Locals, v)
+			c.declare(e.Name, v, e.NameSp)
+		}
+		if e.Handler != nil {
+			c.block(e.Handler, false)
+			if t != TVoid && !terminates(e.Handler) && !leavesLoop(e.Handler) {
+				d := c.dl.Errorf("E0252", e.Handler.Sp, "this catch block must leave (return, break, continue or @panic), because the call's %s result would be undefined after it", t)
+				d.Notes = append(d.Notes, "to continue with a value, write: catch "+e.Name+" => fallback_value")
+			}
+		} else if t == TVoid {
+			c.dl.Errorf("E0252", e.Fallback.ESpan(), "the call returns void, so there is no value to fall back to; use a block: catch %s => { ... }", e.Name)
+			c.expr(e.Fallback, nil)
+		} else {
+			c.assignable(c.expr(e.Fallback, t), t, e.Fallback)
+		}
+		c.sc = c.sc.parent
+		return t
 	case *syntax.FieldExpr:
 		if id, ok := e.X.(*syntax.IdentExpr); ok && c.sc.lookup(id.Name) == nil && c.enums[id.Name] != nil {
 			et := c.enums[id.Name]

@@ -1,0 +1,5 @@
+sum2 ok: 42, sum2 bad: -2, empty->default: 7, cleanups: 2
+  parsed 77
+  report failed with code 2
+  stopping at input 2 (code 2)
+total before the bad input: 15

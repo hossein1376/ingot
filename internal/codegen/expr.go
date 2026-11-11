@@ -78,6 +78,10 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 		return g.cast(e, t), true
 	case *syntax.CallExpr:
 		return g.call(e, t)
+	case *syntax.TryExpr:
+		return g.tryExpr(e, t)
+	case *syntax.CatchExpr:
+		return g.catchExpr(e, t)
 	case *syntax.BuiltinCall:
 		return g.builtin(e, t)
 	case *syntax.FieldExpr:
@@ -791,6 +795,9 @@ func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
 		}
 		args = append(args, argLoc{r: r, t: at, vari: i >= len(ft.Params)})
 	}
+	if g.errFor == e {
+		g.errNext, g.errFor = true, nil
+	}
 	return g.emitCall(direct, callee, args, ret, e.Sp), ret != sema.TVoid
 }
 
@@ -886,6 +893,11 @@ func (g *gen) emitCall(direct string, callee reg, args []argLoc, ret *sema.Type,
 	} else {
 		g.emit("blr %s", x(callee))
 		g.free(callee)
+	}
+	if g.errNext {
+		// fallible call: the error code comes back in x1 (0 = success)
+		g.emit("mov %s, x1", x(g.errReg))
+		g.errNext = false
 	}
 	for _, i := range spilled {
 		g.emit("ldr q%d, %s", fprBase+i, g.mem(g.fprSpill[i]))
@@ -1135,3 +1147,66 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 }
 
 var _ = fmt.Sprintf
+
+func unparen(e syntax.Expr) syntax.Expr {
+	for {
+		p, ok := e.(*syntax.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+// fallible evaluates a fallible call, returning its value and error registers.
+func (g *gen) fallible(x syntax.Expr, t *sema.Type) (reg, bool, reg) {
+	call := unparen(x).(*syntax.CallExpr)
+	errR := g.allocG(call.Sp)
+	g.errFor, g.errReg = call, errR
+	r, ok := g.expr(call)
+	if t == sema.TVoid {
+		ok = false
+	}
+	return r, ok, errR
+}
+
+// tryExpr: on a non-zero error code, run every pending defer and return the
+// same code from the enclosing function.
+func (g *gen) tryExpr(e *syntax.TryExpr, t *sema.Type) (reg, bool) {
+	r, ok, errR := g.fallible(e.X, t)
+	okL := g.newLabel("tryok")
+	g.emit("cbz %s, %s", x(errR), okL)
+	g.runDefers(0)
+	g.emit("mov x1, %s", x(errR))
+	g.emit("b %s", g.retLabel)
+	g.label(okL)
+	g.free(errR)
+	return r, ok
+}
+
+func (g *gen) catchExpr(e *syntax.CatchExpr, t *sema.Type) (reg, bool) {
+	r, ok, errR := g.fallible(e.X, t)
+	okL := g.newLabel("catchok")
+	g.emit("cbz %s, %s", x(errR), okL)
+	if lv := g.info.Defs[e]; lv != nil {
+		if pr, isP := g.promoted[lv]; isP {
+			g.writePromoted(pr, lv.Type, errR)
+		} else {
+			g.store(errR, g.mem(g.slots[lv]), lv.Type)
+		}
+	}
+	g.free(errR)
+	if e.Handler != nil {
+		g.block(e.Handler) // always leaves
+	} else {
+		fb, _ := g.expr(e.Fallback)
+		if r.fp {
+			g.emit("mov %s.16b, %s.16b", v(r), v(fb))
+		} else {
+			g.emit("mov %s, %s", x(r), x(fb))
+		}
+		g.free(fb)
+	}
+	g.label(okL)
+	return r, ok
+}

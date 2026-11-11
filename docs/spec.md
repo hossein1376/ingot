@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import enum switch defer fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum switch defer try catch fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -24,7 +24,8 @@ decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | te
 enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
 member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
 import_decl = "import" STRING ";" ;
-fn_decl     = [ "pub" ] [ "extern" ] "fn" IDENT "(" [ params ] ")" [ "->" type ] ( block | ";" ) ;
+fn_decl     = [ "pub" ] [ "extern" ] "fn" IDENT "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
+                                              (* "! E": fallible, E is an enum with non-zero members *)
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
 param       = IDENT ":" type ;
 struct_decl = "struct" IDENT "{" [ field { "," field } [ "," ] ] "}" ;
@@ -45,13 +46,13 @@ stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
             | "defer" block
             | "switch" expr "{" { expr { "," expr } "=>" block } [ "else" "=>" block ] "}"
             | "for" IDENT "in" expr ".." expr block
-            | "return" [ expr ] ";"
+            | "return" [ expr ] ";"           (* in a fallible fn also: return @err(expr); *)
             | "break" ";" | "continue" ";"
             | block
             | expr ASSIGN_OP expr ";"       (* = += -= *= /= %= &= |= ^= <<= >>= *)
-            | expr ";" ;                    (* calls only *)
+            | expr ";" ;                    (* calls, try or catch only *)
 
-expr        = or ;
+expr        = or [ "catch" IDENT "=>" ( block | or ) ] ;   (* only on a fallible call *)
 or          = and { "||" and } ;
 and         = cmp { "&&" cmp } ;
 cmp         = bit [ CMP_OP bit ] ;          (* == != < <= > >=, non-associative *)
@@ -60,7 +61,7 @@ shift       = add { ("<<" | ">>") add } ;
 add         = mul { ("+" | "-") mul } ;
 mul         = cast { ("*" | "/" | "%") cast } ;
 cast        = prefix { "as" type } ;
-prefix      = ("-" | "!" | "~" | "&") prefix | postfix ;
+prefix      = ("-" | "!" | "~" | "&" | "try") prefix | postfix ;   (* try: only on a fallible call *)
 postfix     = primary { "(" args ")" | "[" expr "]" | "[" expr ".." expr "]" | "." IDENT | ".*" | ".{" inits "}" } ;
 primary     = IDENT | INT | FLOAT | STRING | CSTRING | "true" | "false" | "null"
             | "(" expr ")" | "[" INT "]" type ".{" inits "}" | BUILTIN [ "(" [ type "," ] args ")" ] ;
@@ -165,10 +166,28 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
 ```
 
   Columns count bytes and are 1-based. Spans are half-open. `ingot fix FILE` applies the first
-  fix of every diagnostic.
+  fix of each diagnostic, whole and only if it does not overlap a fix already taken, then
+  re-checks, for up to 8 rounds. `ingot explain CODE` documents every code.
 * **Run time**: `@assert(cond)` and `@assert(cond, "msg")` are always checked, in every build mode.
-  `@panic("msg")` and `@unreachable()` work the same way. Recoverable errors are ordinary
-  return values, for example a status code plus an out-pointer. **(planned)** error unions `!T` with `try`.
+  `@panic("msg")` and `@unreachable()` work the same way.
+* **Recoverable errors** use error unions. `fn parse(s: *u8) -> i64 ! ParseErr` returns either an
+  `i64` or a member of the enum `ParseErr`, whose members must all be non-zero (E0242), because 0
+  means success. Inside such a function, `return v;` succeeds and `return @err(ParseErr.empty);`
+  fails (`@err` anywhere else is E0253).
+  A call to a fallible function cannot be ignored or used as a plain value (E0250). The caller picks
+  one of these forms:
+  * `try f(x)` returns the same error from the enclosing function after running its pending
+    `defer` blocks. The enclosing function must fail with the same enum (E0251). `try` is not
+    allowed in `main`, in tests or in a defer body.
+  * `f(x) catch e => fallback` gives a value of the call's result type when the call fails. `e` is
+    the error, and `_` ignores it.
+  * `f(x) catch e => { ... }` runs a block when the call fails. If the call has a result, the block
+    must leave through `return`, `break`, `continue` or `@panic` (E0252). If the call is `void`, the
+    block may fall through.
+
+  ABI: the result is in x0/d0 as usual, and the error code is in x1 (0 = success). Each check is one
+  `cbz`, and there is no unwinding. In v0.1 a fallible function returns a scalar, pointer or void,
+  extern functions cannot be fallible, and fn-pointer types cannot spell `!`.
 
 ## 7. SIMD
 

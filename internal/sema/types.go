@@ -46,6 +46,7 @@ type Type struct {
 	Ret      *Type
 	Variadic bool
 	Enum     *EnumInfo // non-nil for enum types (Kind == Int)
+	Err      *Type     // Fn: error enum of a fallible function, else nil
 }
 
 // EnumInfo lists an enum's members in declaration order.
@@ -125,7 +126,7 @@ func Identical(a, b *Type) bool {
 	case Array:
 		return a.Len == b.Len && Identical(a.Elem, b.Elem)
 	case Fn:
-		if len(a.Params) != len(b.Params) || a.Variadic != b.Variadic || !Identical(a.Ret, b.Ret) {
+		if len(a.Params) != len(b.Params) || a.Variadic != b.Variadic || !Identical(a.Ret, b.Ret) || a.Err != b.Err {
 			return false
 		}
 		for i := range a.Params {
@@ -155,8 +156,11 @@ func (t *Type) String() string {
 			ps = append(ps, "...")
 		}
 		s := "fn(" + strings.Join(ps, ", ") + ")"
-		if t.Ret != TVoid {
+		if t.Ret != TVoid || t.Err != nil {
 			s += " -> " + t.Ret.String()
+		}
+		if t.Err != nil {
+			s += " ! " + t.Err.String()
 		}
 		return s
 	}

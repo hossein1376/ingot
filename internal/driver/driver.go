@@ -42,7 +42,7 @@ func Compile(path string, src []byte, cfg Config, dl *diag.List) (string, bool) 
 		return "", false
 	}
 	if !cfg.Tests && !hasMain(info) {
-		dl.Errorf("E0001", diag.Span{File: path, Start: diag.Pos{Line: 1, Col: 1}, End: diag.Pos{Line: 1, Col: 1}},
+		dl.Errorf("E0004", diag.Span{File: path, Start: diag.Pos{Line: 1, Col: 1}, End: diag.Pos{Line: 1, Col: 1}},
 			"program has no entry point; declare 'pub fn main() -> i32' (or run 'ingot test' for test blocks)")
 		return "", false
 	}

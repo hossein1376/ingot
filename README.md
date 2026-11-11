@@ -40,6 +40,7 @@ test "dot of ones" {
 | **No implicit conversions, truthiness, shadowing or precedence puzzles** | No GC; aggregates have C layout; heap use is explicit |
 | `--diag json`: stable codes, exact spans, **fix edits**; `ingot fix` applies them | First-class NEON vectors (`f32x4`, `i32x4`, ...) with 1:1 instructions |
 | `test` blocks and `@assert` in the language; `ingot test` runs them | LSE atomics, pthreads via FFI, `@qos` for P/E-core steering |
+| Errors can't be ignored: `-> T ! E` with `try` / `catch`, and `defer` for cleanup | Error checks cost one `cbz` (code in `x1`), with no unwinding tables |
 | Deterministic output (tested) | Darwin ABI details handled: `x18` reserved, variadic args on the stack, packed stack args |
 
 See [docs/design.md](docs/design.md) for why things are this way,
@@ -98,6 +99,7 @@ fails if the compiler emits a code that the catalog does not document.
 | [`examples/ffi.ig`](examples/ffi.ig) | Ingot function as a `qsort` callback, `snprintf`, exported `pub fn` |
 | [`examples/errors.ig`](examples/errors.ig) | a bounds-check panic with `file:line:col` |
 | [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
+| [`examples/result.ig`](examples/result.ig) | error unions: `-> i64 ! ParseErr`, `try` through `defer`, `catch e => value` and `catch e => { break; }` |
 | [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
 
 The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`) is embedded in the compiler,
@@ -106,7 +108,7 @@ so `import "std/par.ig";` works with no setup.
 ## Status and test results
 
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (16 semantics tests plus the example tests),
+(run under qemu-aarch64), in-language `test` blocks (17 semantics tests plus the example tests),
 unit tests for the lexer, parser, checker rules, C struct layout and fix application,
 Mach-O header and load-command checks for every program, and byte-for-byte determinism on both targets.
 
