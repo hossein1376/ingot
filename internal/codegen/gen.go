@@ -23,7 +23,7 @@ const (
 	gprCount = 10
 	fprBase  = 16 // pool: v16..v31 (caller-saved: spilled around calls)
 	fprCount = 16
-	saveArea = 80 // bytes below x29 reserved for x19..x28
+	saveArea = 144 // bytes below x29 reserved for x19..x28 and d8..d15
 )
 
 // reg is an allocated pool register.
@@ -62,6 +62,12 @@ type gen struct {
 	retSlot  int64 // slot holding x8 for aggregate returns
 	stubs    strings.Builder
 	failed   bool
+
+	promoted  map[*sema.Var]preg
+	tempG     int  // number of pool registers available for temporaries
+	final     bool // last allocation attempt: report exhaustion as an error
+	exhausted bool
+	fprTouch  [8]bool // d8..d15
 }
 
 // Generate produces assembly for the whole program.
@@ -119,11 +125,15 @@ func (g *gen) errorf(sp diag.Span, format string, args ...any) {
 // ---- registers ----
 
 func (g *gen) allocG(sp diag.Span) reg {
-	for i := 0; i < gprCount; i++ {
+	for i := 0; i < g.tempG; i++ {
 		if !g.gpr[i] {
 			g.gpr[i], g.gprTouch[i] = true, true
 			return reg{n: i}
 		}
+	}
+	if !g.final {
+		g.exhausted = true
+		return reg{n: 0}
 	}
 	g.errorf(sp, "expression is too deeply nested for the register allocator (more than %d live integer temporaries); split it into 'let' bindings", gprCount)
 	return reg{n: 0}
@@ -532,8 +542,28 @@ func (g *gen) srcText(sp diag.Span) string {
 
 // ---- functions ----
 
+// function generates one body, retrying with fewer promoted locals if the
+// remaining temporaries are not enough for its deepest expression.
 func (g *gen) function(b *sema.Body) {
+	u := g.analyze(b)
+	for maxG := 6; maxG >= 0; maxG-- {
+		if g.functionTry(b, u, maxG, maxG == 0) {
+			return
+		}
+	}
+}
+
+func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	var buf strings.Builder
+	g.final, g.exhausted = final, false
+	g.promoted = g.choosePromotions(b, u, maxG, 8)
+	g.tempG = gprCount
+	g.fprTouch = [8]bool{}
+	for _, p := range g.promoted {
+		if !p.fp {
+			g.tempG--
+		}
+	}
 	g.w = &buf
 	g.body = b
 	g.slots = map[*sema.Var]int64{}
@@ -546,8 +576,18 @@ func (g *gen) function(b *sema.Body) {
 	}
 	g.stubs.Reset()
 	g.retLabel = g.newLabel("ret")
+	for _, p := range g.promoted {
+		if p.fp {
+			g.fprTouch[p.n-8] = true
+		} else {
+			g.gprTouch[p.n-gprBase] = true
+		}
+	}
 	for _, lv := range b.Locals {
 		t := lv.Type
+		if _, ok := g.promoted[lv]; ok {
+			continue
+		}
 		if contains(b.Params, lv) && t.IsAggregate() {
 			g.byRef[lv] = true
 			g.slots[lv] = g.slot(8, 8)
@@ -568,6 +608,20 @@ func (g *gen) function(b *sema.Body) {
 		isReg := (fp && nf < 8) || (!fp && ng < 8)
 		r := reg{n: 0, fp: fp}
 		_ = r
+		if pr, ok := g.promoted[p]; ok && isReg {
+			if fp {
+				if t.Kind == sema.Vec {
+					g.emit("mov v%d.16b, v%d.16b", pr.n, nf)
+				} else {
+					g.emit("fmov %s, %s%d", pname(pr, t), pname(pr, t)[:1], nf)
+				}
+				nf++
+			} else {
+				g.emit("mov x%d, x%d", pr.n, ng)
+				ng++
+			}
+			continue
+		}
 		if isReg {
 			if fp {
 				name := fmt.Sprintf("d%d", nf)
@@ -595,6 +649,13 @@ func (g *gen) function(b *sema.Body) {
 		}
 		off := stackSlot(&stackOff, size, g.t.Darwin)
 		src := fmt.Sprintf("[x29, #%d]", 16+off)
+		if pr, ok := g.promoted[p]; ok {
+			tmp := g.alloc(t, b.Block.Sp)
+			g.load(tmp, src, t)
+			g.writePromoted(pr, t, tmp)
+			g.free(tmp)
+			continue
+		}
 		if fp {
 			name := map[int64]string{4: "s0", 8: "d0", 16: "q0"}[size]
 			g.emit("ldr %s, %s", name, src)
@@ -605,6 +666,9 @@ func (g *gen) function(b *sema.Body) {
 		}
 	}
 	g.block(b.Block)
+	if g.exhausted && !final {
+		return false
+	}
 	if b.Ret == sema.TVoid || b.Test != nil {
 		// fallthrough return
 	} else {
@@ -639,6 +703,7 @@ func (g *gen) function(b *sema.Body) {
 	out.WriteString("\tmov sp, x29\n\tldp x29, x30, [sp], #16\n\tret\n")
 	out.WriteString(g.stubs.String())
 	g.mod.WriteString(out.String())
+	return true
 }
 
 type savePair struct {
@@ -651,6 +716,11 @@ func (g *gen) savePairs() []savePair {
 	for i := 0; i < gprCount; i += 2 {
 		if g.gprTouch[i] || g.gprTouch[i+1] {
 			ps = append(ps, savePair{fmt.Sprintf("x%d", gprBase+i), fmt.Sprintf("x%d", gprBase+i+1), 16 * (i/2 + 1)})
+		}
+	}
+	for i := 0; i < 8; i += 2 {
+		if g.fprTouch[i] || g.fprTouch[i+1] {
+			ps = append(ps, savePair{fmt.Sprintf("d%d", 8+i), fmt.Sprintf("d%d", 9+i), 80 + 16*(i/2+1)})
 		}
 	}
 	return ps

@@ -1,6 +1,8 @@
 package codegen
 
 import (
+	"fmt"
+
 	"github.com/hossein1376/ingot/internal/sema"
 	"github.com/hossein1376/ingot/internal/syntax"
 )
@@ -55,8 +57,13 @@ func (g *gen) stmt(s syntax.Stmt) {
 	case *syntax.ForStmt:
 		lv := g.info.Defs[s]
 		t := lv.Type
+		pr, promoted := g.promoted[lv]
 		lo, _ := g.expr(s.Lo)
-		g.store(lo, g.mem(g.slots[lv]), t)
+		if promoted {
+			g.writePromoted(pr, t, lo)
+		} else {
+			g.store(lo, g.mem(g.slots[lv]), t)
+		}
 		g.free(lo)
 		hiSlot := g.slot(8, 8)
 		hi, _ := g.expr(s.Hi)
@@ -69,13 +76,21 @@ func (g *gen) stmt(s syntax.Stmt) {
 		g.block(s.Body)
 		g.loops = g.loops[:len(g.loops)-1]
 		g.label(cont)
-		g.emit("ldr x9, %s", g.mem(g.slots[lv]))
-		g.emit("add x9, x9, #1")
-		g.emit("str x9, %s", g.mem(g.slots[lv]))
+		ctr := fmt.Sprintf("x%d", pr.n)
+		if promoted {
+			g.emit("add %s, %s, #1", ctr, ctr)
+		} else {
+			ctr = "x9"
+			g.emit("ldr x9, %s", g.mem(g.slots[lv]))
+			g.emit("add x9, x9, #1")
+			g.emit("str x9, %s", g.mem(g.slots[lv]))
+		}
 		g.label(test)
-		g.emit("ldr x9, %s", g.mem(g.slots[lv]))
+		if !promoted {
+			g.emit("ldr x9, %s", g.mem(g.slots[lv]))
+		}
 		g.emit("ldr x10, %s", g.mem(hiSlot))
-		g.emit("cmp x9, x10")
+		g.emit("cmp %s, x10", ctr)
 		if t.Signed {
 			g.emit("b.lt %s", top)
 		} else {
@@ -133,12 +148,51 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 		return
 	}
 	r, _ := g.expr(val)
-	g.store(r, g.mem(off), t)
+	if pr, ok := g.promoted[lv]; ok {
+		g.writePromoted(pr, t, r)
+	} else {
+		g.store(r, g.mem(off), t)
+	}
 	g.free(r)
+}
+
+// promotedTarget returns the promoted variable an assignment targets, if any.
+func (g *gen) promotedTarget(e syntax.Expr) (*sema.Var, preg, bool) {
+	for {
+		p, ok := e.(*syntax.ParenExpr)
+		if !ok {
+			break
+		}
+		e = p.X
+	}
+	id, ok := e.(*syntax.IdentExpr)
+	if !ok {
+		return nil, preg{}, false
+	}
+	lv, ok := g.info.Uses[id].(*sema.Var)
+	if !ok {
+		return nil, preg{}, false
+	}
+	pr, ok := g.promoted[lv]
+	return lv, pr, ok
 }
 
 func (g *gen) assign(s *syntax.AssignStmt) {
 	t := g.typeOf(s.Target)
+	if _, pr, ok := g.promotedTarget(s.Target); ok {
+		if s.Op == "=" {
+			r, _ := g.expr(s.Value)
+			g.writePromoted(pr, t, r)
+			g.free(r)
+			return
+		}
+		cur := g.alloc(t, s.Sp)
+		g.readPromoted(pr, t, cur)
+		g.arithExpr(s.Op[:len(s.Op)-1], cur, s.Value, t, s.Sp)
+		g.writePromoted(pr, t, cur)
+		g.free(cur)
+		return
+	}
 	addr := g.addr(s.Target)
 	if t.IsAggregate() {
 		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "zero" {
@@ -161,9 +215,7 @@ func (g *gen) assign(s *syntax.AssignStmt) {
 	}
 	cur := g.alloc(t, s.Sp)
 	g.load(cur, "["+x(addr)+"]", t)
-	rhs, _ := g.expr(s.Value)
-	g.arith(s.Op[:len(s.Op)-1], cur, rhs, t, s.Sp)
-	g.free(rhs)
+	g.arithExpr(s.Op[:len(s.Op)-1], cur, s.Value, t, s.Sp)
 	g.store(cur, "["+x(addr)+"]", t)
 	g.free(cur)
 	g.free(addr)

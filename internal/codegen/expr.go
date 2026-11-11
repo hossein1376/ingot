@@ -54,6 +54,11 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 			if sym.Type.IsAggregate() {
 				return g.varAddr(sym, e.Sp), true
 			}
+			if pr, ok := g.promoted[sym]; ok {
+				r := g.alloc(sym.Type, e.Sp)
+				g.readPromoted(pr, sym.Type, r)
+				return r, true
+			}
 			if !sym.Global {
 				r := g.alloc(sym.Type, e.Sp)
 				g.load(r, g.mem(g.slots[sym]), sym.Type)
@@ -392,6 +397,15 @@ func (g *gen) compare(e *syntax.BinaryExpr) string {
 		ot = g.typeOf(e.Y)
 	}
 	a, _ := g.expr(e.X)
+	if k, ok := g.info.Consts[e.Y]; ok && ot.Kind == sema.Int && !k.IsFloat && k.I >= 0 && k.I < 4096 {
+		g.emit("cmp %s, #%d", x(a), k.I)
+		g.free(a)
+		pair := intCond[e.Op]
+		if ot.Signed {
+			return pair[0]
+		}
+		return pair[1]
+	}
 	b, _ := g.expr(e.Y)
 	var cc string
 	if ot.Kind == sema.Float {
@@ -491,10 +505,36 @@ func (g *gen) binary(e *syntax.BinaryExpr, t *sema.Type) reg {
 		return r
 	}
 	a, _ := g.expr(e.X)
-	b, _ := g.expr(e.Y)
-	g.arith(e.Op, a, b, t, e.Sp)
-	g.free(b)
+	g.arithExpr(e.Op, a, e.Y, t, e.Sp)
 	return a
+}
+
+// arithExpr computes a = a op y, using an immediate form when y is a
+// small constant (add/sub #imm12, shifts by #imm).
+func (g *gen) arithExpr(op string, a reg, y syntax.Expr, t *sema.Type, sp diag.Span) {
+	if k, ok := g.info.Consts[y]; ok && t.Kind == sema.Int && !k.IsFloat {
+		switch {
+		case (op == "+" || op == "-") && k.I >= 0 && k.I < 4096:
+			ins := map[string]string{"+": "add", "-": "sub"}[op]
+			g.emit("%s %s, %s, #%d", ins, x(a), x(a), k.I)
+			g.normalize(a, t)
+			return
+		case (op == "<<" || op == ">>") && k.I >= 0 && k.I < t.Size*8:
+			ins := "lsl"
+			if op == ">>" {
+				ins = "lsr"
+				if t.Signed {
+					ins = "asr"
+				}
+			}
+			g.emit("%s %s, %s, #%d", ins, x(a), x(a), k.I)
+			g.normalize(a, t)
+			return
+		}
+	}
+	b, _ := g.expr(y)
+	g.arith(op, a, b, t, sp)
+	g.free(b)
 }
 
 // arith computes a = a op b for type t.
