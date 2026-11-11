@@ -1049,6 +1049,17 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 			g.emit("fsqrt %s, %s", rn(a, t), rn(a, t))
 		}
 		return a, true
+	case "select":
+		a, _ := g.expr(e.Args[1])
+		b := g.use(e.Args[2])
+		cc := g.selectCond(e.Args[0])
+		if a.fp {
+			g.emit("fcsel %s, %s, %s, %s", rn(a, t), rn(a, t), rn(b, t), cc)
+		} else {
+			g.emit("csel %s, %s, %s, %s", x(a), x(a), x(b), cc)
+		}
+		g.free(b)
+		return a, true
 	case "fma":
 		a := g.use(e.Args[0])
 		b := g.use(e.Args[1])
@@ -1284,4 +1295,15 @@ func (g *gen) inlineCall(e *syntax.CallExpr, cb *sema.Body, ret *sema.Type) (reg
 	g.label(g.inl.end)
 	g.inl, g.defers, g.loops = saved, savedDefers, savedLoops
 	return res, ret != sema.TVoid
+}
+
+// selectCond sets the flags for a @select condition and returns its condition code.
+func (g *gen) selectCond(c syntax.Expr) string {
+	if b, ok := unparen(c).(*syntax.BinaryExpr); ok && isCmp(b.Op) {
+		return g.compare(b)
+	}
+	cr := g.use(c)
+	g.emit("cmp %s, #0", w(cr))
+	g.free(cr)
+	return "ne"
 }

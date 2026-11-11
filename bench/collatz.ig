@@ -6,11 +6,7 @@ inline fn steps(n0: i64) -> i64 {
     var n: i64 = n0;
     var s: i64 = 0;
     while n != 1 {
-        if (n & 1) == 0 {
-            n = n >> 1;
-        } else {
-            n = 3 * n + 1;
-        }
+        n = @select((n & 1) == 0, n >> 1, 3 * n + 1);
         s += 1;
     }
     return s;

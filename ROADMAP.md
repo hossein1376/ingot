@@ -9,6 +9,7 @@
 - Register promotion of locals, immediate operands, rotated loops.
 - `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
 - Error unions: `-> T ! E`, `return @err(E.x)`, `try`, `catch e => value | { block }`; error code in x1, one `cbz` per check.
+- `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
 - `inline fn`: explicit call-site expansion; callee locals join the caller's register promotion.
 - `ingot explain`: documented catalog of every diagnostic code.
 - `defer` blocks (inline at every exit, LIFO, checked: no return/escape inside).

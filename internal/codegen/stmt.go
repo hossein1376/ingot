@@ -325,6 +325,14 @@ func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
 		case bc.Name == "zero":
 			g.emit("mov x%d, #0", pr.n)
 			return true
+		case bc.Name == "select" && !pr.fp:
+			a := g.use(bc.Args[1])
+			b := g.use(bc.Args[2])
+			cc := g.selectCond(bc.Args[0])
+			g.emit("csel x%d, %s, %s, %s", pr.n, x(a), x(b), cc)
+			g.free(a)
+			g.free(b)
+			return true
 		case bc.Name == "fma" && pr.fp:
 			// acc = @fma(a, b, acc) accumulates in place
 			if _, cp, ok := g.promotedTarget(bc.Args[2]); ok && cp == pr {

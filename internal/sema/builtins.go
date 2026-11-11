@@ -23,6 +23,7 @@ var Builtins = map[string]string{
 	"sqrt":         "@sqrt(x: F) -> F                square root (scalar or float vector)",
 	"fma":          "@fma(a, b, c) -> T              fused a*b + c (scalar or float vector)",
 	"min":          "@min(a: T, b: T) -> T           minimum",
+	"select":       "@select(c: bool, a: T, b: T) -> T  branchless choice (csel/fcsel); both a and b are always evaluated",
 	"max":          "@max(a: T, b: T) -> T           maximum",
 	"ticks":        "@ticks() -> i64                 CNTVCT_EL0 virtual counter",
 	"tick_freq":    "@tick_freq() -> i64             CNTFRQ_EL0 counter frequency (Hz)",
@@ -157,6 +158,21 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 		t := c.expr(e.Args[0], want)
 		if t.Kind != Float && !(t.Kind == Vec && t.Elem.Kind == Float) {
 			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@sqrt expects a float or float vector, found %s", t)
+		}
+		return t
+	case "select":
+		if !nargs(3) {
+			return TI64
+		}
+		c.cond(e.Args[0])
+		t := c.expr(e.Args[1], want)
+		if isUntyped(e.Args[1]) {
+			t = c.expr(e.Args[2], want)
+			c.expr(e.Args[1], t)
+		}
+		c.assignable(c.expr(e.Args[2], t), t, e.Args[2])
+		if !(t.IsGPR() || t.Kind == Float) {
+			c.dl.Errorf("E0231", e.Sp, "@select works on scalars and pointers, found %s", t)
 		}
 		return t
 	case "fma", "min", "max":

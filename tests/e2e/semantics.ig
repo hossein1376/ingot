@@ -371,3 +371,21 @@ test "inline fns: nesting, early returns, loops, defers, vectors, address taken"
     @assert(acc == 285);
     @assert(i_twice(i_sq, 3) == 81); // an inline fn still has an address
 }
+
+test "@select is a branchless choice for ints, floats, pointers and bools" {
+    var n: i64 = 7;
+    @assert(@select((n & 1) == 0, n >> 1, 3 * n + 1) == 22);
+    n = 10;
+    @assert(@select((n & 1) == 0, n >> 1, 3 * n + 1) == 5);
+    let f: f32 = @select(n > 3, 1.5, -1.5);
+    @assert(f == 1.5);
+    let u: u8 = @select(n < 3, 200 as u8, 100 as u8);
+    @assert(u == 100 as u8);
+    let flag: bool = n == 10;
+    @assert(@select(flag, 1, 2) == 1);
+    @assert(@select(flag && n > 100, 1, 2) == 2);
+    var a: i64 = 1;
+    var b: i64 = 2;
+    let p: *i64 = @select(flag, &a, &b);
+    @assert(p.* == 1);
+}
