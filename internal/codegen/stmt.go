@@ -170,7 +170,11 @@ func (g *gen) stmt1(s syntax.Stmt) {
 		g.emit("b %s", test)
 		g.label(top)
 		g.loops = append(g.loops, loopLabels{brk: end, cont: cont, depth: len(g.defers)})
+		if rb, ok := g.forBound(s, t); ok {
+			g.inBounds[lv] = rb
+		}
 		g.block(s.Body)
+		delete(g.inBounds, lv)
 		g.loops = g.loops[:len(g.loops)-1]
 		g.label(cont)
 		ctr := fmt.Sprintf("x%d", pr.n)
@@ -715,4 +719,64 @@ func (g *gen) unionSwitch(s *syntax.SwitchStmt) {
 		g.block(s.Else)
 	}
 	g.label(end)
+}
+
+// rangeBound records what a for-loop counter is known to index safely:
+// every element of slice (when non-nil) or of any array with at least n elements.
+type rangeBound struct {
+	slice *sema.Var
+	n     int64
+}
+
+// forBound proves `for i in lo..hi` keeps 0 <= i < bound for the whole body:
+// the counter is immutable, lo is a non-negative constant (or the counter is
+// unsigned), and hi is a constant or s.len for a slice that is never reassigned
+// (one cached in registers), so its length cannot change during the loop.
+func (g *gen) forBound(s *syntax.ForStmt, t *sema.Type) (rangeBound, bool) {
+	if t.Kind != sema.Int || t.Size != 8 {
+		return rangeBound{}, false
+	}
+	if k, ok := g.info.Consts[s.Lo]; !ok || k.I < 0 {
+		if t.Signed {
+			return rangeBound{}, false
+		}
+	}
+	if k, ok := g.info.Consts[s.Hi]; ok {
+		return rangeBound{n: k.I}, k.I >= 0
+	}
+	fe, ok := unparen(s.Hi).(*syntax.FieldExpr)
+	if !ok || fe.Name != "len" {
+		return rangeBound{}, false
+	}
+	if _, cached := g.cachedSlice(fe.X); !cached {
+		return rangeBound{}, false
+	}
+	sv := g.info.Uses[unparen(fe.X).(*syntax.IdentExpr)].(*sema.Var)
+	return rangeBound{slice: sv}, true
+}
+
+// provenIndex reports whether e's bounds check is redundant because its
+// index is a for-loop counter bounded by the indexed array or slice.
+func (g *gen) provenIndex(e *syntax.IndexExpr) bool {
+	id, ok := unparen(e.Index).(*syntax.IdentExpr)
+	if !ok {
+		return false
+	}
+	lv, ok := g.info.Uses[id].(*sema.Var)
+	if !ok {
+		return false
+	}
+	rb, ok := g.inBounds[lv]
+	if !ok {
+		return false
+	}
+	xt := g.typeOf(e.X)
+	if rb.slice != nil {
+		if xt.Kind != sema.Slice {
+			return false
+		}
+		xid, ok := unparen(e.X).(*syntax.IdentExpr)
+		return ok && g.info.Uses[xid] == rb.slice
+	}
+	return xt.Kind == sema.Array && rb.n <= xt.Len
 }

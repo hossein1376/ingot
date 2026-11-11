@@ -74,8 +74,9 @@ type gen struct {
 	fpr                  [fprCount]bool
 	fprSpill             [fprCount]int64
 	loops                []loopLabels
-	defers               [][]*syntax.Block // per open block, in declaration order
-	errFor               *syntax.CallExpr  // fallible call whose error code (x1) goes to errReg
+	inBounds             map[*sema.Var]rangeBound // for-loop counters with proven bounds
+	defers               [][]*syntax.Block        // per open block, in declaration order
+	errFor               *syntax.CallExpr         // fallible call whose error code (x1) goes to errReg
 	errReg               reg
 	bodies               map[*sema.Func]*sema.Body // for inline expansion
 	inl                  *inlineCtx                // non-nil while expanding an inline fn body
@@ -674,6 +675,7 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	g.outArgs = 0
 	g.vecSave = map[int]int64{}
 	g.errDefer = map[*syntax.Block]bool{}
+	g.inBounds = map[*sema.Var]rangeBound{}
 	if !u.leaf {
 		var ns []int
 		for lv, p := range g.promoted {

@@ -48,6 +48,11 @@ brevity for regularity:
   In a function that does make calls, a statement with no call in it (`let`,
   assignment or expression statement) still borrows `x2`–`x7`. If a temporary would
   outlive the statement, the function is regenerated without the borrowing.
+* Bounds checks are skipped where the loop already proves them. In `for i in lo..hi`
+  the counter is immutable, and `lo` is a non-negative constant (or the counter is
+  unsigned). If `hi` is `s.len` for a slice that is never reassigned, `s[i]` skips its check.
+  If `hi` is a constant no larger than an array's length, `a[i]` skips it too. Any other
+  index, such as `s[i + 1]`, keeps the check.
 * A dense `switch` (at least 4 values spanning at most 3× their count) compiles to one
   bounds check and a `br` through a table of 32-bit offsets. A sparse one becomes a
   compare chain.

@@ -665,3 +665,29 @@ test "caller-saved temporaries in call-free statements of non-leaf functions" {
     let xs: [10]i64 = [10]i64.{ 5, -7, 12, 3, 100, -41, 8, 0, 9, 77 };
     @assert(nl_mix(xs[0..10]) == 13962);
 }
+
+// for-loop counters bounded by s.len (s never reassigned) or by a constant
+// no larger than an array's length skip the bounds check; anything else keeps it
+fn bc_sum(s: []i64) -> i64 {
+    var acc: i64 = 0;
+    for i in 0..s.len {
+        acc += s[i] * (i + 1);
+    }
+    for j in 1..s.len {
+        acc += s[j - 1]; // not a bare counter: still checked
+    }
+    return acc;
+}
+
+test "proven for-loop indices drop bounds checks without changing results" {
+    var a: [6]i64 = @zero;
+    for i in 0..6 {
+        a[i] = i * i;
+    }
+    var u: u64 = 0;
+    for k in 2 as u64..5 as u64 {
+        u += k;
+    }
+    @assert(u == 9 as u64);
+    @assert(bc_sum(a[0..6]) == 280 + 30);
+}

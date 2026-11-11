@@ -296,7 +296,7 @@ func (g *gen) addr(e syntax.Expr) reg {
 				if _, isK := g.info.Consts[e.Index]; !isK && (et.Size == 1 || et.Size == 2 || et.Size == 4 || et.Size == 8 || et.Size == 16) {
 					var idx reg
 					sh := log2(et.Size)
-					if g.opt.Safe {
+					if g.opt.Safe && !g.provenIndex(e) {
 						idx = g.use(e.Index)
 						g.emit("cmp %s, %s", x(idx), lenReg)
 						g.emit("b.hs %s", g.panicStub(e.Index.ESpan(), "index out of bounds"))
@@ -342,7 +342,7 @@ func (g *gen) addr(e syntax.Expr) reg {
 			return base
 		}
 		idx := g.use(e.Index)
-		if g.opt.Safe && (xt.Kind == sema.Array || xt.Kind == sema.Slice) {
+		if g.opt.Safe && (xt.Kind == sema.Array || xt.Kind == sema.Slice) && !g.provenIndex(e) {
 			if xt.Kind == sema.Array {
 				g.movImm("x15", uint64(xt.Len))
 			} else if lenReg == "" {
@@ -406,7 +406,7 @@ func (g *gen) indexMode(e syntax.Expr) (string, []reg, bool) {
 	case sema.Array:
 		base = g.aggAddr(ie.X)
 		idx = g.use(ie.Index)
-		if g.opt.Safe {
+		if g.opt.Safe && !g.provenIndex(ie) {
 			g.movImm("x15", uint64(xt.Len))
 			g.emit("cmp %s, x15", x(idx))
 			g.emit("b.hs %s", g.panicStub(ie.Index.ESpan(), "index out of bounds"))
@@ -418,7 +418,7 @@ func (g *gen) indexMode(e syntax.Expr) (string, []reg, bool) {
 		}
 		base = reg{abs: sr[0]}
 		idx = g.use(ie.Index)
-		if g.opt.Safe {
+		if g.opt.Safe && !g.provenIndex(ie) {
 			g.emit("cmp %s, x%d", x(idx), sr[1])
 			g.emit("b.hs %s", g.panicStub(ie.Index.ESpan(), "index out of bounds"))
 		}
