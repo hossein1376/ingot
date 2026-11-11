@@ -801,3 +801,11 @@ test "bit builtins: @clz, @ctz, @popcount, @abs" {
     let fv: f32x4 = @splat(f32x4, -1.5 as f32);
     @assert(@reduce_add(@abs(fv)) == 6.0 as f32);
 }
+
+test "@bswap reverses byte order" {
+    @assert(@bswap(0x0102030405060708) == 0x0807060504030201);
+    @assert(@bswap(0x11223344 as u32) == 0x44332211 as u32);
+    @assert(@bswap(0x1234 as u16) == 0x3412 as u16);
+    let s: i16 = 0x00ff as i16;
+    @assert(@bswap(s) == -256 as i16); // 0xff00, sign-extended
+}

@@ -24,6 +24,7 @@ var Builtins = map[string]string{
 	"clz":          "@clz(x: I) -> I                 count leading zero bits (CLZ); the width of I for 0",
 	"ctz":          "@ctz(x: I) -> I                 count trailing zero bits (RBIT+CLZ); the width of I for 0",
 	"popcount":     "@popcount(x: I) -> I            number of set bits (CNT+ADDV)",
+	"bswap":        "@bswap(x: I) -> I               reverse byte order (REV / REV16) for 16-, 32- and 64-bit integers",
 	"abs":          "@abs(x: T) -> T                 absolute value (CNEG / FABS / ABS); wraps for the minimum signed value",
 	"fma":          "@fma(a, b, c) -> T              fused a*b + c (scalar or float vector)",
 	"min":          "@min(a: T, b: T) -> T           minimum",
@@ -158,6 +159,15 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@%s is not available for %s on AArch64 NEON", e.Name, vt)
 		}
 		return vt.Elem
+	case "bswap":
+		if !nargs(1) {
+			return TI64
+		}
+		t := c.expr(e.Args[0], want)
+		if t.Kind != Int || t.Size < 2 {
+			c.dl.Errorf("E0231", e.Args[0].ESpan(), "@bswap expects a 16-, 32- or 64-bit integer, found %s", t)
+		}
+		return t
 	case "clz", "ctz", "popcount":
 		if !nargs(1) {
 			return TI64

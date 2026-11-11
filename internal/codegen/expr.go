@@ -1203,6 +1203,18 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		g.free(a)
 		g.normalize(r, vt.Elem)
 		return r, true
+	case "bswap":
+		a, _ := g.expr(e.Args[0])
+		switch t.Size {
+		case 8:
+			g.emit("rev %s, %s", x(a), x(a))
+		case 4:
+			g.emit("rev %s, %s", w(a), w(a))
+		default:
+			g.emit("rev16 %s, %s", w(a), w(a))
+		}
+		g.normalize(a, t)
+		return a, true
 	case "clz", "ctz", "popcount":
 		a, _ := g.expr(e.Args[0])
 		bits := t.Size * 8
