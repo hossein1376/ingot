@@ -411,6 +411,7 @@ func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
 	if bc, ok := val.(*syntax.BuiltinCall); ok {
 		switch {
 		case bc.Name == "load" && pr.fp:
+			g.vecSpanCheck(bc.Args[0])
 			p := g.use(bc.Args[0])
 			g.emit("ldr q%d, [%s]", pr.n, x(p))
 			g.free(p)

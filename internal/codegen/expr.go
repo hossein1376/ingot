@@ -1148,12 +1148,14 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		g.free(a)
 		return r, true
 	case "load":
+		g.vecSpanCheck(e.Args[0])
 		p := g.use(e.Args[0])
 		r := g.allocF(e.Sp)
 		g.emit("ldr %s, [%s]", rn(r, t), x(p))
 		g.free(p)
 		return r, true
 	case "store":
+		g.vecSpanCheck(e.Args[0])
 		p, _ := g.expr(e.Args[0])
 		val := g.use(e.Args[1])
 		g.emit("str q%d, [%s]", num(val), x(p))
@@ -1525,4 +1527,42 @@ func firstNonLeaf(es []syntax.Expr) syntax.Expr {
 		}
 	}
 	return nil
+}
+
+// vecSpanCheck makes a checked build verify the whole 16-byte access of
+// @load/@store(&s[i]) on an array or slice: i + lanes - 1 must be below the
+// length, so a vector access cannot run past the end. (The address formation
+// itself already checks i.) It applies when the index is a plain variable or
+// literal, which can be read twice without side effects.
+func (g *gen) vecSpanCheck(arg syntax.Expr) {
+	if !g.opt.Safe {
+		return
+	}
+	u, ok := unparen(arg).(*syntax.UnaryExpr)
+	if !ok || u.Op != "&" {
+		return
+	}
+	ie, ok := unparen(u.X).(*syntax.IndexExpr)
+	if !ok || !isLeaf(ie.Index) {
+		return
+	}
+	xt := g.typeOf(ie.X)
+	if xt == nil || (xt.Kind != sema.Array && xt.Kind != sema.Slice) || xt.Elem == nil || xt.Elem.Size <= 0 || xt.Elem.Size >= 16 {
+		return
+	}
+	extra := 16/xt.Elem.Size - 1
+	idx := g.use(ie.Index)
+	g.addImm("x16", x(idx), extra)
+	g.free(idx)
+	if xt.Kind == sema.Array {
+		g.movImm("x15", uint64(xt.Len))
+	} else if sr, ok := g.cachedSlice(ie.X); ok {
+		g.emit("mov x15, x%d", sr[1])
+	} else {
+		a := g.aggAddr(ie.X)
+		g.emit("ldr x15, [%s, #8]", x(a))
+		g.free(a)
+	}
+	g.emit("cmp x16, x15")
+	g.emit("b.hs %s", g.panicStub(arg.ESpan(), "vector access out of bounds"))
 }

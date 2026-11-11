@@ -378,3 +378,8 @@ expression is evaluated once into a hidden local first. Iterating anything that 
 or a slice is E0304. Bounds checks are left out when the range proves them: `s[i]` for
 `i in 0..s.len` (with `s` a slice that is never reassigned) and `a[i]` for `i in 0..N` with
 `N <= a.len`. Element loops get this automatically.
+
+In a checked build, `@load(T, &s[i])` and `@store(&s[i], v)` on an array or slice also check
+that the whole 16-byte access fits: `i + lanes - 1 < len`, or the program panics with "vector
+access out of bounds". The check applies when the index is a plain variable or a literal.
+`--unchecked` removes it.
