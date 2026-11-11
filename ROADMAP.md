@@ -28,7 +28,7 @@
    statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
 3. **Error unions, part 2**: aggregate results (via x8), `errdefer`, `!` in fn-pointer types, and error enums shared across modules.
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
-4b. **`ingot fmt`**: a canonical formatter that keeps comments, so that machine-applied fixes stay tidy.
+4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
 5. **Modules**: namespaced imports (`par.parallel_for`), visibility, and a deterministic package hash. v0.1 merges all imports into one namespace.
 6. **Generics**: explicit monomorphized `fn sum[T: Num](xs: []T) -> T`, with no inference across calls.
 7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool

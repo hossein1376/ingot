@@ -89,4 +89,5 @@ packing (see research.md §2).
   error-prone, so the compiler rejects these cases rather than miscompile them.
 * **Namespaced modules.** `import` merges files into one namespace (with an embedded
   `std`). Namespaces and package hashing come later.
-* **A formatter.** There is no `ingot fmt` yet, so fixes are minimal textual edits.
+* **A full formatter.** `ingot fmt` only re-indents by bracket depth and trims whitespace. It
+  never changes a token, so it is always safe for an agent to run.

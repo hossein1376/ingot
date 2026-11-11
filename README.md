@@ -67,6 +67,7 @@ eval "$(scripts/setup-toolchain.sh)"
 ./ingot check --diag json broken.ig                           # JSON Lines diagnostics
 ./ingot fix broken.ig                                         # apply suggested fixes
 ./ingot explain E0106                                         # what a code means and how to fix it
+./ingot fmt --check examples/*.ig                             # canonical indentation (token-preserving)
 ```
 
 Environment variables: `INGOT_CC` sets the toolchain command (for example `zig cc` or `clang`),

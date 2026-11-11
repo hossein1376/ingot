@@ -12,6 +12,7 @@ import (
 	"github.com/hossein1376/ingot/internal/codegen"
 	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/driver"
+	"github.com/hossein1376/ingot/internal/format"
 	"github.com/hossein1376/ingot/internal/sema"
 )
 
@@ -27,6 +28,7 @@ usage:
   ingot test  FILE            compile and run the file's test blocks
   ingot fix   FILE            apply the compiler's suggested fixes in place
   ingot builtins              list @builtins
+  ingot fmt [--check] FILE... canonical indentation and spacing (never changes tokens)
   ingot explain [CODE|--json] explain a diagnostic code (all codes if none; --json for machines)
   ingot version
 
@@ -60,6 +62,8 @@ func run(args []string) int {
 		return 0
 	case "explain":
 		return explain(args[1:])
+	case "fmt":
+		return fmtCmd(args[1:])
 	}
 	cfg := driver.Config{Target: driver.DefaultTarget(), Safe: true}
 	diagFmt, out, file := "text", "", ""
@@ -256,6 +260,42 @@ func explain(args []string) int {
 			continue
 		}
 		fmt.Printf("%s: %s\n  %s\n", c.Code, c.Title, c.Explain)
+	}
+	return status
+}
+
+func fmtCmd(args []string) int {
+	check := false
+	status := 0
+	for _, a := range args {
+		if a == "--check" {
+			check = true
+			continue
+		}
+		src, err := os.ReadFile(a)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ingot:", err)
+			status = 2
+			continue
+		}
+		out, err := format.Source(a, src)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ingot:", err)
+			status = 1
+			continue
+		}
+		if string(out) == string(src) {
+			continue
+		}
+		if check {
+			fmt.Println(a)
+			status = 1
+			continue
+		}
+		if err := os.WriteFile(a, out, 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "ingot:", err)
+			status = 2
+		}
 	}
 	return status
 }
