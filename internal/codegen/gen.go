@@ -68,7 +68,7 @@ type gen struct {
 	errReg   reg
 	bodies   map[*sema.Func]*sema.Body // for inline expansion
 	inl      *inlineCtx                // non-nil while expanding an inline fn body
-	errNext  bool // the next emitted call is errFor (its arguments are already evaluated)
+	errNext  bool                      // the next emitted call is errFor (its arguments are already evaluated)
 	retLabel string
 	retSlot  int64 // slot holding x8 for aggregate returns
 	stubs    strings.Builder
