@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,10 @@ import (
 	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/driver"
 )
+
+// runTarget is the target whose binaries can run here: macos-arm64 on a
+// Mac (natively), linux-arm64 elsewhere (natively on arm64, else under qemu).
+var runTarget = driver.DefaultTarget()
 
 func sources(t *testing.T) []string {
 	ex, _ := filepath.Glob("../examples/*.ig")
@@ -63,7 +68,7 @@ func buildBin(t *testing.T, path string, cfg driver.Config) string {
 
 func runBin(t *testing.T, bin string) (string, string, int) {
 	t.Helper()
-	runner, err := driver.Runner(codegen.Linux)
+	runner, err := driver.Runner(runTarget)
 	if err != nil {
 		t.Skip(err)
 	}
@@ -92,7 +97,7 @@ func TestGolden(t *testing.T) {
 			if bytes.Contains(must(os.ReadFile(src)), []byte("pub fn main")) {
 				// no golden (output varies: timings, CPU counts): must still exit 0
 				t.Run(name+"/exit0", func(t *testing.T) {
-					bin := buildBin(t, src, driver.Config{Target: codegen.Linux, Safe: true})
+					bin := buildBin(t, src, driver.Config{Target: runTarget, Safe: true})
 					if out, stderr, code := runBin(t, bin); code != 0 {
 						t.Errorf("exit %d\n%s%s", code, out, stderr)
 					}
@@ -101,7 +106,7 @@ func TestGolden(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			bin := buildBin(t, src, driver.Config{Target: codegen.Linux, Safe: true})
+			bin := buildBin(t, src, driver.Config{Target: runTarget, Safe: true})
 			got, stderr, code := runBin(t, bin)
 			wantCode := 0
 			if b, err := os.ReadFile(filepath.Join("golden", name+".code")); err == nil {
@@ -127,7 +132,7 @@ func TestInLanguageTests(t *testing.T) {
 			continue
 		}
 		t.Run(filepath.Base(src), func(t *testing.T) {
-			bin := buildBin(t, src, driver.Config{Target: codegen.Linux, Safe: true, Tests: true})
+			bin := buildBin(t, src, driver.Config{Target: runTarget, Safe: true, Tests: true})
 			out, stderr, code := runBin(t, bin)
 			if code != 0 || !strings.Contains(out, "tests passed") {
 				t.Errorf("exit %d\n%s\n%s", code, out, stderr)
@@ -140,7 +145,7 @@ func TestInLanguageTests(t *testing.T) {
 // header (MH_MAGIC_64, CPU_TYPE_ARM64, MH_EXECUTE). Running them needs a Mac.
 func TestMachO(t *testing.T) {
 	haveToolchain(t)
-	if !strings.Contains(strings.Join(driver.CC(), " "), "zig") && os.Getenv("GOOS") != "darwin" {
+	if !strings.Contains(strings.Join(driver.CC(), " "), "zig") && runtime.GOOS != "darwin" {
 		if _, err := os.Stat("/usr/lib/libSystem.B.dylib"); err != nil {
 			t.Skip("Mach-O linking needs zig cc or a macOS SDK")
 		}

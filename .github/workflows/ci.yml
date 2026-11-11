@@ -1,0 +1,31 @@
+# Runs only when a v* tag is pushed, to keep Actions usage low.
+name: ci
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: toolchain (zig cc + qemu-user)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user
+          pip install ziglang
+      - name: test
+        env: { INGOT_CC: "python3 -m ziglang cc" }
+        run: go vet ./... && go test -count=1 ./...
+  macos-arm64:
+    # Apple-silicon runner: runs the Mach-O output natively (M-series, not M4 Pro).
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: test
+        env: { INGOT_CC: clang }
+        run: go test -count=1 -v ./... 2>&1 | tail -80
+      - name: bench
+        run: go build -o ingot ./cmd/ingot && TARGET=macos-arm64 INGOT_CC=clang bench/run.sh
