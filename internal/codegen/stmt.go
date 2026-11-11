@@ -530,16 +530,22 @@ func (g *gen) intoReg(d reg, t *sema.Type, val syntax.Expr) bool {
 // their count) to a bounds check and an indirect branch through a table of
 // 32-bit offsets, instead of a compare chain.
 func (g *gen) jumpTable(s *syntax.SwitchStmt, r reg, labels []string, els string) bool {
-	type kv struct {
-		k int64
-		l string
-	}
-	var vs []kv
+	var vs []caseTarget
 	for i, cs := range s.Cases {
 		for _, v := range cs.Values {
-			vs = append(vs, kv{g.info.Consts[v].I, labels[i]})
+			vs = append(vs, caseTarget{g.info.Consts[v].I, labels[i]})
 		}
 	}
+	return g.emitJumpTable(vs, r, els)
+}
+
+type caseTarget struct {
+	k int64
+	l string
+}
+
+// emitJumpTable branches on r through a table when the values are dense.
+func (g *gen) emitJumpTable(vs []caseTarget, r reg, els string) bool {
 	if len(vs) < 4 {
 		return false
 	}
@@ -623,15 +629,21 @@ func (g *gen) unionSwitch(s *syntax.SwitchStmt) {
 		els = g.newLabel("swelse")
 	}
 	labels := make([]string, len(s.Cases))
+	var vs []caseTarget
 	for i, cs := range s.Cases {
 		labels[i] = g.newLabel("case")
 		for _, v := range cs.Values {
-			g.emit("cmp %s, #%d", w(r), g.info.UnionCases[v])
-			g.emit("b.eq %s", labels[i])
+			vs = append(vs, caseTarget{int64(g.info.UnionCases[v]), labels[i]})
 		}
 	}
+	if !g.emitJumpTable(vs, r, els) {
+		for _, c := range vs {
+			g.emit("cmp %s, #%d", w(r), c.k)
+			g.emit("b.eq %s", c.l)
+		}
+		g.emit("b %s", els)
+	}
 	g.free(r)
-	g.emit("b %s", els)
 	for i, cs := range s.Cases {
 		g.label(labels[i])
 		for _, v := range cs.Values {
