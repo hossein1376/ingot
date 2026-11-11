@@ -42,6 +42,7 @@ test "dot of ones" {
 | `test` blocks and `@assert` in the language; `ingot test` runs them | LSE atomics, pthreads via FFI, `@qos` for P/E-core steering |
 | Errors can't be ignored: `-> T ! E` with `try` / `catch`, and `defer` for cleanup | Error checks cost one `cbz` (code in `x1`), with no unwinding tables |
 | Namespaced modules (`import "std/map.ig" as hm;` then `hm.map_put`), so large programs don't collide; explicit generics (`sum.[f64](xs)`, `Pair.[i64, f64]`) with no inference; tagged unions with exhaustive, payload-binding `switch` | Branchless SIMD: `@lanes_lt/le/eq` masks with per-lane `@select` (`fcmgt`/`cmhi` + `bsl`) |
+| `for x in s` over arrays and slices; `ingot api` lists any file's or std's signatures and doc comments | Bounds checks are left out where a loop range proves them, and are otherwise one `cmp`/`b.hs`; `--unchecked` drops them all |
 | Deterministic output (tested) | Darwin ABI details handled: `x18` reserved, variadic args on the stack, packed stack args |
 
 See [docs/design.md](docs/design.md) for why things are this way,
