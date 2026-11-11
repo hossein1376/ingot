@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -20,7 +20,8 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 
 ```ebnf
 file        = { decl } ;
-decl        = fn_decl | struct_decl | global_decl | test_decl ;
+decl        = import_decl | fn_decl | struct_decl | global_decl | test_decl ;
+import_decl = "import" STRING ";" ;
 fn_decl     = [ "pub" ] [ "extern" ] "fn" IDENT "(" [ params ] ")" [ "->" type ] ( block | ";" ) ;
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
 param       = IDENT ":" type ;
@@ -200,6 +201,25 @@ Run `ingot builtins` for the list the compiler actually implements:
 source order and prints `test "name" ... ok`. The first failing `@assert` prints its location
 and the failing source expression, then exits with 101.
 
-## 12. Program entry
+## 12. Imports and the standard library
+
+`import "path.ig";` adds another file's declarations to the program. A relative path resolves
+against the importing file, and each file is loaded once even if several files import it.
+Paths that start with `std/` come from the standard library, which is **embedded in the
+compiler binary**, so nothing needs installing. All files share one namespace in v0.1, and
+`test` blocks are compiled only from the root file. Several files may declare the same
+`extern fn` as long as the signatures are identical.
+
+| Module | Contents |
+|---|---|
+| `std/libc.ig` | `printf`, `snprintf`, `malloc`/`free`, `memcpy`, `strlen`, `write`, `sysconf`, ... |
+| `std/mem.ig` | `page_size()` (queried at run time: 16 KiB on Apple silicon), `Arena` bump allocator |
+| `std/par.ig` | `parallel_for(n, threads, qos, ctx, body)` with dynamic chunking, `cpu_count()`, `perf_core_count()` (`hw.perflevel0.physicalcpu`), and QoS constants |
+
+**Target-conditional code.** `@is_macos()` is a compile-time constant. In
+`if @is_macos() { A } else { B }`, only the branch for the current target is compiled,
+so `A` can call macOS-only functions such as `sysctlbyname`.
+
+## 13. Program entry
 
 An executable must declare `pub fn main() -> i32` (E0210, which also offers a fix). The return value is the exit status.

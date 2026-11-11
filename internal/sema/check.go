@@ -110,6 +110,14 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 			c.dl.Errorf("E0207", fd.NameSp, "only extern functions may be variadic")
 		}
 		fn := &Func{Name: fd.Name, Type: ft, Decl: fd, Extern: fd.Extern, Pub: fd.Pub}
+		if prev, ok := c.global.names[fd.Name].(*Func); ok && prev.Extern && fd.Extern {
+			// the same C function may be declared by several modules
+			if !Identical(prev.Type, ft) {
+				c.dl.Errorf("E0200", fd.NameSp, "extern fn %q redeclared with a different signature: %s vs %s", fd.Name, ft, prev.Type)
+			}
+			c.info.Funcs = append(c.info.Funcs, prev)
+			continue
+		}
 		if fd.Extern {
 			for i, p := range ft.Params {
 				if p.IsAggregate() {

@@ -95,7 +95,7 @@ func (ps *Parser) decl(f *File) {
 			// resync at next top-level keyword
 			for ps.cur().Kind != EOF {
 				t := ps.cur()
-				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var") && t.Pos.Col == 1 {
+				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import") && t.Pos.Col == 1 {
 					break
 				}
 				ps.next()
@@ -110,6 +110,16 @@ func (ps *Parser) decl(f *File) {
 		f.Structs = append(f.Structs, ps.structDecl())
 	case ps.is("const") || ps.is("var"):
 		f.Globals = append(f.Globals, ps.globalDecl())
+	case ps.is("import"):
+		ps.next()
+		pt := ps.cur()
+		if pt.Kind != String {
+			ps.fail("E0102", ps.sp(pt), "expected a path string after 'import'")
+			panic(bailout{})
+		}
+		ps.next()
+		ps.expect(";")
+		f.Imports = append(f.Imports, &ImportDecl{Path: pt.Text, Sp: ps.from(t.Pos)})
 	case ps.is("test"):
 		ps.next()
 		name := ps.cur()

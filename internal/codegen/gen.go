@@ -703,6 +703,9 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	}
 	// assemble function
 	sym := g.t.Sym(b.Name)
+	if b.Func != nil {
+		sym = g.funcSym(b.Func)
+	}
 	var out strings.Builder
 	out.WriteString("\n\t.p2align 4\n")
 	if b.Func != nil && (b.Func.Pub || b.Name == "main") {

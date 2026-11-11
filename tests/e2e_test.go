@@ -18,7 +18,8 @@ import (
 func sources(t *testing.T) []string {
 	ex, _ := filepath.Glob("../examples/*.ig")
 	e2e, _ := filepath.Glob("e2e/*.ig")
-	return append(ex, e2e...)
+	std, _ := filepath.Glob("../std/*.ig")
+	return append(append(ex, e2e...), std...)
 }
 
 func compile(t *testing.T, path string, cfg driver.Config) string {
@@ -88,6 +89,15 @@ func TestGolden(t *testing.T) {
 		name := strings.TrimSuffix(filepath.Base(src), ".ig")
 		want, err := os.ReadFile(filepath.Join("golden", name+".out"))
 		if err != nil {
+			if bytes.Contains(must(os.ReadFile(src)), []byte("pub fn main")) {
+				// no golden (output varies: timings, CPU counts): must still exit 0
+				t.Run(name+"/exit0", func(t *testing.T) {
+					bin := buildBin(t, src, driver.Config{Target: codegen.Linux, Safe: true})
+					if out, stderr, code := runBin(t, bin); code != 0 {
+						t.Errorf("exit %d\n%s%s", code, out, stderr)
+					}
+				})
+			}
 			continue
 		}
 		t.Run(name, func(t *testing.T) {

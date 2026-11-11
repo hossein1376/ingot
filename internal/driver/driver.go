@@ -14,7 +14,6 @@ import (
 	"github.com/hossein1376/ingot/internal/codegen"
 	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/sema"
-	"github.com/hossein1376/ingot/internal/syntax"
 )
 
 // Config holds compiler settings.
@@ -34,7 +33,7 @@ func DefaultTarget() codegen.Target {
 
 // Compile turns one source file into assembly text. Diagnostics go to dl.
 func Compile(path string, src []byte, cfg Config, dl *diag.List) (string, bool) {
-	f := syntax.Parse(path, src, dl)
+	f := Load(path, src, dl)
 	if dl.HasErrors() {
 		return "", false
 	}

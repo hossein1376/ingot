@@ -32,6 +32,7 @@ var Builtins = map[string]string{
 	"fence":        "@fence()                         full barrier (DMB ISH)",
 	"qos":          "@qos(class: i32) -> i32         macOS: pthread_set_qos_class_self_np (P/E core steering); Linux: no-op, returns 0",
 	"prefetch":     "@prefetch(p: *T)                PRFM PLDL1KEEP",
+	"is_macos":     "@is_macos() -> bool             true when compiling for macos-arm64",
 }
 
 func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
@@ -101,6 +102,9 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 	case "ticks", "tick_freq":
 		nargs(0)
 		return TI64
+	case "is_macos":
+		nargs(0)
+		return TBool
 	case "splat", "load":
 		if ty == nil || ty.Kind != Vec {
 			c.dl.Errorf("E0231", e.Sp, "@%s requires a vector type as first argument (f32x4, f64x2, i32x4, i64x2, u8x16)", e.Name)

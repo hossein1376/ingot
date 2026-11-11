@@ -94,6 +94,10 @@ Golden examples for each error class are in [`tests/diag/`](tests/diag).
 | [`examples/threads.ig`](examples/threads.ig) | pthreads, `@atomic_add` (LSE), `@qos` P/E-core steering |
 | [`examples/ffi.ig`](examples/ffi.ig) | Ingot function as a `qsort` callback, `snprintf`, exported `pub fn` |
 | [`examples/errors.ig`](examples/errors.ig) | a bounds-check panic with `file:line:col` |
+| [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
+
+The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`) is embedded in the compiler,
+so `import "std/par.ig";` works with no setup.
 
 ## Status and test results
 

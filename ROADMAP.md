@@ -7,6 +7,7 @@
 - JSON diagnostics with fix edits, and `ingot fix`.
 - C FFI with the Darwin variadic and stack-packing rules. pthreads, LSE atomics, `@qos`.
 - Register promotion of locals, immediate operands, rotated loops.
+- `import`, an embedded `std` (libc, mem arena, par `parallel_for` with QoS), and compile-time `@is_macos()` branches.
 - Tests: diagnostic goldens, e2e goldens under qemu, in-language tests, Mach-O header checks, determinism.
 
 ## Next
@@ -17,7 +18,7 @@
    "expression too deep" error (E0900).
 3. **Error unions**: `!T`, `try`, `catch`, and exhaustive `switch` on integer and enum values.
 4. **Enums and tagged unions**, plus `switch` with exhaustiveness checking (matching the diagnostics style).
-5. **Modules**: `import "path.ig"`, `pub` visibility, and a deterministic package hash.
+5. **Modules**: namespaced imports (`par.parallel_for`), visibility, and a deterministic package hash. v0.1 merges all imports into one namespace.
 6. **Generics**: explicit monomorphized `fn sum[T: Num](xs: []T) -> T`, with no inference across calls.
 7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool
    with QoS-tagged workers, ≥3× chunks per core as Apple recommends), and `std.time` (`mach_absolute_time`).

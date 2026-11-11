@@ -30,6 +30,15 @@ func (g *gen) stmt(s syntax.Stmt) {
 			g.free(r)
 		}
 	case *syntax.IfStmt:
+		if val, known := g.constCond(s.Cond); known {
+			// compile-time condition (e.g. @is_macos()): the untaken branch is not compiled
+			if val {
+				g.block(s.Then)
+			} else if s.Else != nil {
+				g.stmt(s.Else)
+			}
+			return
+		}
 		end := g.newLabel("endif")
 		els := end
 		if s.Else != nil {
@@ -122,6 +131,27 @@ func (g *gen) stmt(s syntax.Stmt) {
 	case *syntax.ContinueStmt:
 		g.emit("b %s", g.loops[len(g.loops)-1].cont)
 	}
+}
+
+// constCond evaluates conditions known at compile time for the current target.
+func (g *gen) constCond(e syntax.Expr) (bool, bool) {
+	if k, ok := g.info.Consts[e]; ok && g.typeOf(e) == sema.TBool {
+		return k.I != 0, true
+	}
+	switch e := e.(type) {
+	case *syntax.ParenExpr:
+		return g.constCond(e.X)
+	case *syntax.BuiltinCall:
+		if e.Name == "is_macos" {
+			return g.t.Darwin, true
+		}
+	case *syntax.UnaryExpr:
+		if e.Op == "!" {
+			v, ok := g.constCond(e.X)
+			return !v, ok
+		}
+	}
+	return false, false
 }
 
 func retF(t *sema.Type) string {

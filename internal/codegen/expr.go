@@ -47,7 +47,7 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 				g.emit("adrp %s, %s", x(r), g.t.GotPage(s))
 				g.emit("ldr %s, [%s, %s]", x(r), x(r), g.t.GotPageOff(s))
 			} else {
-				g.addrOfSym(x(r), g.t.Sym(sym.Name))
+				g.addrOfSym(x(r), g.funcSym(sym))
 			}
 			return r, true
 		case *sema.Var:
@@ -154,6 +154,15 @@ func (g *gen) expr(e syntax.Expr) (reg, bool) {
 	}
 	g.errorf(e.ESpan(), "codegen: unsupported expression")
 	return reg{}, false
+}
+
+// funcSym returns the assembly symbol of a function. Private functions are
+// prefixed so they can never collide with libc or runtime symbols.
+func (g *gen) funcSym(f *sema.Func) string {
+	if f.Extern || f.Pub || f.Name == "main" {
+		return g.t.Sym(f.Name)
+	}
+	return g.t.Sym("ingot__" + f.Name)
 }
 
 func (g *gen) loadLvalue(e syntax.Expr, t *sema.Type) reg {
@@ -659,7 +668,7 @@ func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
 	var callee reg
 	if id, ok := e.Fn.(*syntax.IdentExpr); ok {
 		if fn, ok := g.info.Uses[id].(*sema.Func); ok {
-			direct = g.t.Sym(fn.Name)
+			direct = g.funcSym(fn)
 		}
 	}
 	if direct == "" {
@@ -842,6 +851,10 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 	case "fence":
 		g.emit("dmb ish")
 		return reg{}, false
+	case "is_macos":
+		r := g.allocG(e.Sp)
+		g.emit("mov %s, #%d", x(r), map[bool]int{true: 1}[g.t.Darwin])
+		return r, true
 	case "ticks", "tick_freq":
 		r := g.allocG(e.Sp)
 		g.emit("mrs %s, %s", x(r), map[string]string{"ticks": "cntvct_el0", "tick_freq": "cntfrq_el0"}[e.Name])

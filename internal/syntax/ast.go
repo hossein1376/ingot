@@ -257,6 +257,13 @@ type File struct {
 	Structs []*StructDecl
 	Globals []*GlobalDecl
 	Tests   []*TestDecl
+	Imports []*ImportDecl
+}
+
+// ImportDecl is `import "path";`.
+type ImportDecl struct {
+	Path string
+	Sp   diag.Span
 }
 
 // Node is any AST node (used as a map key by later passes).
