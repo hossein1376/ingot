@@ -1379,7 +1379,7 @@ func (g *gen) tryExpr(e *syntax.TryExpr, t *sema.Type) (reg, bool) {
 	r, ok, errR := g.fallible(e.X, t)
 	okL := g.newLabel("tryok")
 	g.emit("cbz %s, %s", x(errR), okL)
-	g.runDefers(0)
+	g.runErrDefers(0)
 	g.emit("mov x1, %s", x(errR))
 	g.emit("b %s", g.retLabel)
 	g.label(okL)

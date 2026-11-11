@@ -77,10 +77,11 @@ type gen struct {
 	failed   bool
 
 	promoted  map[*sema.Var]preg
-	sliceRegs map[*sema.Var][2]int // never-reassigned slices: {ptr, len} registers
-	vecSave   map[int]int64        // promoted vector register -> save slot around calls
-	tempG     int                  // number of pool registers available for temporaries
-	final     bool                 // last allocation attempt: report exhaustion as an error
+	sliceRegs map[*sema.Var][2]int   // never-reassigned slices: {ptr, len} registers
+	vecSave   map[int]int64          // promoted vector register -> save slot around calls
+	errDefer  map[*syntax.Block]bool // bodies of errdefer statements
+	tempG     int                    // number of pool registers available for temporaries
+	final     bool                   // last allocation attempt: report exhaustion as an error
 	exhausted bool
 	fprTouch  [8]bool // d8..d15
 	srcLines  []string
@@ -642,6 +643,7 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	g.frame = saveArea
 	g.outArgs = 0
 	g.vecSave = map[int]int64{}
+	g.errDefer = map[*syntax.Block]bool{}
 	if !u.leaf {
 		var ns []int
 		for lv, p := range g.promoted {

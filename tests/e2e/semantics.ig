@@ -490,3 +490,37 @@ test "register-offset loads and stores for every element size" {
     }
     @assert(s == 480028);
 }
+
+enum StepErr: u8 {
+    bad = 1,
+}
+
+var g_log: i64 = 0;
+
+fn may_fail(fail: bool) -> i64 ! StepErr {
+    if fail {
+        return @err(StepErr.bad);
+    }
+    return 5;
+}
+
+fn guarded(fail_early: bool, fail_late: bool) -> i64 ! StepErr {
+    g_log = 0;
+    defer { g_log = g_log * 10 + 1; }        // always
+    errdefer { g_log = g_log * 10 + 2; }     // only on error exits
+    let a: i64 = try may_fail(fail_early);
+    errdefer { g_log = g_log * 10 + 3; }     // registered after the first try
+    if fail_late {
+        return @err(StepErr.bad);
+    }
+    return a;
+}
+
+test "errdefer runs only on error exits, in reverse order with defer" {
+    let ok: i64 = guarded(false, false) catch e => -1;
+    @assert(ok == 5 && g_log == 1);
+    let early: i64 = guarded(true, false) catch e => -1;
+    @assert(early == -1 && g_log == 21);     // errdefer 2, then defer 1
+    let late: i64 = guarded(false, true) catch e => -1;
+    @assert(late == -1 && g_log == 321);     // 3, 2, then 1
+}

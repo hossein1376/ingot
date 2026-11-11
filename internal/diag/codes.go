@@ -76,6 +76,7 @@ var Codes = []Code{
 	{"E0306", "break outside loop", "break and continue must be inside while or for."},
 	{"E0307", "non-bool condition", "Ingot has no truthiness. Compare explicitly: x != 0, p != null."},
 	{"E0308", "invalid defer body", "A defer body may not return, break/continue out of itself, or contain another defer."},
+	{"E0309", "errdefer outside a fallible function", "`errdefer { ... }` runs only when the function returns an error (via `try` or `return @err(...)`), so it needs `-> T ! E`. Use `defer` otherwise."},
 	{"E0401", "missing return", "A non-void function can reach the end of its body. Add a return or @unreachable()."},
 	{"E0500", "bad switch value", "switch works on integers and enums."},
 	{"E0501", "non-constant case", "switch cases must be compile-time constants."},

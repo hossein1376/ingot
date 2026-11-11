@@ -394,9 +394,9 @@ func (ps *Parser) stmt() Stmt {
 		ps.expect(";")
 		s.Sp = ps.from(t.Pos)
 		return s
-	case ps.is("defer"):
-		ps.next()
-		return &DeferStmt{Body: ps.block(), Sp: ps.from(t.Pos)}
+	case ps.is("defer") || ps.is("errdefer"):
+		onErr := ps.next().Text == "errdefer"
+		return &DeferStmt{Body: ps.block(), OnErr: onErr, Sp: ps.from(t.Pos)}
 	case ps.is("break"):
 		ps.next()
 		ps.expect(";")

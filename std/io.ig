@@ -35,8 +35,8 @@ fn read_file(path: *u8, out: *[]u8) -> void ! IoErr {
     if p == null {
         return @err(IoErr.out_of_memory);
     }
+    errdefer { free(p); } // the caller owns p only on success
     if fread(p, 1 as u64, n as u64, f) != n as u64 {
-        free(p);
         return @err(IoErr.read_failed);
     }
     p[n] = 0 as u8;

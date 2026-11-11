@@ -29,12 +29,21 @@ func exits(s syntax.Stmt) bool {
 }
 
 // runDefers emits the deferred bodies of every open block at depth >= from,
-// innermost first, each block's defers in reverse order.
-func (g *gen) runDefers(from int) {
+// innermost first, each block's defers in reverse order. errdefer bodies
+// are skipped: they run only on error exits (runErrDefers).
+func (g *gen) runDefers(from int) { g.runDefersOn(from, false) }
+
+// runErrDefers is runDefers for an exit that returns an error.
+func (g *gen) runErrDefers(from int) { g.runDefersOn(from, true) }
+
+func (g *gen) runDefersOn(from int, onErr bool) {
 	saved := g.defers
 	for d := len(saved) - 1; d >= from; d-- {
 		list := saved[d]
 		for i := len(list) - 1; i >= 0; i-- {
+			if g.errDefer[list[i]] && !onErr {
+				continue
+			}
 			// a defer body sees only the scopes outside it; copy so its own
 			// block scope does not overwrite saved entries
 			g.defers = append([][]*syntax.Block(nil), saved[:d]...)
@@ -59,6 +68,9 @@ func (g *gen) stmt(s syntax.Stmt) {
 	case *syntax.DeferStmt:
 		top := len(g.defers) - 1
 		g.defers[top] = append(g.defers[top], s.Body)
+		if s.OnErr {
+			g.errDefer[s.Body] = true
+		}
 	case *syntax.ExprStmt:
 		r, ok := g.expr(s.X)
 		if ok {
@@ -174,7 +186,7 @@ func (g *gen) stmt(s syntax.Stmt) {
 		}
 		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "err" {
 			code, _ := g.expr(b.Args[0])
-			g.runDefers(0)
+			g.runErrDefers(0)
 			g.emit("mov x1, %s", x(code))
 			g.free(code)
 			g.emit("b %s", g.retLabel)

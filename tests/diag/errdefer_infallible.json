@@ -1,0 +1,1 @@
+{"severity":"error","code":"E0309","message":"errdefer is only meaningful in a fallible function (-> T ! E)","span":{"file":"diag/errdefer_infallible.ig","start":{"line":2,"col":5},"end":{"line":2,"col":17}},"fixes":[{"message":"use defer","edits":[{"span":{"file":"diag/errdefer_infallible.ig","start":{"line":2,"col":5},"end":{"line":2,"col":13}},"text":"defer"}]}]}

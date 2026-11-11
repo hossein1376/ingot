@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import enum switch defer try catch inline fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum switch defer errdefer try catch inline fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -45,7 +45,7 @@ block       = "{" { stmt } "}" ;
 stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
             | "if" expr block [ "else" ( block | if_stmt ) ]
             | "while" expr block
-            | "defer" block
+            | ( "defer" | "errdefer" ) block   (* errdefer: only in a fallible fn *)
             | "switch" expr "{" { expr { "," expr } "=>" block } [ "else" "=>" block ] "}"
             | "for" IDENT "in" expr ".." expr block
             | "return" [ expr ] ";"           (* in a fallible fn also: return @err(expr); *)
@@ -226,6 +226,11 @@ let total: f64 = sum.[f64](xs);   // type arguments are always written out
   * `f(x) catch e => { ... }` runs a block when the call fails. If the call has a result, the block
     must leave through `return`, `break`, `continue` or `@panic` (E0252). If the call is `void`, the
     block may fall through.
+
+* `errdefer { ... }` is a `defer` that runs only on an error exit: a failing `try` or a
+  `return @err(...)`. It is ordered with ordinary defers (last registered runs first), so
+  `let p = malloc(n); errdefer { free(p); }` hands `p` to the caller only on success. It is
+  allowed only in a fallible function (E0309, with a fix to `defer`).
 
   ABI: the result is in x0/d0 as usual, and the error code is in x1 (0 = success). Each check is one
   `cbz`, and there is no unwinding. In v0.1 a fallible function returns a scalar, pointer or void,

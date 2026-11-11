@@ -27,7 +27,7 @@
    and confirm `@qos` placement with `powermetrics`.
 2. **SSA IR and a real register allocator** (linear scan). This keeps values in registers across
    statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
-3. **Error unions, part 2**: aggregate results (via x8), `errdefer`, `!` in fn-pointer types, and error enums shared across modules.
+3. **Error unions, part 2**: `errdefer` is done. Still to do: aggregate results (via x8), `!` in fn-pointer types, and error enums shared across modules.
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
 4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
 5. **Modules, part 2**: namespaced imports (`import "p" as m;`) are done. Still to do: `pub` visibility for non-exported names, a module-relative suggestion when the alias differs from the module prefix, and a deterministic package hash.

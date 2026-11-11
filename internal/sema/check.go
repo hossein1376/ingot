@@ -545,6 +545,10 @@ func (c *checker) stmt(s syntax.Stmt) {
 		if c.inDefer {
 			c.dl.Errorf("E0308", s.Sp, "defer inside a defer body is not allowed")
 		}
+		if s.OnErr && c.body.Err == nil {
+			c.dl.Errorf("E0309", s.Sp, "errdefer is only meaningful in a fallible function (-> T ! E)").
+				Fix("use defer", diag.Span{File: s.Sp.File, Start: s.Sp.Start, End: diag.Pos{Line: s.Sp.Start.Line, Col: s.Sp.Start.Col + len("errdefer")}}, "defer")
+		}
 		saved, savedLoops := c.inDefer, c.loopsAtDefer
 		c.inDefer, c.loopsAtDefer = true, c.loops
 		c.block(s.Body, true)

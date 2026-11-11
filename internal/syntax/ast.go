@@ -227,8 +227,9 @@ type (
 	// DeferStmt runs Body when the enclosing block exits (normally or via
 	// return/break/continue), in reverse order of declaration.
 	DeferStmt struct {
-		Body *Block
-		Sp   diag.Span
+		Body  *Block
+		OnErr bool // errdefer: runs only when the function returns an error
+		Sp    diag.Span
 	}
 	BreakStmt    struct{ Sp diag.Span }
 	ContinueStmt struct{ Sp diag.Span }
