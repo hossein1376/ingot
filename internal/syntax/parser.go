@@ -389,10 +389,19 @@ func (ps *Parser) stmt() Stmt {
 	case ps.is("for"):
 		ps.next()
 		v := ps.ident()
+		var iv *Tok
+		if ps.accept(",") { // for i, x in s
+			first := v
+			iv, v = &first, ps.ident()
+		}
 		ps.expect("in")
 		lo := ps.expr()
-		if !ps.is("..") {
-			return ps.forEach(v, lo, t)
+		if iv != nil && ps.is("..") {
+			ps.fail("E0102", ps.sp(ps.cur()), "for i, x in ... iterates an array or slice; write for %s in lo..hi to count", iv.Text)
+			panic(bailout{})
+		}
+		if iv != nil || !ps.is("..") {
+			return ps.forEach(v, iv, lo, t)
 		}
 		ps.expect("..")
 		hi := ps.expr()
@@ -803,7 +812,8 @@ func (ps *Parser) typeArgs() []TypeExpr {
 // A plain identifier s is used directly, without the copy, so a slice that is
 // never reassigned stays in registers and s[i] needs no bounds check.
 // The % names cannot be written in source, so they never collide.
-func (ps *Parser) forEach(v Tok, coll Expr, t Tok) Stmt {
+// With `for i, x in s` the counter is the user's immutable i.
+func (ps *Parser) forEach(v Tok, iv *Tok, coll Expr, t Tok) Stmt {
 	ps.eachN++
 	n := strconv.Itoa(ps.eachN) // before the body, which may hold nested loops
 	vs, cs := ps.sp(v), coll.ESpan()
@@ -817,6 +827,9 @@ func (ps *Parser) forEach(v Tok, coll Expr, t Tok) Stmt {
 		src = &IdentExpr{Name: name, Sp: cs}
 	}
 	idx := "%i" + n
+	if iv != nil {
+		idx = iv.Text
+	}
 	elem := &LetStmt{Name: v.Text, Value: &IndexExpr{X: src, Index: &IdentExpr{Name: idx, Sp: vs}, Sp: cs}, Sp: vs, NameSp: vs}
 	inner := &Block{Stmts: append([]Stmt{elem}, body.Stmts...), Sp: body.Sp}
 	loop := &ForStmt{Var: idx, Lo: &IntLit{Text: "0", Sp: cs}, Hi: &FieldExpr{X: src, Name: "len", Sp: cs}, Body: inner, Sp: sp, Each: true}

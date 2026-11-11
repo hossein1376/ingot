@@ -50,7 +50,7 @@ stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
             | ( "defer" | "errdefer" ) block   (* errdefer: only in a fallible fn *)
             | "switch" expr "{" { expr { "," expr } "=>" block } [ "else" "=>" block ] "}"
             | "for" IDENT "in" expr ".." expr block
-            | "for" IDENT "in" expr block        (* each element of an array or slice *)
+            | "for" IDENT [ "," IDENT ] "in" expr block   (* each element (with index) of an array or slice *)
             | "return" [ expr ] ";"           (* in a fallible fn also: return @err(expr); *)
             | "break" ";" | "continue" ";"
             | block
@@ -370,7 +370,7 @@ An executable must declare `pub fn main() -> i32` (E0210, which also offers a fi
 
 `for i in lo..hi { ... }` counts from `lo` up to `hi - 1`. `hi` is evaluated once and `i` is
 immutable. `for x in s { ... }` binds each element of an array or slice `s` by value, in order,
-and supports `break` and `continue`. The compiler rewrites it as a counted loop over
+and supports `break` and `continue`. `for i, x in s` also binds the immutable `i64` index `i`. The compiler rewrites it as a counted loop over
 `0..s.len`. When `s` is a plain variable it is used directly with no copy. Any other
 expression is evaluated once into a hidden local first. Iterating anything that is not an array
 or a slice is E0304. Bounds checks are left out when the range proves them: `s[i]` for

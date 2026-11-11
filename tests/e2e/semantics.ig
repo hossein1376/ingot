@@ -731,3 +731,17 @@ test "for x in s iterates arrays and slices" {
     }
     @assert(n == 6 + 36);
 }
+
+test "for i, x in s binds the index and the element" {
+    let a: [4]i64 = [4]i64.{ 10, 20, 30, 40 };
+    var acc: i64 = 0;
+    for i, x in a {
+        acc += i * x;
+    }
+    @assert(acc == 200);
+    for i, x in a[1..4] {
+        if i == 1 {
+            @assert(x == 30);
+        }
+    }
+}
