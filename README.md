@@ -110,6 +110,8 @@ so `import "std/par.ig";` works with no setup.
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
 (run under qemu-aarch64), in-language `test` blocks (17 semantics tests plus the example tests),
 unit tests for the lexer, parser, checker rules, C struct layout and fix application,
+a mutation fuzzer (`internal/fz`: no compiler panics, no failure without a diagnostic; a 40,000-mutant
+run put 9,798 mutants through codegen, and a sample of 244 of them assembled cleanly for both targets),
 Mach-O header and load-command checks for every program, and byte-for-byte determinism on both targets.
 
 Compile speed: a generated 35,000-line file (5,000 functions) type-checks and emits 281,000 lines
