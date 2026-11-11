@@ -1,0 +1,2 @@
+{"severity":"error","code":"E0006","message":"\"_State\" is private to module \"pl\" (names starting with '_' are not visible outside their module)","span":{"file":"diag/module_private.ig","start":{"line":4,"col":12},"end":{"line":4,"col":21}}}
+{"severity":"error","code":"E0006","message":"\"_bump\" is private to module \"pl\" (names starting with '_' are not visible outside their module)","span":{"file":"diag/module_private.ig","start":{"line":5,"col":5},"end":{"line":5,"col":13}}}

@@ -347,6 +347,11 @@ or E0212 fix that qualifies it, which `ingot fix` applies. Symbols are mangled `
 file are E0005. Extern functions are never namespaced. Several files may declare the same
 `extern fn` as long as the signatures are identical.
 
+**Private members.** A top-level name that starts with `_` (`fn _helper`, `struct _State`) is
+private to its module. Code inside the module uses it freely, but `m._helper` from another file
+is E0006. Merged imports (`import "p";`, with no alias) share one namespace and are not
+checked. (`pub` keeps its one meaning: export the C symbol.)
+
 | Module | Contents |
 |---|---|
 | `std/libc.ig` | `printf`, `snprintf`, `malloc`/`free`, `memcpy`, `strlen`, `write`, `sysconf`, ... |

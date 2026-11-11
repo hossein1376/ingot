@@ -4,6 +4,7 @@ import "mod/vec3.ig" as v3;
 import "mod/vec2.ig" as again; // same file, same module instance
 import "std/map.ig" as hm;
 import "mod/parse_lib.ig" as p;
+import "mod/priv_lib.ig" as pl;
 
 fn dot(a: i64, b: i64) -> i64 { // no clash with v2.dot / v3.dot
     return a * b;
@@ -62,4 +63,8 @@ test "error enums shared across modules" {
     @assert(z == 100);
     let f: fn(u8) -> i64 ! p.ParseErr = p.digit;
     @assert((f(55 as u8) catch _ => -1) == 7);
+}
+
+test "public functions of a module use its private '_' names" {
+    @assert(pl.count_to(5) == 5);
 }

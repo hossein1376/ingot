@@ -3,6 +3,7 @@ package driver
 import (
 	"strings"
 
+	"github.com/hossein1376/ingot/internal/diag"
 	"github.com/hossein1376/ingot/internal/syntax"
 )
 
@@ -17,6 +18,20 @@ type renamer struct {
 	own     map[string]bool   // this file's top-level names (when prefixed)
 	aliases map[string]string // alias -> module prefix
 	scopes  []map[string]bool // local bindings, innermost last
+	dl      *diag.List
+}
+
+// private rejects alias._name: a top-level name that starts with '_' is
+// private to its module and can only be used inside it.
+func (r *renamer) private(n string, sp diag.Span) {
+	head, rest, ok := strings.Cut(n, ".")
+	if !ok || r.dl == nil || !strings.HasPrefix(rest, "_") {
+		return
+	}
+	if _, isAlias := r.aliases[head]; isAlias {
+		member, _, _ := strings.Cut(rest, ".")
+		r.dl.Errorf("E0006", sp, "%q is private to module %q (names starting with '_' are not visible outside their module)", member, head)
+	}
 }
 
 func (r *renamer) local(n string) bool {
@@ -106,6 +121,7 @@ func (r *renamer) file(f *syntax.File) {
 func (r *renamer) typ(t syntax.TypeExpr) syntax.TypeExpr {
 	switch t := t.(type) {
 	case *syntax.NamedType:
+		r.private(t.Name, t.Sp)
 		t.Name = r.name(t.Name, false)
 		for i := range t.Args {
 			t.Args[i] = r.typ(t.Args[i])
@@ -184,6 +200,7 @@ func (r *renamer) stmt(s syntax.Stmt) {
 func (r *renamer) expr(e syntax.Expr) {
 	switch e := e.(type) {
 	case *syntax.IdentExpr:
+		r.private(e.Name, e.Sp)
 		e.Name = r.name(e.Name, true)
 	case *syntax.UnaryExpr:
 		r.expr(e.X)

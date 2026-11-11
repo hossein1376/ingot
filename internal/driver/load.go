@@ -35,7 +35,7 @@ func Load(path string, src []byte, dl *diag.List) *syntax.File {
 		u := queue[0]
 		queue = queue[1:]
 		f := u.f
-		r := &renamer{prefix: u.prefix, own: map[string]bool{}, aliases: map[string]string{}}
+		r := &renamer{prefix: u.prefix, own: map[string]bool{}, aliases: map[string]string{}, dl: dl}
 		for _, imp := range f.Imports {
 			ipath, data, ok := resolve(f.Name, imp.Path)
 			if !ok {
