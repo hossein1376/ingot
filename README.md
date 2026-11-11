@@ -108,7 +108,7 @@ so `import "std/par.ig";` works with no setup.
 ## Status and test results
 
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (17 semantics tests plus the example tests),
+(run under qemu-aarch64), in-language `test` blocks (18 semantics tests plus the example tests),
 unit tests for the lexer, parser, checker rules, C struct layout and fix application,
 a mutation fuzzer (`internal/fz`: no compiler panics, no failure without a diagnostic; a 40,000-mutant
 run put 9,798 mutants through codegen, and a sample of 244 of them assembled cleanly for both targets),
@@ -122,8 +122,8 @@ relative order means anything:
 
 | kernel | Ingot | C -O0 | C -O2 (zig cc / clang) |
 |---|---|---|---|
-| collatz (integer, branchy; C inlines the hot function, Ingot does not yet) | 0.44 s | 2.48 s | 0.33 s |
-| dot (NEON f32x4 FMA) | 1.32 s | 3.00 s | 1.30 s |
+| collatz (integer, branchy; the hot helper is an `inline fn`) | 0.42 s | 2.41 s | 0.33 s |
+| dot (NEON f32x4 FMA) | 1.30 s | 3.06 s | 1.28 s |
 
 **Not verified on real Apple hardware yet:** running the Mach-O binaries (they link, carry
 `LC_MAIN`, `LC_CODE_SIGNATURE` and `LC_BUILD_VERSION`, and pass header checks), actual P/E

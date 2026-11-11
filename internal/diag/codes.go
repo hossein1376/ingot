@@ -55,6 +55,8 @@ var Codes = []Code{
 	{"E0240", "bad enum base", "An enum's base type must be an integer type: enum Op: u8 { ... }."},
 	{"E0241", "duplicate enum value", "Two enum members have the same value."},
 	{"E0242", "invalid error type", "The type after '!' must be an enum whose members are all non-zero (0 means success). Extern functions cannot be fallible, and fallible functions return scalars, pointers or void."},
+	{"E0244", "invalid inline fn", "An inline fn cannot be extern, variadic or fallible, and its parameters and result must be scalars, pointers or vectors. Pass aggregates by pointer."},
+	{"E0245", "recursive inline fn", "An inline fn that reaches itself through calls to inline fns cannot be expanded. Remove 'inline' from one of them."},
 	{"E0250", "unhandled error", "A call to a fallible function (-> T ! E) must be wrapped in `try` (propagate) or `catch e => ...` (handle). The fix inserts `try` when the enclosing function fails with the same error enum."},
 	{"E0251", "try cannot propagate", "try returns the callee's error from the enclosing function, so that function must be declared `-> T ! E` with the same E. Otherwise use catch, and convert with `return @err(...)`."},
 	{"E0252", "invalid catch", "A catch block for a call with a result must leave (return, break, continue or @panic); to continue with a value write `catch e => fallback`. A void call has no value to fall back to, so it needs a block."},

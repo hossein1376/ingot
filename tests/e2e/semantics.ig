@@ -310,3 +310,64 @@ test "error unions: try propagates through defers, catch binds the code" {
     @assert((r_wrap(9.0) catch _ => -1 as i32) == 4 as i32);
     @assert((r_wrap(-9.0) catch _ => -1 as i32) == -1 as i32);
 }
+
+inline fn i_sq(x: i64) -> i64 {
+    return x * x;
+}
+
+inline fn i_clamp(v: f64, lo: f64, hi: f64) -> f64 {
+    if v < lo {
+        return lo;
+    }
+    if v > hi {
+        return hi;
+    }
+    return v;
+}
+
+inline fn i_sum_to(n: i64) -> i64 {
+    var s: i64 = 0;
+    for i in 0..n {
+        if i == 7 {
+            return s + 1000; // early return from inside a loop
+        }
+        s += i;
+    }
+    return s;
+}
+
+inline fn i_axpy(a: f32x4, x: f32x4, y: f32x4) -> f32x4 {
+    return @fma(a, x, y);
+}
+
+var i_hits: i64 = 0;
+
+inline fn i_bump(limit: i64) {
+    defer { i_hits += 1; }
+    if i_hits > limit {
+        return;
+    }
+    i_hits += 10;
+}
+
+fn i_twice(f: fn(i64) -> i64, v: i64) -> i64 { return f(f(v)); }
+
+test "inline fns: nesting, early returns, loops, defers, vectors, address taken" {
+    @assert(i_sq(i_sq(3)) + i_sq(2) == 85);
+    @assert(i_sq(i_sq(2) + i_sq(1)) == 25);
+    @assert(i_clamp(5.0, 0.0, 1.0) + i_clamp(-2.0, 0.0, 1.0) + i_clamp(0.25, 0.0, 1.0) == 1.25);
+    @assert(i_sum_to(5) == 10);
+    @assert(i_sum_to(100) == 1021);
+    let v: f32x4 = i_axpy(@splat(f32x4, 2.0), @splat(f32x4, 3.0), @splat(f32x4, 1.0));
+    @assert(v[3] == 7.0);
+    i_hits = 0;
+    i_bump(100);
+    i_bump(5);
+    @assert(i_hits == 12);
+    var acc: i64 = 0;
+    for k in 0..10 {
+        acc += i_sq(k);
+    }
+    @assert(acc == 285);
+    @assert(i_twice(i_sq, 3) == 81); // an inline fn still has an address
+}

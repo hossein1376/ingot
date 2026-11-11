@@ -66,6 +66,8 @@ type gen struct {
 	defers   [][]*syntax.Block // per open block, in declaration order
 	errFor   *syntax.CallExpr  // fallible call whose error code (x1) goes to errReg
 	errReg   reg
+	bodies   map[*sema.Func]*sema.Body // for inline expansion
+	inl      *inlineCtx                // non-nil while expanding an inline fn body
 	errNext  bool // the next emitted call is errFor (its arguments are already evaluated)
 	retLabel string
 	retSlot  int64 // slot holding x8 for aggregate returns
@@ -91,6 +93,12 @@ func Generate(t Target, info *sema.Info, opt Options, dl *diag.List) (string, bo
 	for _, f := range info.Funcs {
 		if f.Extern {
 			g.externs[f.Name] = true
+		}
+	}
+	g.bodies = map[*sema.Func]*sema.Body{}
+	for _, b := range info.Bodies {
+		if b.Func != nil {
+			g.bodies[b.Func] = b
 		}
 	}
 	bodies := info.Bodies
@@ -631,7 +639,7 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 			g.gprTouch[p.n-gprBase] = true
 		}
 	}
-	for _, lv := range b.Locals {
+	for _, lv := range g.frameLocals(b) {
 		t := lv.Type
 		if _, ok := g.promoted[lv]; ok {
 			continue

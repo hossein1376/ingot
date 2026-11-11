@@ -47,6 +47,9 @@ func TestRules(t *testing.T) {
 		{"err outside return", "enum E: u8 { a = 1 }\nfn f() { @err(E.a); }", "E0253"},
 		{"zero error member", "enum E: u8 { a = 0 }\nfn g() -> i64 ! E { return 1; }", "E0242"},
 		{"try on infallible call", "enum E: u8 { a = 1 }\nfn h() -> i64 { return 1; }\nfn g() -> i64 ! E { return try h(); }", "E0250"},
+		{"inline ok", "inline fn sq(x: i64) -> i64 { return x * x; }\nfn f() -> i64 { return sq(sq(2)); }", ""},
+		{"inline recursion", "inline fn a(x: i64) -> i64 { return b(x); }\ninline fn b(x: i64) -> i64 { return a(x); }", "E0245"},
+		{"inline aggregate", "struct P { x: i64 }\ninline fn f(p: P) -> i64 { return p.x; }", "E0244"},
 		{"undefined name", "fn f() -> i64 { return y; }", "E0212"},
 		{"literal overflow", "fn f() -> u8 { return 300; }", "E0206"},
 	}

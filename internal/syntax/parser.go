@@ -95,7 +95,7 @@ func (ps *Parser) decl(f *File) {
 			// resync at next top-level keyword
 			for ps.cur().Kind != EOF {
 				t := ps.cur()
-				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import" || t.Text == "enum") && t.Pos.Col == 1 {
+				if t.Kind == Keyword && (t.Text == "fn" || t.Text == "pub" || t.Text == "extern" || t.Text == "struct" || t.Text == "test" || t.Text == "const" || t.Text == "var" || t.Text == "import" || t.Text == "enum" || t.Text == "inline") && t.Pos.Col == 1 {
 					break
 				}
 				ps.next()
@@ -104,7 +104,7 @@ func (ps *Parser) decl(f *File) {
 	}()
 	t := ps.cur()
 	switch {
-	case ps.is("pub") || ps.is("fn") || ps.is("extern"):
+	case ps.is("pub") || ps.is("fn") || ps.is("extern") || ps.is("inline"):
 		f.Fns = append(f.Fns, ps.fnDecl())
 	case ps.is("struct"):
 		f.Structs = append(f.Structs, ps.structDecl())
@@ -147,6 +147,9 @@ func (ps *Parser) fnDecl() *FnDecl {
 	}
 	if ps.accept("extern") {
 		fd.Extern = true
+	}
+	if ps.accept("inline") {
+		fd.Inline = true
 	}
 	ps.expect("fn")
 	nt := ps.ident()

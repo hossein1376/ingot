@@ -763,6 +763,9 @@ type argLoc struct {
 }
 
 func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
+	if cb := g.inlineBody(e); cb != nil {
+		return g.inlineCall(e, cb, ret)
+	}
 	ft := g.typeOf(e.Fn)
 	var direct string
 	var callee reg
@@ -1209,4 +1212,76 @@ func (g *gen) catchExpr(e *syntax.CatchExpr, t *sema.Type) (reg, bool) {
 	}
 	g.label(okL)
 	return r, ok
+}
+
+// inlineCtx describes the inline fn body being expanded.
+type inlineCtx struct {
+	end  string             // label after the expanded body
+	res  reg                // result register (zero reg for void)
+	last *syntax.ReturnStmt // trailing return of the body: falls through to end
+}
+
+func (g *gen) hasInlineCall(e syntax.Expr) bool {
+	found := false
+	syntax.Inspect(e, func(n any) bool {
+		if c, ok := n.(*syntax.CallExpr); ok && g.inlineBody(c) != nil {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func (g *gen) hasDefers() bool {
+	for _, d := range g.defers {
+		if len(d) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// inlineCall expands an inline fn at the call site: arguments are evaluated
+// left to right, then bound to the callee's parameters (which live in this
+// frame, usually in registers), and every return jumps past the body.
+func (g *gen) inlineCall(e *syntax.CallExpr, cb *sema.Body, ret *sema.Type) (reg, bool) {
+	// Arguments up to the last one that expands an inline fn go through
+	// temporaries (that expansion may reuse these parameters); the rest are
+	// computed straight into the parameters.
+	k := -1
+	for i, a := range e.Args {
+		if g.hasInlineCall(a) {
+			k = i
+		}
+	}
+	vals := make([]reg, len(e.Args))
+	for i := 0; i <= k; i++ {
+		vals[i], _ = g.expr(e.Args[i])
+	}
+	for i, p := range cb.Params {
+		if i > k {
+			g.initVar(p, e.Args[i])
+			continue
+		}
+		if pr, ok := g.promoted[p]; ok {
+			g.writePromoted(pr, p.Type, vals[i])
+		} else {
+			g.store(vals[i], g.mem(g.slots[p]), p.Type)
+		}
+		g.free(vals[i])
+	}
+	var res reg
+	if ret != sema.TVoid {
+		res = g.alloc(ret, e.Sp)
+	}
+	saved, savedDefers, savedLoops := g.inl, g.defers, g.loops
+	g.inl = &inlineCtx{end: g.newLabel("inl"), res: res}
+	if n := len(cb.Block.Stmts); n > 0 {
+		g.inl.last, _ = cb.Block.Stmts[n-1].(*syntax.ReturnStmt)
+	}
+	g.defers, g.loops = nil, nil
+	g.block(cb.Block)
+	g.label(g.inl.end)
+	g.inl, g.defers, g.loops = saved, savedDefers, savedLoops
+	return res, ret != sema.TVoid
 }

@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import enum switch defer try catch fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum switch defer try catch inline fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -24,7 +24,7 @@ decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | te
 enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
 member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
 import_decl = "import" STRING ";" ;
-fn_decl     = [ "pub" ] [ "extern" ] "fn" IDENT "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
+fn_decl     = [ "pub" ] [ "extern" ] [ "inline" ] "fn" IDENT "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
                                               (* "! E": fallible, E is an enum with non-zero members *)
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
 param       = IDENT ":" type ;
@@ -130,6 +130,12 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
   There is no fallthrough. A switch on an enum must cover every member or have an `else` arm (E0504,
   whose fix inserts the missing arms). A switch on a plain integer must have an `else` arm (E0503).
   `break` and `continue` inside a switch refer to the enclosing loop.
+* **inline fn**: a direct call to an `inline fn` is expanded at the call site. Its parameters and
+  locals live in the caller's frame and take part in the caller's register promotion. Arguments
+  are evaluated left to right before the body runs, exactly as for a call. The function is still
+  emitted normally, so its address can be taken. Inline fns may not be extern, variadic or
+  fallible, take or return aggregates (E0244), or reach themselves through other inline fns
+  (E0245). Inlining is never implicit: the compiler inlines only what you mark.
 * **defer**: `defer { ... }` schedules a block to run when the enclosing block exits, whether it
   falls off the end or leaves through `return`, `break` or `continue`. Deferred blocks of one scope
   run in reverse order of declaration, innermost scope first. A `return` value is computed before

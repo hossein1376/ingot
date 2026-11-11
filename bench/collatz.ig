@@ -1,7 +1,8 @@
 // Integer-heavy kernel: total Collatz steps for 1..N.
 extern fn printf(fmt: *u8, ...) -> i32;
 
-fn steps(n0: i64) -> i64 {
+// inline: expanded into the loop below (C -O2 inlines it on its own; Ingot asks for it explicitly)
+inline fn steps(n0: i64) -> i64 {
     var n: i64 = n0;
     var s: i64 = 0;
     while n != 1 {

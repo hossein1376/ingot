@@ -259,6 +259,7 @@ type Param struct {
 type FnDecl struct {
 	Pub      bool
 	Extern   bool
+	Inline   bool // expanded at every direct call site
 	Name     string
 	Params   []Param
 	Variadic bool

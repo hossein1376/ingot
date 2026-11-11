@@ -9,6 +9,7 @@
 - Register promotion of locals, immediate operands, rotated loops.
 - `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
 - Error unions: `-> T ! E`, `return @err(E.x)`, `try`, `catch e => value | { block }`; error code in x1, one `cbz` per check.
+- `inline fn`: explicit call-site expansion; callee locals join the caller's register promotion.
 - `ingot explain`: documented catalog of every diagnostic code.
 - `defer` blocks (inline at every exit, LIFO, checked: no return/escape inside).
 - In-place FMA accumulation into promoted NEON registers, logical immediates, `tst`, single-add addressing.
@@ -23,7 +24,6 @@
    locals, keeps expression results in registers across statements, and adds spilling instead of the
    "expression too deep" error (E0900).
 3. **Error unions, part 2**: aggregate results (via x8), `errdefer`, `!` in fn-pointer types, and error enums shared across modules.
-3b. **Inlining**: `inline fn` with explicit opt-in, so hot helpers (collatz `steps`) lose call overhead.
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
 4b. **`ingot fmt`**: a canonical formatter that keeps comments, so that machine-applied fixes stay tidy.
 5. **Modules**: namespaced imports (`par.parallel_for`), visibility, and a deterministic package hash. v0.1 merges all imports into one namespace.

@@ -86,6 +86,7 @@ type checker struct {
 	// depth outside it (break/continue may not leave the defer body).
 	inDefer      bool
 	handled      map[*syntax.CallExpr]bool // fallible calls wrapped in try/catch
+	inlineCalls  map[*Func][]*Func         // inline fn -> inline fns it calls directly
 	loopsAtDefer int
 }
 
@@ -133,6 +134,15 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 					}
 				}
 				ft.Err = et
+			}
+		}
+		if fd.Inline {
+			bad := fd.Extern || fd.Variadic || fd.Err != nil || ft.Ret.IsAggregate()
+			for _, p := range ft.Params {
+				bad = bad || p.IsAggregate()
+			}
+			if bad {
+				c.dl.Errorf("E0244", fd.NameSp, "inline fn %q must not be extern, variadic or fallible, and its parameters and result must be scalars, pointers or vectors (pass aggregates by pointer)", fd.Name)
 			}
 		}
 		if fd.Variadic && !fd.Extern {
@@ -207,6 +217,7 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 		}
 		c.info.Bodies = append(c.info.Bodies, b)
 	}
+	c.checkInlineCycles()
 	for i, td := range f.Tests {
 		b := &Body{Name: "__ingot_test_" + strconv.Itoa(i), Test: td, Ret: TVoid, Block: td.Body}
 		c.body = b
@@ -961,6 +972,14 @@ func (c *checker) expr0(e syntax.Expr, want *Type) *Type {
 				d.Fix("convert to f64", diag.Span{File: a.ESpan().File, Start: a.ESpan().End, End: a.ESpan().End}, " as f64")
 			}
 		}
+		if id, ok := e.Fn.(*syntax.IdentExpr); ok && c.body != nil && c.body.Func != nil && c.body.Func.Decl.Inline {
+			if callee, ok := c.info.Uses[id].(*Func); ok && callee.Decl != nil && callee.Decl.Inline {
+				if c.inlineCalls == nil {
+					c.inlineCalls = map[*Func][]*Func{}
+				}
+				c.inlineCalls[c.body.Func] = append(c.inlineCalls[c.body.Func], callee)
+			}
+		}
 		if ft.Err != nil && !c.handled[e] {
 			d := c.dl.Errorf("E0250", e.Sp, "this call can fail with %s; handle the error with try or catch", ft.Err)
 			if c.body != nil && c.body.Err == ft.Err && !c.inDefer {
@@ -1337,4 +1356,28 @@ func (c *checker) fold(e *syntax.BinaryExpr) {
 		return // let codegen apply wrap-around for narrow types
 	}
 	c.info.Consts[e] = r
+}
+
+// checkInlineCycles rejects inline fns that reach themselves through direct
+// calls to inline fns, since they could not be expanded.
+func (c *checker) checkInlineCycles() {
+	for _, f := range c.info.Funcs {
+		if f.Decl == nil || !f.Decl.Inline {
+			continue
+		}
+		seen := map[*Func]bool{}
+		stack := append([]*Func(nil), c.inlineCalls[f]...)
+		for len(stack) > 0 {
+			g := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if g == f {
+				c.dl.Errorf("E0245", f.Decl.NameSp, "inline fn %q is recursive (directly or through other inline fns); remove 'inline'", f.Name)
+				break
+			}
+			if !seen[g] {
+				seen[g] = true
+				stack = append(stack, c.inlineCalls[g]...)
+			}
+		}
+	}
 }

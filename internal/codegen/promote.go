@@ -27,6 +27,7 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 	u := useInfo{addrTaken: map[*sema.Var]bool{}, weight: map[*sema.Var]int{}, leaf: true}
 	var expr func(e syntax.Expr, w int)
 	var stmt func(s syntax.Stmt, w int)
+	visiting := map[*sema.Body]bool{}
 	expr = func(e syntax.Expr, w int) {
 		switch e := e.(type) {
 		case *syntax.IdentExpr:
@@ -54,6 +55,19 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 			expr(e.X, w)
 			expr(e.Y, w)
 		case *syntax.CallExpr:
+			if cb := g.inlineBody(e); cb != nil && !visiting[cb] {
+				// expanded in place: its locals live in this frame
+				for _, a := range e.Args {
+					expr(a, w)
+				}
+				for _, p := range cb.Params {
+					u.weight[p] += w
+				}
+				visiting[cb] = true
+				stmt(cb.Block, w)
+				visiting[cb] = false
+				break
+			}
 			u.leaf = false
 			expr(e.Fn, w)
 			for _, a := range e.Args {
@@ -154,7 +168,7 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 // choosePromotions picks up to maxG integer and maxF float/vector locals.
 func (g *gen) choosePromotions(b *sema.Body, u useInfo, maxG, maxF int) map[*sema.Var]preg {
 	var gc, fc []*sema.Var
-	for _, v := range b.Locals {
+	for _, v := range g.frameLocals(b) {
 		t := v.Type
 		if u.addrTaken[v] || t.IsAggregate() || u.weight[v] == 0 && !contains(b.Params, v) {
 			continue
@@ -229,4 +243,39 @@ func (g *gen) writePromoted(p preg, t *sema.Type, r reg) {
 	default:
 		g.emit("fmov %s, %s", pname(p, t), rn(r, t))
 	}
+}
+
+// inlineBody returns the body to expand for a direct call to an inline fn.
+func (g *gen) inlineBody(e *syntax.CallExpr) *sema.Body {
+	id, ok := e.Fn.(*syntax.IdentExpr)
+	if !ok {
+		return nil
+	}
+	fn, ok := g.info.Uses[id].(*sema.Func)
+	if !ok || fn.Decl == nil || !fn.Decl.Inline {
+		return nil
+	}
+	return g.bodies[fn]
+}
+
+// frameLocals lists b's locals plus those of every inline fn expanded into
+// it (transitively), each once.
+func (g *gen) frameLocals(b *sema.Body) []*sema.Var {
+	out := append([]*sema.Var(nil), b.Locals...)
+	seen := map[*sema.Body]bool{b: true}
+	var walk func(n any)
+	walk = func(n any) {
+		syntax.Inspect(n, func(x any) bool {
+			if c, ok := x.(*syntax.CallExpr); ok {
+				if cb := g.inlineBody(c); cb != nil && !seen[cb] {
+					seen[cb] = true
+					out = append(out, cb.Locals...)
+					walk(cb.Block)
+				}
+			}
+			return true
+		})
+	}
+	walk(b.Block)
+	return out
 }

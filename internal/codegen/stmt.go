@@ -101,13 +101,13 @@ func (g *gen) stmt(s syntax.Stmt) {
 		lv := g.info.Defs[s]
 		t := lv.Type
 		pr, promoted := g.promoted[lv]
-		lo, _ := g.expr(s.Lo)
 		if promoted {
-			g.writePromoted(pr, t, lo)
+			g.initVar(lv, s.Lo)
 		} else {
+			lo, _ := g.expr(s.Lo)
 			g.store(lo, g.mem(g.slots[lv]), t)
+			g.free(lo)
 		}
-		g.free(lo)
 		// the bound is evaluated once; it stays in a callee-saved register
 		// when the counter is promoted, otherwise in a frame slot
 		hiSlot := g.slot(8, 8)
@@ -150,6 +150,27 @@ func (g *gen) stmt(s syntax.Stmt) {
 		}
 		g.label(end)
 	case *syntax.ReturnStmt:
+		if g.inl != nil {
+			res := g.inl.res
+			switch {
+			case s.Value == nil:
+				g.runDefers(0)
+			case !g.hasDefers() && g.intoReg(res, g.typeOf(s.Value), s.Value):
+			default:
+				r, _ := g.expr(s.Value)
+				g.runDefers(0)
+				if r.fp {
+					g.emit("mov %s.16b, %s.16b", v(res), v(r))
+				} else {
+					g.emit("mov %s, %s", x(res), x(r))
+				}
+				g.free(r)
+			}
+			if s != g.inl.last || len(g.loops) != 0 {
+				g.emit("b %s", g.inl.end)
+			}
+			return
+		}
 		if b, ok := s.Value.(*syntax.BuiltinCall); ok && b.Name == "err" {
 			code, _ := g.expr(b.Args[0])
 			g.runDefers(0)
@@ -409,4 +430,29 @@ func (g *gen) assign(s *syntax.AssignStmt) {
 	g.store(cur, "["+x(addr)+"]", t)
 	g.free(cur)
 	g.free(addr)
+}
+
+// intoReg computes an integer arithmetic expression or a constant straight
+// into d. It reports false (emitting nothing) for other expressions.
+func (g *gen) intoReg(d reg, t *sema.Type, val syntax.Expr) bool {
+	if d.fp || t.Kind != sema.Int && t != sema.TBool {
+		return false
+	}
+	if k, ok := g.info.Consts[val]; ok && !k.IsFloat {
+		g.movImm(x(d), uint64(k.I))
+		return true
+	}
+	if _, pr, ok := g.promotedTarget(val); ok {
+		g.emit("mov %s, x%d", x(d), pr.n)
+		return true
+	}
+	b, ok := unparen(val).(*syntax.BinaryExpr)
+	if !ok || !opIsArith(b.Op) {
+		return false
+	}
+	bx, by := g.operands(b, t)
+	a := g.use(bx)
+	g.arithExpr3(b.Op, d, a, by, t, b.Sp)
+	g.free(a)
+	return true
 }
