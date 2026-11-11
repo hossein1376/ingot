@@ -14,6 +14,7 @@ instead of guessing. Sources were read on 2026-11-11.
 | LLVM's M4 tuning flags include fusion of arithmetic with branches (`ArithmeticBccFusion`, `ArithmeticCbzFusion`), address and literal fusion, AES fusion, **zero-cycle register moves** (`ZCRegMove`) and zero-cycle zeroing (`ZCZeroing`). | LLVM PR #95478 (`TuneAppleM4`) |
 | E cores and P cores share the same instruction set. All E cores sit in a single cluster that shares an L2 cache. macOS controls cluster frequency in the kernel, so user code cannot set it. | Eclectic Light, *Inside M4 chips: E and P cores* (2024-11-18), <https://eclecticlight.co/2024/11/18/inside-m4-chips-e-and-p-cores/> |
 | M4 was the first publicly available silicon with SME. | Remke & Breuer, *Hello SME!* (arXiv:2409.18779), <https://arxiv.org/abs/2409.18779> |
+| On M4 the streaming vector length (SVL) is **512 bits**, so ZA is 4096 bytes and one FP32 `FMOPA` is a 16×16 outer product (512 flops). Measured on one M4 P core: Neon FP32 `FMLA` 113 GFLOPS, SME FP32 `FMOPA` 2009 GFLOPS with four ZA tiles in use (502 with one tile, so the latency is about 4 cycles). SSVE (streaming SVE) `FMLA` is only 31 GFLOPS. E cores reach 357 GFLOPS with `FMOPA`. The results point to two shared SME units, one per cluster, with about 2.3 TFLOPS combined. Direct loads into ZA are slower than loading into Z registers and then moving to ZA. These numbers are for the base M4 (an iPad Pro), not measured on an M4 Pro. | Remke & Breuer, *Hello SME!*, Sec. II-B, III-C, III-F, III-G and Table I |
 
 **What this means for codegen**
 
@@ -21,7 +22,11 @@ instead of guessing. Sources were read on 2026-11-11.
   Ingot's first-class vector types are fixed 128-bit types (`f32x4`, `i32x4`, ...). Each one
   maps to exactly one `V` register. SME/SME2 (streaming mode and the ZA tile) is the
   path to matrix throughput. It needs an explicit mode switch (`smstart` and `smstop`),
-  so it belongs in a separate, explicit language feature. See ROADMAP.
+  so it belongs in a separate, explicit language feature. See ROADMAP. Until that exists,
+  `--link` lets an Ingot program call a hand-written SME kernel
+  (`examples/sme/sgemm_sme.S`). For FP32 matrix work this is the largest single speedup
+  on the chip (about 18× a Neon core in the measurements above). The kernel is written for any
+  vector length, so qemu can test it at 256 and 512 bits.
 * **Register-to-register moves are cheap.** On cores with zero-cycle moves, a
   `mov` between registers is renamed instead of executed. The MVP backend leans on this:
   promoted locals are copied into temporaries with plain `mov`. Removing those copies is

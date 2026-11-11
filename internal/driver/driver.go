@@ -90,11 +90,13 @@ func LinkArgs(cc []string, t codegen.Target) []string {
 	return []string{"--target=aarch64-linux-gnu", "-static"}
 }
 
-// Link assembles asmPath into an executable at out.
-func Link(asmPath, out string, t codegen.Target) error {
+// Link assembles asmPath, plus any extra assembly (.s/.S), C or object
+// files, into an executable at out.
+func Link(asmPath, out string, t codegen.Target, extra ...string) error {
 	cc := CC()
 	args := append(append([]string{}, cc[1:]...), LinkArgs(cc, t)...)
 	args = append(args, "-o", out, asmPath)
+	args = append(args, extra...)
 	cmd := exec.Command(cc[0], args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

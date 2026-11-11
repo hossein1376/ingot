@@ -34,6 +34,7 @@ flags:
   --target macos-arm64|linux-arm64   (default: host OS; macos-arm64 on macOS)
   --diag text|json                   diagnostics format; json = one object per line
   --unchecked                        disable bounds and division checks
+  --link FILE                        also assemble/compile and link FILE (.s, .S, .c or .o); repeatable
   -o FILE                            output path
 `
 
@@ -62,6 +63,7 @@ func run(args []string) int {
 	}
 	cfg := driver.Config{Target: driver.DefaultTarget(), Safe: true}
 	diagFmt, out, file := "text", "", ""
+	var links []string // extra .s/.S/.c/.o files for build, run and test
 	var progArgs []string
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
@@ -91,6 +93,8 @@ func run(args []string) int {
 			diagFmt = val()
 		case a == "--unchecked":
 			cfg.Safe = false
+		case strings.HasPrefix(a, "--link"):
+			links = append(links, val())
 		case a == "-o":
 			out = val()
 		case strings.HasPrefix(a, "-"):
@@ -149,7 +153,7 @@ func run(args []string) int {
 			out = filepath.Join(driver.BuildDir(), base+"-"+cfg.Target.Name)
 		}
 	}
-	if err := driver.Link(asmPath, out, cfg.Target); err != nil {
+	if err := driver.Link(asmPath, out, cfg.Target, links...); err != nil {
 		fmt.Fprintln(os.Stderr, "ingot:", err)
 		return 1
 	}

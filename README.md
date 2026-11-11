@@ -103,6 +103,12 @@ fails if the compiler emits a code that the catalog does not document.
 | [`examples/hashjoin.ig`](examples/hashjoin.ig) | `import "std/map.ig"`: 1M-key build and 2M-key probe, errors via `catch`, `continue` from a catch block |
 | [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
 
+[`examples/sme/`](examples/sme) calls a hand-written **SME** FP32 matmul kernel (`sgemm_sme.S`,
+one 16×16 `FMOPA` per k step on M4) through `extern fn` and `--link`, and checks it against a
+scalar reference: `ingot run --link examples/sme/sgemm_sme.S examples/sme/sgemm.ig`. It passes
+under qemu at 256-bit and 512-bit (M4's) streaming vector lengths, and the Mach-O build links. It
+has not been run on M4 hardware yet.
+
 The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`, `std/map.ig`) is embedded in the compiler,
 so `import "std/par.ig";` works with no setup.
 

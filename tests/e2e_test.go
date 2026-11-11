@@ -195,3 +195,42 @@ func must[T any](v T, err error) T {
 	}
 	return v
 }
+
+// hostLacksSME reports whether a native run would trap on SME instructions.
+// Emulated runs (qemu's default CPU) implement SME.
+func hostLacksSME() bool {
+	switch {
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		out, err := exec.Command("sysctl", "-n", "hw.optional.arm.FEAT_SME").Output()
+		return err != nil || strings.TrimSpace(string(out)) != "1"
+	case runtime.GOOS == "linux" && runtime.GOARCH == "arm64":
+		b, err := os.ReadFile("/proc/cpuinfo")
+		return err != nil || !strings.Contains(string(b), " sme")
+	}
+	return false
+}
+
+// TestSMEKernel links the hand-written SME sgemm kernel into an Ingot program
+// (--link) and checks its result against the scalar reference.
+func TestSMEKernel(t *testing.T) {
+	haveToolchain(t)
+	cfg := driver.Config{Target: runTarget, Safe: true}
+	asm := compile(t, "../examples/sme/sgemm.ig", cfg)
+	dir := t.TempDir()
+	asmPath := filepath.Join(dir, "out.s")
+	if err := os.WriteFile(asmPath, []byte(asm), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "out")
+	if err := driver.Link(asmPath, bin, cfg.Target, "../examples/sme/sgemm_sme.S"); err != nil {
+		t.Fatal(err)
+	}
+	if hostLacksSME() {
+		t.Skip("linked; this CPU has no SME, so the kernel is not run")
+	}
+	out, stderr, code := runBin(t, bin)
+	if code != 0 || !strings.Contains(out, " 0 mismatches") {
+		t.Fatalf("exit %d\n%s%s", code, out, stderr)
+	}
+	t.Log(strings.TrimSpace(out))
+}

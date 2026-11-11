@@ -9,6 +9,7 @@
 - Register promotion of locals, immediate operands, rotated loops.
 - `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
 - Error unions: `-> T ! E`, `return @err(E.x)`, `try`, `catch e => value | { block }`; error code in x1, one `cbz` per check.
+- `--link FILE` for hand-written assembly or C. `examples/sme/` is an SME FMOPA sgemm kernel called from Ingot, checked under qemu at SVL 256 and 512.
 - `std/map.ig`: open-addressing u64 hash map with error-union API; `examples/hashjoin.ig`.
 - Spilling under register pressure: binary operands and call arguments are parked in the frame, so deep expressions (tested to 120 levels) compile instead of failing with E0900.
 - `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
@@ -32,7 +33,7 @@
 6. **Generics**: explicit monomorphized `fn sum[T: Num](xs: []T) -> T`, with no inference across calls.
 7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool
    with QoS-tagged workers, ≥3× chunks per core as Apple recommends), and `std.time` (`mach_absolute_time`).
-8. **SME/SME2 blocks**: `streaming { ... }` regions that emit `smstart`/`smstop`, with ZA tile types for matrix
+8. **SME/SME2 in the language** (today it is reached through `--link` kernels): `streaming { ... }` regions that emit `smstart`/`smstop`, with ZA tile types for matrix
    kernels, gated by `--cpu apple-m4`.
 9. **Direct Mach-O and ELF object writers** for faster builds with no external assembler. Keep `ingot asm` for inspection.
 10. **JIT mode** (`ingot run --jit`) that follows Apple's W^X protocol (`MAP_JIT`, `pthread_jit_write_protect_np`,
