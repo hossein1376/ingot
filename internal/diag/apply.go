@@ -1,9 +1,6 @@
 package diag
 
-import (
-	"sort"
-	"strings"
-)
+import "sort"
 
 // ApplyFixes applies the first fix of every diagnostic for file to src.
 // Overlapping edits are skipped. It returns the new text and the number of
@@ -26,35 +23,49 @@ func ApplyFixes(src []byte, file string, ds []*Diagnostic) ([]byte, int) {
 		text       string
 		fix        int
 	}
-	var edits []edit
+	// Fixes are taken whole, in diagnostic order: a fix is accepted only if
+	// none of its edits overlap an edit of an already accepted fix, so a
+	// multi-edit fix is never half-applied. Rejected fixes are left for the
+	// next round (ingot fix re-checks and repeats).
+	overlaps := func(a, b edit) bool {
+		return (a.start < b.end && b.start < a.end) || a.start == b.start
+	}
+	var accepted []edit
+	applied := 0
 	for i, d := range ds {
 		if len(d.Fixes) == 0 {
 			continue
 		}
+		var mine []edit
+		ok := true
 		for _, e := range d.Fixes[0].Edits {
 			if e.Span.File != file {
 				continue
 			}
 			s, t := offset(e.Span.Start), offset(e.Span.End)
 			if s < 0 || t < s || t > len(src) {
-				continue
+				ok = false
+				break
 			}
-			edits = append(edits, edit{s, t, e.Text, i})
+			mine = append(mine, edit{s, t, e.Text, i})
 		}
+		for _, m := range mine {
+			for _, a := range accepted {
+				if overlaps(m, a) {
+					ok = false
+				}
+			}
+		}
+		if !ok || len(mine) == 0 {
+			continue
+		}
+		accepted = append(accepted, mine...)
+		applied++
 	}
-	sort.SliceStable(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
-	var b strings.Builder
+	sort.SliceStable(accepted, func(i, j int) bool { return accepted[i].start > accepted[j].start })
 	out := string(src)
-	applied := map[int]bool{}
-	limit := len(src) + 1
-	for _, e := range edits {
-		if e.end > limit {
-			continue // overlaps an edit already applied
-		}
+	for _, e := range accepted {
 		out = out[:e.start] + e.text + out[e.end:]
-		limit = e.start
-		applied[e.fix] = true
 	}
-	b.WriteString(out)
-	return []byte(b.String()), len(applied)
+	return []byte(out), applied
 }
