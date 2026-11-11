@@ -324,7 +324,7 @@ type File struct {
 type ImportDecl struct {
 	Path  string
 	Alias string // `import "p" as alias;`, "" when merged
-	Sp   diag.Span
+	Sp    diag.Span
 }
 
 // Node is any AST node (used as a map key by later passes).
