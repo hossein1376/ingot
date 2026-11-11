@@ -385,6 +385,16 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 	if pr, ok := g.promoted[lv]; ok && g.arithInto(pr, t, val) {
 		return
 	}
+	if pr, ok := g.promoted[lv]; ok && t.Kind != sema.Vec {
+		// let x = s[i]: load straight into x's register
+		if mode, regs, ok := g.indexMode(val); ok {
+			g.load(reg{abs: pr.n, fp: pr.fp}, mode, t)
+			for _, r := range regs {
+				g.free(r)
+			}
+			return
+		}
+	}
 	r := g.use(val)
 	if pr, ok := g.promoted[lv]; ok {
 		g.writePromoted(pr, t, r)

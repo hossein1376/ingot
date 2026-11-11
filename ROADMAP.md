@@ -13,6 +13,7 @@
 - `std/map.ig`: open-addressing u64 hash map with error-union API; `examples/hashjoin.ig`.
 - Leaf functions take caller-saved `x2`–`x7` as extra temporaries (no save/restore), and promote up to 8 locals.
 - Slice `{ptr,len}` register caching, dense-`switch` jump tables, tagged unions, generics, namespaced imports, `errdefer`, `ingot api`.
+- `for x in s` element loops. Bounds checks proven by for-loop ranges are left out. `let x = s[i]` loads straight into x's register. Fallible fn-pointer types `fn(..) -> T ! E`. Union pointer bindings `U.v(&p)`.
 - Spilling under register pressure: binary operands and call arguments are parked in the frame, so deep expressions (tested to 120 levels) compile instead of failing with E0900.
 - Lane masks (`@lanes_lt/le/eq`) and per-lane `@select` (BSL) for branchless SIMD.
 - `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
