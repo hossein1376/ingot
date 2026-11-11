@@ -41,7 +41,7 @@ test "dot of ones" {
 | `--diag json`: stable codes, exact spans, **fix edits**; `ingot fix` applies them | First-class NEON vectors (`f32x4`, `i32x4`, ...) with 1:1 instructions |
 | `test` blocks and `@assert` in the language; `ingot test` runs them | LSE atomics, pthreads via FFI, `@qos` for P/E-core steering |
 | Errors can't be ignored: `-> T ! E` with `try` / `catch`, and `defer` for cleanup | Error checks cost one `cbz` (code in `x1`), with no unwinding tables |
-| Namespaced modules (`import "std/map.ig" as hm;` then `hm.map_put`), so large programs don't collide | Branchless SIMD: `@lanes_lt/le/eq` masks with per-lane `@select` (`fcmgt`/`cmhi` + `bsl`) |
+| Namespaced modules (`import "std/map.ig" as hm;` then `hm.map_put`), so large programs don't collide; explicit generics (`sum.[f64](xs)`, `Pair.[i64, f64]`) with no inference | Branchless SIMD: `@lanes_lt/le/eq` masks with per-lane `@select` (`fcmgt`/`cmhi` + `bsl`) |
 | Deterministic output (tested) | Darwin ABI details handled: `x18` reserved, variadic args on the stack, packed stack args |
 
 See [docs/design.md](docs/design.md) for why things are this way,
@@ -118,7 +118,7 @@ so `import "std/par.ig";` works with no setup.
 ## Status and test results
 
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (20 semantics tests, namespaced-module tests, and the example tests),
+(run under qemu-aarch64), in-language `test` blocks (22 semantics tests, plus module, generics and example tests),
 unit tests for the lexer, parser, checker rules, C struct layout and fix application,
 a mutation fuzzer (`internal/fz`: no compiler panics, no failure without a diagnostic; a 40,000-mutant
 run put 9,798 mutants through codegen, and a sample of 244 of them assembled cleanly for both targets),

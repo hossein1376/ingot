@@ -31,7 +31,7 @@
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
 4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
 5. **Modules, part 2**: namespaced imports (`import "p" as m;`) are done. Still to do: `pub` visibility for non-exported names, a module-relative suggestion when the alias differs from the module prefix, and a deterministic package hash.
-6. **Generics**: explicit monomorphized `fn sum[T: Num](xs: []T) -> T`, with no inference across calls.
+6. **Generics, part 2**: explicit monomorphized templates (`fn sum[T]`, `struct S[T]`, `sum.[f64](xs)`) are done. Next are optional bounds (`T: Num`), which would check a template once rather than per instance, and constant parameters (`[N: i64]`).
 7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool
    with QoS-tagged workers, ≥3× chunks per core as Apple recommends), and `std.time` (`mach_absolute_time`).
 8. **SME/SME2 in the language** (today it is reached through `--link` kernels): `streaming { ... }` regions that emit `smstart`/`smstop`, with ZA tile types for matrix

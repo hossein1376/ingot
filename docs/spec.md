@@ -24,16 +24,18 @@ decl        = import_decl | fn_decl | struct_decl | enum_decl | global_decl | te
 enum_decl   = "enum" IDENT [ ":" type ] "{" [ member { "," member } [ "," ] ] "}" ;
 member      = IDENT [ "=" expr ] ;                (* constant; default = previous + 1, first = 0 *)
 import_decl = "import" STRING [ "as" IDENT ] ";" ;
-fn_decl     = [ "pub" ] [ "extern" ] [ "inline" ] "fn" IDENT "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
+fn_decl     = [ "pub" ] [ "extern" ] [ "inline" ] "fn" IDENT [ tparams ] "(" [ params ] ")" [ "->" type [ "!" type ] ] ( block | ";" ) ;
                                               (* "! E": fallible, E is an enum with non-zero members *)
 params      = param { "," param } [ "," "..." ] | "..." ;      (* "..." only in extern fns *)
 param       = IDENT ":" type ;
-struct_decl = "struct" IDENT "{" [ field { "," field } [ "," ] ] "}" ;
+struct_decl = "struct" IDENT [ tparams ] "{" [ field { "," field } [ "," ] ] "}" ;
+tparams     = "[" IDENT { "," IDENT } "]" ;     (* generic template, see section 3a *)
+targs       = ".[" type { "," type } "]" ;
 field       = IDENT ":" type ;
 global_decl = ( "const" | "var" ) IDENT ":" type "=" expr ";" ;
 test_decl   = "test" STRING block ;
 
-type        = IDENT                         (* i8..i64 u8..u64 f32 f64 bool void, vector types, struct names *)
+type        = IDENT [ "." IDENT ] [ targs ]   (* i8..i64 u8..u64 f32 f64 bool void, vectors, structs; m.T; S.[T] *)
             | "*" type                      (* pointer *)
             | "[" INT "]" type              (* array, fixed length *)
             | "[" "]" type                  (* slice: { ptr: *T, len: i64 } *)
@@ -62,7 +64,7 @@ add         = mul { ("+" | "-") mul } ;
 mul         = cast { ("*" | "/" | "%") cast } ;
 cast        = prefix { "as" type } ;
 prefix      = ("-" | "!" | "~" | "&" | "try") prefix | postfix ;   (* try: only on a fallible call *)
-postfix     = primary { "(" args ")" | "[" expr "]" | "[" expr ".." expr "]" | "." IDENT | ".*" | ".{" inits "}" } ;
+postfix     = primary { "(" args ")" | "[" expr "]" | "[" expr ".." expr "]" | "." IDENT | ".*" | ".{" inits "}" | targs } ;
 primary     = IDENT | INT | FLOAT | STRING | CSTRING | "true" | "false" | "null"
             | "(" expr ")" | "[" INT "]" type ".{" inits "}" | BUILTIN [ "(" [ type "," ] args ")" ] ;
 inits       = [ IDENT ":" expr { "," IDENT ":" expr } | expr { "," expr } ] [ "," ] ;
@@ -109,6 +111,40 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
 * f32 to f64: widening or rounding.
 * bool to int: 0 or 1.
 * pointer, `fn`, and `i64`/`u64` convert among each other, as do vectors of equal size (bit reinterpretation).
+
+## 3a. Generics
+
+Generics are explicit templates that are expanded by substitution (monomorphized).
+
+```
+struct Pair[A, B] { a: A, b: B }
+
+fn swap[A, B](p: Pair.[A, B]) -> Pair.[B, A] {
+    return Pair.[B, A].{ a: p.b, b: p.a };
+}
+
+fn sum[T](xs: []T) -> T {
+    var s: T = @zero;
+    for i in 0..xs.len { s += xs[i]; }
+    return s;
+}
+
+let total: f64 = sum.[f64](xs);   // type arguments are always written out
+```
+
+* Each distinct use `f.[T1, ...]` or `S.[T1, ...]` creates one copy named `f[T1,...]`, in
+  which every type parameter is replaced by its argument. That copy is checked and compiled
+  like hand-written code. A template that is never instantiated is parsed but not checked.
+* There is **no inference** and there are **no bounds**. An operation the type does not
+  support is reported inside the template, with a note naming the instance and where it was
+  instantiated (`in sum[bool], instantiated at main.ig:13:19`).
+* Type arguments can be any type: scalars, vectors, pointers, slices, arrays, function
+  pointers, other instances (`Pair.[Pair.[i64, f64], bool]`) and module types (`m.T`).
+  Templates can instantiate other templates (`sq.[T](x)`), including `inline` ones.
+* A generic function cannot be `extern` or `pub` (E0263). Calling one without type arguments
+  is E0262, the wrong number is E0261, `.[...]` on a non-generic is E0260, and instantiation
+  nested more than 32 deep (for example `f[T]` instantiating `f.[*T]`) is E0264.
+* Instance symbols are mangled for the assembler. `sum[f64]` becomes `ingot__sum_G_f64_`.
 
 ## 4. Semantics
 

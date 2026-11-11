@@ -85,12 +85,13 @@ packing (see research.md §2).
 
 ## Deliberate omissions in v0.1
 
-* **Generics and borrow checking.** They're valuable, but both add large surface
-  area and inference behavior. They will be designed as explicit, opt-in features
-  (ROADMAP).
+* **Inference and borrow checking.** Generics exist, but they are explicit: every
+  instantiation is written `f.[T](x)`, and each one is a plain monomorphized copy with no
+  inference, bounds or trait solving. An agent can predict exactly which code exists.
+  Borrow checking is still out of scope (ROADMAP).
 * **Struct-by-value across the C ABI.** The HFA and composite rules are
   error-prone, so the compiler rejects these cases rather than miscompile them.
-* **Namespaced modules.** `import` merges files into one namespace (with an embedded
-  `std`). Namespaces and package hashing come later.
+* **Package management.** `import "p" as m;` gives a file its own namespace, but
+  there are no packages, versions or hashes yet.
 * **A full formatter.** `ingot fmt` only re-indents by bracket depth and trims whitespace. It
   never changes a token, so it is always safe for an agent to run.
