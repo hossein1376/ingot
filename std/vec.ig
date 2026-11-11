@@ -42,7 +42,7 @@ fn vec_push[T](v: *Vec.[T], x: T) -> void ! VecErr {
     v.*.len += 1;
 }
 
-// Removes and returns the last element (scalar and vector element types).
+// Removes and returns the last element.
 fn vec_pop[T](v: *Vec.[T]) -> T ! VecErr {
     if v.*.len == 0 {
         return @err(VecErr.empty);

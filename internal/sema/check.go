@@ -126,8 +126,6 @@ func Check(f *syntax.File, dl *diag.List) *Info {
 				c.dl.Errorf("E0242", fd.Err.TSpan(), "extern (C) functions cannot have an error type")
 			case et.Enum == nil:
 				c.dl.Errorf("E0242", fd.Err.TSpan(), "the error type after '!' must be an enum, found %s", et)
-			case ft.Ret.IsAggregate() || ft.Ret.Kind == Vec:
-				c.dl.Errorf("E0242", fd.Ret.TSpan(), "a fallible function must return a scalar, pointer or void (aggregate results are not supported yet); return through an out-pointer")
 			default:
 				for i, v := range et.Enum.Values {
 					if v == 0 {

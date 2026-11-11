@@ -524,3 +524,60 @@ test "errdefer runs only on error exits, in reverse order with defer" {
     let late: i64 = guarded(false, true) catch e => -1;
     @assert(late == -1 && g_log == 321);     // 3, 2, then 1
 }
+
+enum AggErr: u8 {
+    bad = 1,
+}
+struct AggP {
+    x: f64,
+    y: f64,
+    tag: i64,
+}
+
+fn agg_mk(fail: bool, k: f64) -> AggP ! AggErr {
+    if fail {
+        return @err(AggErr.bad);
+    }
+    return AggP.{ x: k, y: k * 2.0, tag: 7 };
+}
+
+fn agg_chain(fail: bool) -> AggP ! AggErr {
+    let p: AggP = try agg_mk(fail, 1.5);
+    return AggP.{ x: p.y, y: p.x, tag: p.tag + 1 };
+}
+
+fn agg_sl(xs: []i64, n: i64) -> []i64 ! AggErr {
+    if n > xs.len {
+        return @err(AggErr.bad);
+    }
+    return xs[0..n];
+}
+
+fn agg_vv(fail: bool) -> f32x4 ! AggErr {
+    if fail {
+        return @err(AggErr.bad);
+    }
+    return @splat(f32x4, 2.0);
+}
+
+test "aggregate and vector results from fallible functions" {
+    let a: AggP = agg_chain(false) catch e => AggP.{ x: 0.0, y: 0.0, tag: -1 };
+    @assert(a.x == 3.0 && a.y == 1.5 && a.tag == 8);
+    let b: AggP = agg_chain(true) catch e => AggP.{ x: 0.0, y: 0.0, tag: -1 };
+    @assert(b.tag == -1);
+    var arr: [5]i64 = [5]i64.{ 1, 2, 3, 4, 5 };
+    let s: []i64 = agg_sl(arr[0..5], 3) catch e => arr[0..0];
+    @assert(s.len == 3 && s[2] == 3);
+    let t: []i64 = agg_sl(arr[0..5], 9) catch e => arr[0..1];
+    @assert(t.len == 1);
+    let v: f32x4 = agg_vv(false) catch e => @splat(f32x4, 0.0);
+    @assert(@reduce_add(v) == 8.0);
+    let w: f32x4 = agg_vv(true) catch e => @splat(f32x4, -1.0);
+    @assert(@reduce_add(w) == -4.0);
+    for i in 0..3 {
+        let q: AggP = agg_mk(i == 1, i as f64) catch e => {
+            continue;
+        };
+        @assert(q.x == i as f64);
+    }
+}

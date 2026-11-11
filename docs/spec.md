@@ -233,8 +233,9 @@ let total: f64 = sum.[f64](xs);   // type arguments are always written out
   allowed only in a fallible function (E0309, with a fix to `defer`).
 
   ABI: the result is in x0/d0 as usual, and the error code is in x1 (0 = success). Each check is one
-  `cbz`, and there is no unwinding. In v0.1 a fallible function returns a scalar, pointer or void,
-  extern functions cannot be fallible, and fn-pointer types cannot spell `!`.
+  `cbz`, and there is no unwinding. A fallible function can return any type: aggregates come back through
+  `x8` as usual and vectors in `v0`. Extern functions cannot be fallible, and fn-pointer types
+  cannot spell `!`.
 
 ## 7. SIMD
 
@@ -317,7 +318,7 @@ file are E0005. Extern functions are never namespaced. Several files may declare
 | `std/par.ig` | `parallel_for(n, threads, qos, ctx, body)` with dynamic chunking, `cpu_count()`, `perf_core_count()` (`hw.perflevel0.physicalcpu`), and QoS constants |
 | `std/io.ig` | `read_file(path, &out)` (whole file into a malloc'd `[]u8`, NUL-terminated), `write_file(path, data)`, both failing with `IoErr` |
 | `std/time.ig` | `now_ns()` (monotonic `clock_gettime`: clock id 6 on macOS, 1 on Linux) and `since_s(start)` |
-| `std/vec.ig` | generic growable array `Vec[T]`: `vec_reserve`, `vec_push`, `vec_pop` (scalar and vector `T`), `vec_items` (a slice), `vec_free`, failing with `VecErr` |
+| `std/vec.ig` | generic growable array `Vec[T]`: `vec_reserve`, `vec_push`, `vec_pop`, `vec_items` (a slice), `vec_free`, failing with `VecErr` |
 | `std/map.ig` | `U64Map`: open addressing with linear probing, splitmix64 hash, growth at 70% load. `map_init`, `map_put`, `map_get` (fail with `MapErr`), and `map_free` |
 
 **Target-conditional code.** `@is_macos()` is a compile-time constant. In
