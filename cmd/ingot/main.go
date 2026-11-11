@@ -30,6 +30,8 @@ usage:
   ingot builtins              list @builtins
   ingot fmt [--check] FILE... canonical indentation and spacing (never changes tokens)
   ingot explain [CODE|--json] explain a diagnostic code (all codes if none; --json for machines)
+  ingot api [--json] FILE     list a file's declarations with signatures and doc comments
+                              (FILE may be std/NAME.ig, or "std" for the whole standard library)
   ingot version
 
 flags:
@@ -64,6 +66,8 @@ func run(args []string) int {
 		return explain(args[1:])
 	case "fmt":
 		return fmtCmd(args[1:])
+	case "api":
+		return apiCmd(args[1:])
 	}
 	cfg := driver.Config{Target: driver.DefaultTarget(), Safe: true}
 	diagFmt, out, file := "text", "", ""
@@ -298,4 +302,64 @@ func fmtCmd(args []string) int {
 		}
 	}
 	return status
+}
+
+func apiCmd(args []string) int {
+	asJSON, file := false, ""
+	for _, a := range args {
+		switch {
+		case a == "--json":
+			asJSON = true
+		case file == "":
+			file = a
+		default:
+			fmt.Fprintln(os.Stderr, "ingot api: one file at a time")
+			return 2
+		}
+	}
+	if file == "" {
+		fmt.Fprintln(os.Stderr, "usage: ingot api [--json] FILE")
+		return 2
+	}
+	files := []string{file}
+	if file == "std" {
+		files = driver.StdFiles()
+	}
+	var es []driver.APIEntry
+	for _, file := range files {
+		src, ok := driver.ReadSource(file)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "ingot api: cannot read %s\n", file)
+			return 1
+		}
+		var dl diag.List
+		es = append(es, driver.API(file, src, &dl)...)
+		if dl.HasErrors() {
+			dl.WriteText(os.Stderr)
+			return 1
+		}
+	}
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		for _, e := range es {
+			enc.Encode(e)
+		}
+		return 0
+	}
+	last := ""
+	for _, e := range es {
+		if len(files) > 1 && e.File != last {
+			fmt.Printf("// ==== %s ====\n\n", e.File)
+			last = e.File
+		}
+		for _, l := range strings.Split(e.Doc, "\n") {
+			if l != "" {
+				fmt.Println("// " + l)
+			}
+		}
+		fmt.Println(e.Signature)
+		fmt.Println()
+	}
+	return 0
 }

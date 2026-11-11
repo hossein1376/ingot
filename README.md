@@ -68,6 +68,7 @@ eval "$(scripts/setup-toolchain.sh)"
 ./ingot check --diag json broken.ig                           # JSON Lines diagnostics
 ./ingot fix broken.ig                                         # apply suggested fixes
 ./ingot explain E0106                                         # what a code means and how to fix it
+./ingot api std                                               # every std signature and doc comment (--json for machines)
 ./ingot fmt --check examples/*.ig                             # canonical indentation (token-preserving)
 ```
 
