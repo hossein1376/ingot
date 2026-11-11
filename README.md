@@ -116,7 +116,7 @@ so `import "std/par.ig";` works with no setup.
 ## Status and test results
 
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (19 semantics tests plus the example tests),
+(run under qemu-aarch64), in-language `test` blocks (20 semantics tests plus the example tests),
 unit tests for the lexer, parser, checker rules, C struct layout and fix application,
 a mutation fuzzer (`internal/fz`: no compiler panics, no failure without a diagnostic; a 40,000-mutant
 run put 9,798 mutants through codegen, and a sample of 244 of them assembled cleanly for both targets),

@@ -186,3 +186,15 @@ func (t *Type) IsAggregate() bool {
 
 // IsNumeric reports int or float.
 func (t *Type) IsNumeric() bool { return t.Kind == Int || t.Kind == Float }
+
+// MaskOf returns the lane-mask type for vector type v: an integer vector with
+// the same lane count and width (f32x4 -> i32x4, f64x2 -> i64x2).
+func MaskOf(v *Type) *Type {
+	switch v {
+	case TF32x4:
+		return TI32x4
+	case TF64x2:
+		return TI64x2
+	}
+	return v
+}

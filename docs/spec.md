@@ -204,6 +204,13 @@ Vector types are first-class values. Each one occupies one 128-bit NEON register
 * `v[i]` with a constant `i` reads a lane.
 * `@splat(V, x)`, `@load(V, p)` and `@store(p, v)` (unaligned, `ldr q`/`str q`),
   `@reduce_add`, `@reduce_min`, `@reduce_max`, `@fma(a, b, c)` (`fmla`), `@min`, `@max` and `@sqrt`.
+* `@lanes_lt`, `@lanes_le` and `@lanes_eq` compare lane by lane and return a mask: an integer
+  vector with the same lane count and width (`f32x4` gives `i32x4`, `f64x2` gives `i64x2`, and
+  integer vectors give their own type) whose lanes are all ones or all zeros. They compile to
+  `fcmgt`/`fcmge`/`fcmeq`, `cmgt`/`cmge`/`cmeq`, or the unsigned `cmhi`/`cmhs`.
+  `@select(mask, a, b)` on vectors picks per lane (`bsl`). On scalars, `@select(cond, a, b)`
+  compiles to `csel`/`fcsel`. Both operands are always evaluated.
+* Vectors convert lane-wise with `as` (`f32x4 as i32x4`, and the reverse).
 * Vector locals in leaf functions stay in `v8`–`v15` across loops. Temporaries use `v16`–`v31`.
 
 ## 8. Concurrency

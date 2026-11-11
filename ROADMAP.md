@@ -12,6 +12,7 @@
 - `--link FILE` for hand-written assembly or C. `examples/sme/` is an SME FMOPA sgemm kernel called from Ingot, checked under qemu at SVL 256 and 512.
 - `std/map.ig`: open-addressing u64 hash map with error-union API; `examples/hashjoin.ig`.
 - Spilling under register pressure: binary operands and call arguments are parked in the frame, so deep expressions (tested to 120 levels) compile instead of failing with E0900.
+- Lane masks (`@lanes_lt/le/eq`) and per-lane `@select` (BSL) for branchless SIMD.
 - `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
 - `inline fn`: explicit call-site expansion; callee locals join the caller's register promotion.
 - `ingot explain`: documented catalog of every diagnostic code.

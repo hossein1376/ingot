@@ -1085,7 +1085,39 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 			g.emit("fsqrt %s, %s", rn(a, t), rn(a, t))
 		}
 		return a, true
+	case "lanes_lt", "lanes_le", "lanes_eq":
+		vt := g.typeOf(e.Args[0])
+		a := g.use(e.Args[0])
+		b := g.use(e.Args[1])
+		r := g.allocF(e.Sp)
+		var ins string
+		switch {
+		case vt.Elem.Kind == sema.Float:
+			ins = map[string]string{"lanes_lt": "fcmgt", "lanes_le": "fcmge", "lanes_eq": "fcmeq"}[e.Name]
+		case vt.Elem.Signed:
+			ins = map[string]string{"lanes_lt": "cmgt", "lanes_le": "cmge", "lanes_eq": "cmeq"}[e.Name]
+		default:
+			ins = map[string]string{"lanes_lt": "cmhi", "lanes_le": "cmhs", "lanes_eq": "cmeq"}[e.Name]
+		}
+		if e.Name == "lanes_eq" {
+			g.emit("%s %s.%s, %s.%s, %s.%s", ins, v(r), arr(vt), v(a), arr(vt), v(b), arr(vt))
+		} else {
+			// a < b is b > a; a <= b is b >= a
+			g.emit("%s %s.%s, %s.%s, %s.%s", ins, v(r), arr(vt), v(b), arr(vt), v(a), arr(vt))
+		}
+		g.free(a)
+		g.free(b)
+		return r, true
 	case "select":
+		if t.Kind == sema.Vec {
+			m, _ := g.expr(e.Args[0])
+			a := g.use(e.Args[1])
+			b := g.use(e.Args[2])
+			g.emit("bsl %s.16b, %s.16b, %s.16b", v(m), v(a), v(b))
+			g.free(a)
+			g.free(b)
+			return m, true
+		}
 		a, _ := g.expr(e.Args[1])
 		b := g.use(e.Args[2])
 		cc := g.selectCond(e.Args[0])

@@ -389,3 +389,32 @@ test "@select is a branchless choice for ints, floats, pointers and bools" {
     let p: *i64 = @select(flag, &a, &b);
     @assert(p.* == 1);
 }
+
+fn lane_clamp(x: f32x4, lo: f32x4, hi: f32x4) -> f32x4 {
+    let a: f32x4 = @select(@lanes_lt(x, lo), lo, x);
+    return @select(@lanes_lt(hi, a), hi, a);
+}
+
+test "lane masks and per-lane @select (fcmgt/cmhi/bsl)" {
+    var buf: [4]f32 = [4]f32.{ -2.0, 0.5, 3.0, 1.0 };
+    let x: f32x4 = @load(f32x4, &buf[0]);
+    let c: f32x4 = lane_clamp(x, @splat(f32x4, 0.0), @splat(f32x4, 1.0));
+    @assert(c[0] == 0.0);
+    @assert(c[1] == 0.5);
+    @assert(c[2] == 1.0);
+    @assert(c[3] == 1.0);
+    let m: i32x4 = @lanes_le(x, @splat(f32x4, 1.0));
+    @assert(m[0] == -1 as i32);
+    @assert(m[2] == 0 as i32);
+    @assert(@reduce_add(m) == -3 as i32); // three lanes are <= 1.0
+    let eq: i32x4 = @lanes_eq(@splat(i32x4, 7 as i32), m);
+    @assert(@reduce_max(eq) == 0 as i32);
+    var bytes: [16]u8 = @zero;
+    bytes[3] = 200 as u8;
+    bytes[9] = 100 as u8;
+    let bv: u8x16 = @load(u8x16, &bytes[0]);
+    let big: u8x16 = @lanes_lt(@splat(u8x16, 150 as u8), bv); // unsigned compare
+    @assert(big[3] == 255 as u8);
+    @assert(big[9] == 0 as u8);
+    @assert(@reduce_max(big) == 255 as u8);
+}

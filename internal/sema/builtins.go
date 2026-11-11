@@ -23,7 +23,10 @@ var Builtins = map[string]string{
 	"sqrt":         "@sqrt(x: F) -> F                square root (scalar or float vector)",
 	"fma":          "@fma(a, b, c) -> T              fused a*b + c (scalar or float vector)",
 	"min":          "@min(a: T, b: T) -> T           minimum",
-	"select":       "@select(c: bool, a: T, b: T) -> T  branchless choice (csel/fcsel); both a and b are always evaluated",
+	"select":       "@select(c: bool, a: T, b: T) -> T  branchless choice (csel/fcsel); both a and b are always evaluated. With a lane mask M and vectors: per-lane choice (BSL)",
+	"lanes_lt":     "@lanes_lt(a: V, b: V) -> M      per-lane a < b as an all-ones/zero mask (f32x4->i32x4, f64x2->i64x2, ints->same type)",
+	"lanes_le":     "@lanes_le(a: V, b: V) -> M      per-lane a <= b mask",
+	"lanes_eq":     "@lanes_eq(a: V, b: V) -> M      per-lane a == b mask",
 	"max":          "@max(a: T, b: T) -> T           maximum",
 	"ticks":        "@ticks() -> i64                 CNTVCT_EL0 virtual counter",
 	"tick_freq":    "@tick_freq() -> i64             CNTFRQ_EL0 counter frequency (Hz)",
@@ -164,17 +167,33 @@ func (c *checker) builtin(e *syntax.BuiltinCall, want *Type) *Type {
 		if !nargs(3) {
 			return TI64
 		}
-		c.cond(e.Args[0])
 		t := c.expr(e.Args[1], want)
 		if isUntyped(e.Args[1]) {
 			t = c.expr(e.Args[2], want)
 			c.expr(e.Args[1], t)
 		}
 		c.assignable(c.expr(e.Args[2], t), t, e.Args[2])
+		if t.Kind == Vec {
+			m := MaskOf(t)
+			c.assignable(c.expr(e.Args[0], m), m, e.Args[0])
+			return t
+		}
+		c.cond(e.Args[0])
 		if !(t.IsGPR() || t.Kind == Float) {
-			c.dl.Errorf("E0231", e.Sp, "@select works on scalars and pointers, found %s", t)
+			c.dl.Errorf("E0231", e.Sp, "@select works on scalars, pointers and vectors, found %s", t)
 		}
 		return t
+	case "lanes_lt", "lanes_le", "lanes_eq":
+		if !nargs(2) {
+			return TI32x4
+		}
+		t := c.expr(e.Args[0], want)
+		c.assignable(c.expr(e.Args[1], t), t, e.Args[1])
+		if t.Kind != Vec {
+			c.dl.Errorf("E0231", e.Sp, "@%s compares vectors lane by lane, found %s", e.Name, t)
+			return TI32x4
+		}
+		return MaskOf(t)
 	case "fma", "min", "max":
 		n := 2
 		if e.Name == "fma" {
