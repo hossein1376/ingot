@@ -112,7 +112,7 @@ scalar reference: `ingot run --link examples/sme/sgemm_sme.S examples/sme/sgemm.
 under qemu at 256-bit and 512-bit (M4's) streaming vector lengths, and the Mach-O build links. It
 has not been run on M4 hardware yet.
 
-The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`, `std/map.ig`, `std/io.ig`, `std/time.ig`) is embedded in the compiler,
+The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`, `std/map.ig`, `std/io.ig`, `std/time.ig`, `std/vec.ig`) is embedded in the compiler,
 so `import "std/par.ig";` works with no setup.
 
 ## Status and test results

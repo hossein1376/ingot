@@ -312,6 +312,7 @@ file are E0005. Extern functions are never namespaced. Several files may declare
 | `std/par.ig` | `parallel_for(n, threads, qos, ctx, body)` with dynamic chunking, `cpu_count()`, `perf_core_count()` (`hw.perflevel0.physicalcpu`), and QoS constants |
 | `std/io.ig` | `read_file(path, &out)` (whole file into a malloc'd `[]u8`, NUL-terminated), `write_file(path, data)`, both failing with `IoErr` |
 | `std/time.ig` | `now_ns()` (monotonic `clock_gettime`: clock id 6 on macOS, 1 on Linux) and `since_s(start)` |
+| `std/vec.ig` | generic growable array `Vec[T]`: `vec_reserve`, `vec_push`, `vec_pop` (scalar and vector `T`), `vec_items` (a slice), `vec_free`, failing with `VecErr` |
 | `std/map.ig` | `U64Map`: open addressing with linear probing, splitmix64 hash, growth at 70% load. `map_init`, `map_put`, `map_get` (fail with `MapErr`), and `map_free` |
 
 **Target-conditional code.** `@is_macos()` is a compile-time constant. In
