@@ -645,3 +645,23 @@ test "fallible function pointers: try and catch through fn(..) -> T ! E" {
     @assert((r_apply(f, 8.0) catch _ => -1.0) == 2.0);
     @assert((r_apply(r_sqrtish, 4000.0) catch e => (e as i64) as f64) == 300.0);
 }
+
+// call-free statements in a function that calls borrow caller-saved x2..x7;
+// values must still survive the calls in neighbouring statements
+fn nl_helper(x: i64) -> i64 {
+    return x + 1;
+}
+
+fn nl_mix(xs: []i64) -> i64 {
+    var acc: i64 = 0;
+    for i in 0..xs.len {
+        let t: i64 = (xs[i] * 3 + (acc ^ (i << 2))) - xs[i] / 2;
+        acc = nl_helper(t) + acc;
+    }
+    return acc;
+}
+
+test "caller-saved temporaries in call-free statements of non-leaf functions" {
+    let xs: [10]i64 = [10]i64.{ 5, -7, 12, 3, 100, -41, 8, 0, 9, 77 };
+    @assert(nl_mix(xs[0..10]) == 13962);
+}

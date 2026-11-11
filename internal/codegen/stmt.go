@@ -56,6 +56,43 @@ func (g *gen) runDefersOn(from int, onErr bool) {
 func (g *gen) typeOf(e syntax.Expr) *sema.Type { return g.info.Types[e] }
 
 func (g *gen) stmt(s syntax.Stmt) {
+	switch s.(type) {
+	case *syntax.LetStmt, *syntax.AssignStmt, *syntax.ExprStmt:
+		if !g.isLeaf && !g.noStmtLeaf && g.leafG == 0 && !hasCall(s) {
+			g.leafG = leafCount
+			g.stmt1(s)
+			g.leafG = 0
+			for i := gprCount; i < gprCount+leafCount; i++ {
+				if g.gpr[i] {
+					g.leafLeak = true
+					g.gpr[i] = false
+				}
+			}
+			return
+		}
+	}
+	g.stmt1(s)
+}
+
+// hasCall reports whether s makes a call (inline expansions count, since
+// their bodies are generated in place).
+func hasCall(s syntax.Stmt) bool {
+	found := false
+	syntax.Inspect(s, func(n any) bool {
+		switch n := n.(type) {
+		case *syntax.CallExpr:
+			found = true
+		case *syntax.BuiltinCall:
+			if n.Name == "qos" {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func (g *gen) stmt1(s syntax.Stmt) {
 	switch s := s.(type) {
 	case *syntax.Block:
 		g.block(s)

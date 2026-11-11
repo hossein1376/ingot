@@ -45,6 +45,9 @@ brevity for regularity:
   A leaf function (one that makes no calls) also uses the caller-saved `x2`–`x7` as
   temporaries. They need no save or restore, and they leave room to promote up to eight
   locals or slice registers.
+  In a function that does make calls, a statement with no call in it (`let`,
+  assignment or expression statement) still borrows `x2`–`x7`. If a temporary would
+  outlive the statement, the function is regenerated without the borrowing.
 * A dense `switch` (at least 4 values spanning at most 3× their count) compiles to one
   bounds check and a `br` through a table of 32-bit offsets. A sparse one becomes a
   compare chain.

@@ -66,20 +66,25 @@ type gen struct {
 	gpr      [gprCount + leafCount]bool
 	gprTouch [gprCount]bool
 	leafG    int // caller-saved temporaries available (leafCount in leaf functions)
-	fpr      [fprCount]bool
-	fprSpill [fprCount]int64
-	loops    []loopLabels
-	defers   [][]*syntax.Block // per open block, in declaration order
-	errFor   *syntax.CallExpr  // fallible call whose error code (x1) goes to errReg
-	errReg   reg
-	bodies   map[*sema.Func]*sema.Body // for inline expansion
-	inl      *inlineCtx                // non-nil while expanding an inline fn body
-	errNext  bool
-	regErr   bool // E0900 already reported for this function                      // the next emitted call is errFor (its arguments are already evaluated)
-	retLabel string
-	retSlot  int64 // slot holding x8 for aggregate returns
-	stubs    strings.Builder
-	failed   bool
+	isLeaf   bool
+	// a call-free statement in a non-leaf function also borrows x2..x7;
+	// leafLeak reports one still held when the statement ended (then the
+	// function is regenerated with noStmtLeaf set)
+	leafLeak, noStmtLeaf bool
+	fpr                  [fprCount]bool
+	fprSpill             [fprCount]int64
+	loops                []loopLabels
+	defers               [][]*syntax.Block // per open block, in declaration order
+	errFor               *syntax.CallExpr  // fallible call whose error code (x1) goes to errReg
+	errReg               reg
+	bodies               map[*sema.Func]*sema.Body // for inline expansion
+	inl                  *inlineCtx                // non-nil while expanding an inline fn body
+	errNext              bool
+	regErr               bool // E0900 already reported for this function                      // the next emitted call is errFor (its arguments are already evaluated)
+	retLabel             string
+	retSlot              int64 // slot holding x8 for aggregate returns
+	stubs                strings.Builder
+	failed               bool
 
 	promoted  map[*sema.Var]preg
 	sliceRegs map[*sema.Var][2]int   // never-reassigned slices: {ptr, len} registers
@@ -635,16 +640,23 @@ func (g *gen) function(b *sema.Body) {
 	if u.leaf {
 		start = 8 // x2..x7 cover the temporaries
 	}
-	for maxG := start; maxG >= 0; maxG-- {
+	g.noStmtLeaf = false
+	for maxG := start; maxG >= 0; {
 		if g.functionTry(b, u, maxG, maxG == 0) {
 			return
 		}
+		if g.leafLeak && !g.noStmtLeaf {
+			g.noStmtLeaf = true
+			continue
+		}
+		maxG--
 	}
 }
 
 func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 	var buf strings.Builder
 	g.final, g.exhausted, g.regErr = final, false, false
+	g.isLeaf, g.leafLeak = u.leaf, false
 	g.promoted = g.choosePromotions(b, u, maxG, 8)
 	g.tempG = gprCount
 	g.fprTouch = [8]bool{}
@@ -782,7 +794,7 @@ func (g *gen) functionTry(b *sema.Body, u useInfo, maxG int, final bool) bool {
 		g.loadSliceRegs(p)
 	}
 	g.block(b.Block)
-	if g.exhausted && !final {
+	if g.leafLeak || (g.exhausted && !final) {
 		return false
 	}
 	if b.Ret == sema.TVoid || b.Test != nil {
