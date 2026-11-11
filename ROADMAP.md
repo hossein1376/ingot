@@ -8,7 +8,10 @@
 - C FFI with the Darwin variadic and stack-packing rules. pthreads, LSE atomics, `@qos`.
 - Register promotion of locals, immediate operands, rotated loops.
 - `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
+- `defer` blocks (inline at every exit, LIFO, checked: no return/escape inside).
+- In-place FMA accumulation into promoted NEON registers, logical immediates, `tst`, single-add addressing.
 - `import`, an embedded `std` (libc, mem arena, par `parallel_for` with QoS), and compile-time `@is_macos()` branches.
+- Examples include a parallel NEON matmul checked against a scalar reference.
 - Tests: diagnostic goldens, e2e goldens under qemu, in-language tests, Mach-O header checks, determinism.
 
 ## Next
@@ -17,7 +20,8 @@
 2. **SSA IR and a real register allocator** (linear scan). This removes the temp copies of promoted
    locals, keeps expression results in registers across statements, and adds spilling instead of the
    "expression too deep" error (E0900).
-3. **Error unions**: `!T`, `try`, `catch`, and exhaustive `switch` on integer and enum values.
+3. **Error unions**: `!T`, `try`, `catch` (with `errdefer` alongside the existing `defer`).
+3b. **Inlining**: `inline fn` with explicit opt-in, so hot helpers (collatz `steps`) lose call overhead.
 4. **Tagged unions** (`union` with payloads) on top of the existing enums and exhaustive `switch`; jump tables for dense switches.
 4b. **`ingot fmt`**: a canonical formatter that keeps comments, so that machine-applied fixes stay tidy.
 5. **Modules**: namespaced imports (`par.parallel_for`), visibility, and a deterministic package hash. v0.1 merges all imports into one namespace.

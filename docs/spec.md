@@ -11,7 +11,7 @@ ambiguous, the compiler reports an error with a fix instead of guessing.
 ## 1. Lexical structure
 
 * Source is UTF-8. Identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Line comments start with `//`. There are no block comments, which keeps tools simple.
-* Keywords: `import enum switch fn pub extern struct let var const if else while for in return break continue true false null as test`.
+* Keywords: `import enum switch defer fn pub extern struct let var const if else while for in return break continue true false null as test`.
 * Builtins are spelled `@name`, so they live in a separate namespace and can never clash with user names.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0b1010`. Float literals: `1.5`, `2e10`, `1.0e-3`. A float needs a digit on both sides of the dot (`1.` is not a float), so `0..n` is never ambiguous.
 * String literals: `"..."` has type `[]u8` (pointer and length, with no terminator counted in `.len`). `c"..."` has type `*u8` and is NUL-terminated, for C. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -42,6 +42,7 @@ block       = "{" { stmt } "}" ;
 stmt        = ( "let" | "var" ) IDENT [ ":" type ] "=" expr ";"
             | "if" expr block [ "else" ( block | if_stmt ) ]
             | "while" expr block
+            | "defer" block
             | "switch" expr "{" { expr { "," expr } "=>" block } [ "else" "=>" block ] "}"
             | "for" IDENT "in" expr ".." expr block
             | "return" [ expr ] ";"
@@ -128,6 +129,13 @@ side is a constant expression. `let p = null;` and `let z = @zero;` are errors (
   There is no fallthrough. A switch on an enum must cover every member or have an `else` arm (E0504,
   whose fix inserts the missing arms). A switch on a plain integer must have an `else` arm (E0503).
   `break` and `continue` inside a switch refer to the enclosing loop.
+* **defer**: `defer { ... }` schedules a block to run when the enclosing block exits, whether it
+  falls off the end or leaves through `return`, `break` or `continue`. Deferred blocks of one scope
+  run in reverse order of declaration, innermost scope first. A `return` value is computed before
+  any deferred block runs. A defer body may not contain `return`, a `break`/`continue` that leaves
+  it, or another `defer` (E0308). Defers are expanded inline at each exit, so they cost nothing at
+  run time beyond the deferred code itself; there is no unwinding, so `@panic` and failed checks
+  do not run them.
 * **Field access through a pointer is explicit**: `p.*.x`, never `p.x` (E0217 suggests the fix).
 
 ## 5. Memory model

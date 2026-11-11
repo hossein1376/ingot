@@ -190,3 +190,51 @@ test "immediate forms: logical masks, tst, power-of-two multiply" {
     @assert(small * 2 as u8 == 144 as u8);
     @assert((small & 0x0f as u8) == 8 as u8);
 }
+
+var d_log: [16]i64 = @zero;
+var d_n: i64 = 0;
+
+fn d_note(v: i64) {
+    d_log[d_n] = v;
+    d_n += 1;
+}
+
+fn d_early(flag: bool) -> i64 {
+    defer { d_note(1); }
+    var x: i64 = 10;
+    defer { d_note(2); }
+    if flag {
+        defer { d_note(3); }
+        return x + 5;
+    }
+    x = 20;
+    return x;
+}
+
+fn d_loop() -> f64 {
+    var acc: f64 = 0.5;
+    for i in 0..4 {
+        defer { d_note(100 + i); }
+        if i == 1 {
+            continue;
+        }
+        if i == 3 {
+            break;
+        }
+        acc += 1.0;
+    }
+    defer { d_note(9); }
+    return acc * 2.0;
+}
+
+test "defer runs in reverse order at every exit, after the return value" {
+    d_n = 0;
+    @assert(d_early(true) == 15);
+    @assert(d_early(false) == 20);
+    @assert(d_loop() == 5.0);
+    let want: [10]i64 = [10]i64.{ 3, 2, 1, 2, 1, 100, 101, 102, 103, 9 };
+    @assert(d_n == 10);
+    for i in 0..10 {
+        @assert(d_log[i] == want[i]);
+    }
+}

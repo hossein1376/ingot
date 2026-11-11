@@ -123,6 +123,8 @@ func (g *gen) analyze(b *sema.Body) useInfo {
 			if s.Value != nil {
 				expr(s.Value, w)
 			}
+		case *syntax.DeferStmt:
+			stmt(s.Body, w*2) // emitted at every exit
 		case *syntax.SwitchStmt:
 			expr(s.X, w)
 			for _, cs := range s.Cases {

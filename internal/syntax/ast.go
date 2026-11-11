@@ -193,6 +193,12 @@ type (
 		// Exhaustive is set by the checker when every enum member is covered.
 		Exhaustive bool
 	}
+	// DeferStmt runs Body when the enclosing block exits (normally or via
+	// return/break/continue), in reverse order of declaration.
+	DeferStmt struct {
+		Body *Block
+		Sp   diag.Span
+	}
 	BreakStmt    struct{ Sp diag.Span }
 	ContinueStmt struct{ Sp diag.Span }
 	Block        struct {
@@ -219,6 +225,7 @@ type SwitchCase struct {
 }
 
 func (s *ContinueStmt) SSpan() diag.Span { return s.Sp }
+func (s *DeferStmt) SSpan() diag.Span    { return s.Sp }
 func (s *Block) SSpan() diag.Span        { return s.Sp }
 
 // ---- Declarations ----

@@ -81,6 +81,10 @@ type checker struct {
 	sc      *scope
 	body    *Body
 	loops   int
+	// inDefer is set while checking a defer body; loopsAtDefer is the loop
+	// depth outside it (break/continue may not leave the defer body).
+	inDefer      bool
+	loopsAtDefer int
 }
 
 // Check type-checks f.
@@ -441,6 +445,9 @@ func (c *checker) stmt(s syntax.Stmt) {
 		c.loops--
 		c.sc = c.sc.parent
 	case *syntax.ReturnStmt:
+		if c.inDefer {
+			c.dl.Errorf("E0308", s.Sp, "return is not allowed inside a defer body")
+		}
 		if s.Value == nil {
 			if c.body.Ret != TVoid {
 				d := c.dl.Errorf("E0305", s.Sp, "missing return value of type %s", c.body.Ret)
@@ -457,7 +464,19 @@ func (c *checker) stmt(s syntax.Stmt) {
 		c.assignable(c.expr(s.Value, c.body.Ret), c.body.Ret, s.Value)
 	case *syntax.SwitchStmt:
 		c.switchStmt(s)
+	case *syntax.DeferStmt:
+		if c.inDefer {
+			c.dl.Errorf("E0308", s.Sp, "defer inside a defer body is not allowed")
+		}
+		saved, savedLoops := c.inDefer, c.loopsAtDefer
+		c.inDefer, c.loopsAtDefer = true, c.loops
+		c.block(s.Body, true)
+		c.inDefer, c.loopsAtDefer = saved, savedLoops
 	case *syntax.BreakStmt, *syntax.ContinueStmt:
+		if c.inDefer && c.loops == c.loopsAtDefer {
+			c.dl.Errorf("E0308", s.SSpan(), "break/continue may not leave a defer body")
+			return
+		}
 		if c.loops == 0 {
 			c.dl.Errorf("E0306", s.SSpan(), "break/continue outside of a loop")
 		}

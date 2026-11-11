@@ -56,6 +56,11 @@ fn reference(a: *f32, b: *f32, n: i64, i: i64, j: i64) -> f32 {
 pub fn main() -> i32 {
     let bytes: u64 = (N * N * 4) as u64;
     var m: Mats = Mats.{ a: malloc(bytes) as *f32, b: malloc(bytes) as *f32, c: malloc(bytes) as *f32, n: N };
+    defer {
+        free(m.a as *u8);
+        free(m.b as *u8);
+        free(m.c as *u8);
+    }
     for i in 0..N * N {
         // small integers keep every partial sum exact in f32
         m.a[i] = ((i % 5) - 2) as f32;
@@ -75,9 +80,6 @@ pub fn main() -> i32 {
     let secs: f64 = ((t1 - t0) as f64) / (@tick_freq() as f64);
     let gflop: f64 = 2.0 * ((N * N * N) as f64) / 1000000000.0;
     printf(c"matmul %lldx%lld: %lld mismatches, %.3f ms, %.2f GFLOP/s\n", N, N, bad, secs * 1000.0, gflop / secs);
-    free(m.a as *u8);
-    free(m.b as *u8);
-    free(m.c as *u8);
     if bad != 0 {
         return 1;
     }

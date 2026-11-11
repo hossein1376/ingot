@@ -34,7 +34,10 @@ type reg struct {
 	abs int
 }
 
-type loopLabels struct{ brk, cont string }
+type loopLabels struct {
+	brk, cont string
+	depth     int // len(defers) at loop entry; break/continue run deeper defers
+}
 
 type gen struct {
 	t    Target
@@ -60,6 +63,7 @@ type gen struct {
 	fpr      [fprCount]bool
 	fprSpill [fprCount]int64
 	loops    []loopLabels
+	defers   [][]*syntax.Block // per open block, in declaration order
 	retLabel string
 	retSlot  int64 // slot holding x8 for aggregate returns
 	stubs    strings.Builder

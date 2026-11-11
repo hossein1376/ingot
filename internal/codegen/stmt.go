@@ -8,9 +8,40 @@ import (
 )
 
 func (g *gen) block(b *syntax.Block) {
+	g.defers = append(g.defers, nil)
 	for _, s := range b.Stmts {
 		g.stmt(s)
 	}
+	if n := len(b.Stmts); n == 0 || !exits(b.Stmts[n-1]) {
+		g.runDefers(len(g.defers) - 1)
+	}
+	g.defers = g.defers[:len(g.defers)-1]
+}
+
+// exits reports whether s unconditionally leaves the block by a jump (its
+// own defers were already emitted at the jump).
+func exits(s syntax.Stmt) bool {
+	switch s.(type) {
+	case *syntax.ReturnStmt, *syntax.BreakStmt, *syntax.ContinueStmt:
+		return true
+	}
+	return false
+}
+
+// runDefers emits the deferred bodies of every open block at depth >= from,
+// innermost first, each block's defers in reverse order.
+func (g *gen) runDefers(from int) {
+	saved := g.defers
+	for d := len(saved) - 1; d >= from; d-- {
+		list := saved[d]
+		for i := len(list) - 1; i >= 0; i-- {
+			// a defer body sees only the scopes outside it; copy so its own
+			// block scope does not overwrite saved entries
+			g.defers = append([][]*syntax.Block(nil), saved[:d]...)
+			g.block(list[i])
+		}
+	}
+	g.defers = saved
 }
 
 func (g *gen) typeOf(e syntax.Expr) *sema.Type { return g.info.Types[e] }
@@ -24,6 +55,9 @@ func (g *gen) stmt(s syntax.Stmt) {
 		g.initVar(lv, s.Value)
 	case *syntax.AssignStmt:
 		g.assign(s)
+	case *syntax.DeferStmt:
+		top := len(g.defers) - 1
+		g.defers[top] = append(g.defers[top], s.Body)
 	case *syntax.ExprStmt:
 		r, ok := g.expr(s.X)
 		if ok {
@@ -57,7 +91,7 @@ func (g *gen) stmt(s syntax.Stmt) {
 		// rotated loop: test at the bottom, one branch per iteration
 		g.emit("b %s", cont)
 		g.label(top)
-		g.loops = append(g.loops, loopLabels{brk: end, cont: cont})
+		g.loops = append(g.loops, loopLabels{brk: end, cont: cont, depth: len(g.defers)})
 		g.block(s.Body)
 		g.loops = g.loops[:len(g.loops)-1]
 		g.label(cont)
@@ -85,7 +119,7 @@ func (g *gen) stmt(s syntax.Stmt) {
 		top, cont, test, end := g.newLabel("for"), g.newLabel("fnext"), g.newLabel("ftest"), g.newLabel("fend")
 		g.emit("b %s", test)
 		g.label(top)
-		g.loops = append(g.loops, loopLabels{brk: end, cont: cont})
+		g.loops = append(g.loops, loopLabels{brk: end, cont: cont, depth: len(g.defers)})
 		g.block(s.Body)
 		g.loops = g.loops[:len(g.loops)-1]
 		g.label(cont)
@@ -119,10 +153,15 @@ func (g *gen) stmt(s syntax.Stmt) {
 		if s.Value != nil {
 			t := g.typeOf(s.Value)
 			r, _ := g.expr(s.Value)
-			switch {
-			case t.IsAggregate():
+			if t.IsAggregate() {
 				g.emit("ldr x14, %s", g.mem(g.retSlot))
 				g.copyMem("x14", x(r), t.Size)
+			}
+			// the value is computed before deferred code runs; it stays in
+			// its temporary (preserved across calls) until the jump
+			g.runDefers(0)
+			switch {
+			case t.IsAggregate():
 			case r.fp:
 				if t.Kind == sema.Vec {
 					g.emit("mov v0.16b, %s.16b", v(r))
@@ -133,6 +172,8 @@ func (g *gen) stmt(s syntax.Stmt) {
 				g.emit("mov x0, %s", x(r))
 			}
 			g.free(r)
+		} else {
+			g.runDefers(0)
 		}
 		g.emit("b %s", g.retLabel)
 	case *syntax.SwitchStmt:
@@ -169,9 +210,13 @@ func (g *gen) stmt(s syntax.Stmt) {
 		}
 		g.label(end)
 	case *syntax.BreakStmt:
-		g.emit("b %s", g.loops[len(g.loops)-1].brk)
+		l := g.loops[len(g.loops)-1]
+		g.runDefers(l.depth)
+		g.emit("b %s", l.brk)
 	case *syntax.ContinueStmt:
-		g.emit("b %s", g.loops[len(g.loops)-1].cont)
+		l := g.loops[len(g.loops)-1]
+		g.runDefers(l.depth)
+		g.emit("b %s", l.cont)
 	}
 }
 
