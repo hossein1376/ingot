@@ -177,3 +177,16 @@ test "enums and exhaustive switch" {
     @assert(classify(-5) == -1);
     @assert(classify(1000) == 99);
 }
+
+test "immediate forms: logical masks, tst, power-of-two multiply" {
+    var x: i64 = 0x1234;
+    @assert((x & 0xff) == 0x34);
+    @assert((x | 0xf0) == 0x12f4);
+    @assert((x ^ 1) == 0x1235);
+    @assert(x * 8 == 0x91a0);
+    @assert((x & 4) != 0);
+    @assert((x & 8) == 0);
+    let small: u8 = 200 as u8;
+    @assert(small * 2 as u8 == 144 as u8);
+    @assert((small & 0x0f as u8) == 8 as u8);
+}

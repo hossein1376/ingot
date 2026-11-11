@@ -26,10 +26,12 @@ const (
 	saveArea = 144 // bytes below x29 reserved for x19..x28 and d8..d15
 )
 
-// reg is an allocated pool register.
+// reg is an allocated pool register, or (abs != 0) a borrowed read-only
+// view of a promoted variable's register.
 type reg struct {
-	n  int
-	fp bool
+	n   int
+	fp  bool
+	abs int
 }
 
 type loopLabels struct{ brk, cont string }
@@ -159,6 +161,9 @@ func (g *gen) alloc(t *sema.Type, sp diag.Span) reg {
 }
 
 func (g *gen) free(r reg) {
+	if r.abs != 0 {
+		return
+	}
 	if r.fp {
 		g.fpr[r.n] = false
 	} else {
@@ -166,20 +171,30 @@ func (g *gen) free(r reg) {
 	}
 }
 
-func x(r reg) string { return fmt.Sprintf("x%d", gprBase+r.n) }
-func w(r reg) string { return fmt.Sprintf("w%d", gprBase+r.n) }
-func v(r reg) string { return fmt.Sprintf("v%d", fprBase+r.n) }
+func num(r reg) int {
+	switch {
+	case r.abs != 0:
+		return r.abs
+	case r.fp:
+		return fprBase + r.n
+	}
+	return gprBase + r.n
+}
+
+func x(r reg) string { return fmt.Sprintf("x%d", num(r)) }
+func w(r reg) string { return fmt.Sprintf("w%d", num(r)) }
+func v(r reg) string { return fmt.Sprintf("v%d", num(r)) }
 
 // rn names a register for a scalar type.
 func rn(r reg, t *sema.Type) string {
 	if r.fp {
 		switch {
 		case t.Kind == sema.Vec:
-			return fmt.Sprintf("q%d", fprBase+r.n)
+			return fmt.Sprintf("q%d", num(r))
 		case t.Size == 4:
-			return fmt.Sprintf("s%d", fprBase+r.n)
+			return fmt.Sprintf("s%d", num(r))
 		}
-		return fmt.Sprintf("d%d", fprBase+r.n)
+		return fmt.Sprintf("d%d", num(r))
 	}
 	return x(r)
 }

@@ -113,8 +113,8 @@ relative order means anything:
 
 | kernel | Ingot | C -O0 | C -O2 (zig cc / clang) |
 |---|---|---|---|
-| collatz (integer, branchy) | 0.43 s | 2.51 s | 0.36 s |
-| dot (NEON f32x4 FMA) | 1.37 s | 3.10 s | 1.28 s |
+| collatz (integer, branchy; C inlines the hot function, Ingot does not yet) | 0.44 s | 2.48 s | 0.33 s |
+| dot (NEON f32x4 FMA) | 1.32 s | 3.00 s | 1.30 s |
 
 **Not verified on real Apple hardware yet:** running the Mach-O binaries (they link, carry
 `LC_MAIN`, `LC_CODE_SIGNATURE` and `LC_BUILD_VERSION`, and pass header checks), actual P/E

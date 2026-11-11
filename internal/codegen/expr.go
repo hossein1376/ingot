@@ -270,7 +270,7 @@ func (g *gen) addr(e syntax.Expr) reg {
 			g.addImm(x(base), x(base), k.I*et.Size)
 			return base
 		}
-		idx, _ := g.expr(e.Index)
+		idx := g.use(e.Index)
 		if g.opt.Safe && (xt.Kind == sema.Array || xt.Kind == sema.Slice) {
 			if xt.Kind == sema.Array {
 				g.movImm("x15", uint64(xt.Len))
@@ -405,7 +405,17 @@ func (g *gen) compare(e *syntax.BinaryExpr) string {
 	if ot == sema.TNull {
 		ot = g.typeOf(e.Y)
 	}
-	a, _ := g.expr(e.X)
+	if k, ok := g.info.Consts[e.Y]; ok && k.I == 0 && (e.Op == "==" || e.Op == "!=") && ot.Kind == sema.Int {
+		if and, ok := e.X.(*syntax.BinaryExpr); ok && and.Op == "&" {
+			if m, ok := g.info.Consts[and.Y]; ok && isLogicalImm(uint64(m.I)) {
+				a := g.use(and.X)
+				g.emit("tst %s, #%d", x(a), uint64(m.I))
+				g.free(a)
+				return intCond[e.Op][0]
+			}
+		}
+	}
+	a := g.use(e.X)
 	if k, ok := g.info.Consts[e.Y]; ok && ot.Kind == sema.Int && !k.IsFloat && k.I >= 0 && k.I < 4096 {
 		g.emit("cmp %s, #%d", x(a), k.I)
 		g.free(a)
@@ -415,7 +425,7 @@ func (g *gen) compare(e *syntax.BinaryExpr) string {
 		}
 		return pair[1]
 	}
-	b, _ := g.expr(e.Y)
+	b := g.use(e.Y)
 	var cc string
 	if ot.Kind == sema.Float {
 		g.emit("fcmp %s, %s", rn(a, ot), rn(b, ot))
@@ -513,20 +523,55 @@ func (g *gen) binary(e *syntax.BinaryExpr, t *sema.Type) reg {
 		g.emit("cset %s, %s", w(r), cc)
 		return r
 	}
-	a, _ := g.expr(e.X)
-	g.arithExpr(e.Op, a, e.Y, t, e.Sp)
-	return a
+	a := g.use(e.X)
+	d := a
+	if a.abs != 0 {
+		d = g.alloc(t, e.Sp)
+	}
+	g.arithExpr3(e.Op, d, a, e.Y, t, e.Sp)
+	return d
 }
 
-// arithExpr computes a = a op y, using an immediate form when y is a
-// small constant (add/sub #imm12, shifts by #imm).
+// use evaluates e for reading only. A promoted variable is returned as a
+// borrowed register (no copy); anything else gets a fresh temporary.
+func (g *gen) use(e syntax.Expr) reg {
+	if p, ok := e.(*syntax.ParenExpr); ok {
+		return g.use(p.X)
+	}
+	if id, ok := e.(*syntax.IdentExpr); ok {
+		if lv, ok := g.info.Uses[id].(*sema.Var); ok {
+			if pr, ok := g.promoted[lv]; ok {
+				return reg{abs: pr.n, fp: pr.fp}
+			}
+		}
+	}
+	r, _ := g.expr(e)
+	return r
+}
+
+// arithExpr computes a = a op y.
 func (g *gen) arithExpr(op string, a reg, y syntax.Expr, t *sema.Type, sp diag.Span) {
+	g.arithExpr3(op, a, a, y, t, sp)
+}
+
+// arithExpr3 computes d = a op y, using an immediate form when y is a
+// small constant (add/sub #imm12, shifts by #imm).
+func (g *gen) arithExpr3(op string, d, a reg, y syntax.Expr, t *sema.Type, sp diag.Span) {
 	if k, ok := g.info.Consts[y]; ok && t.Kind == sema.Int && !k.IsFloat {
 		switch {
 		case (op == "+" || op == "-") && k.I >= 0 && k.I < 4096:
 			ins := map[string]string{"+": "add", "-": "sub"}[op]
-			g.emit("%s %s, %s, #%d", ins, x(a), x(a), k.I)
-			g.normalize(a, t)
+			g.emit("%s %s, %s, #%d", ins, x(d), x(a), k.I)
+			g.normalize(d, t)
+			return
+		case (op == "&" || op == "|" || op == "^") && isLogicalImm(uint64(k.I)):
+			ins := map[string]string{"&": "and", "|": "orr", "^": "eor"}[op]
+			g.emit("%s %s, %s, #%d", ins, x(d), x(a), uint64(k.I))
+			g.normalize(d, t)
+			return
+		case op == "*" && k.I > 0 && k.I&(k.I-1) == 0:
+			g.emit("lsl %s, %s, #%d", x(d), x(a), log2(k.I))
+			g.normalize(d, t)
 			return
 		case (op == "<<" || op == ">>") && k.I >= 0 && k.I < t.Size*8:
 			ins := "lsl"
@@ -536,22 +581,39 @@ func (g *gen) arithExpr(op string, a reg, y syntax.Expr, t *sema.Type, sp diag.S
 					ins = "asr"
 				}
 			}
-			g.emit("%s %s, %s, #%d", ins, x(a), x(a), k.I)
-			g.normalize(a, t)
+			g.emit("%s %s, %s, #%d", ins, x(d), x(a), k.I)
+			g.normalize(d, t)
 			return
 		}
 	}
-	b, _ := g.expr(y)
-	g.arith(op, a, b, t, sp)
+	b := g.use(y)
+	g.arith3(op, d, a, b, t, sp)
 	g.free(b)
+}
+
+// isLogicalImm reports whether u is a contiguous run of ones (possibly
+// shifted), a subset of AArch64's bitmask immediates.
+func isLogicalImm(u uint64) bool {
+	if u == 0 || u == ^uint64(0) {
+		return false
+	}
+	for u&1 == 0 {
+		u >>= 1
+	}
+	return u&(u+1) == 0
 }
 
 // arith computes a = a op b for type t.
 func (g *gen) arith(op string, a, b reg, t *sema.Type, sp diag.Span) {
+	g.arith3(op, a, a, b, t, sp)
+}
+
+// arith3 computes d = a op b for type t (d may equal a; b is read-only).
+func (g *gen) arith3(op string, d, a, b reg, t *sema.Type, sp diag.Span) {
 	switch t.Kind {
 	case sema.Float:
 		ins := map[string]string{"+": "fadd", "-": "fsub", "*": "fmul", "/": "fdiv"}[op]
-		g.emit("%s %s, %s, %s", ins, rn(a, t), rn(a, t), rn(b, t))
+		g.emit("%s %s, %s, %s", ins, rn(d, t), rn(a, t), rn(b, t))
 		return
 	case sema.Vec:
 		var ins string
@@ -567,17 +629,17 @@ func (g *gen) arith(op string, a, b reg, t *sema.Type, sp diag.Span) {
 		if op == "&" || op == "|" || op == "^" {
 			ar = "16b"
 		}
-		g.emit("%s %s.%s, %s.%s, %s.%s", ins, v(a), ar, v(a), ar, v(b), ar)
+		g.emit("%s %s.%s, %s.%s, %s.%s", ins, v(d), ar, v(a), ar, v(b), ar)
 		return
 	}
-	A, B := x(a), x(b)
+	D, A, B := x(d), x(a), x(b)
 	switch op {
 	case "+":
-		g.emit("add %s, %s, %s", A, A, B)
+		g.emit("add %s, %s, %s", D, A, B)
 	case "-":
-		g.emit("sub %s, %s, %s", A, A, B)
+		g.emit("sub %s, %s, %s", D, A, B)
 	case "*":
-		g.emit("mul %s, %s, %s", A, A, B)
+		g.emit("mul %s, %s, %s", D, A, B)
 	case "/", "%":
 		if g.opt.Safe {
 			g.emit("cbz %s, %s", B, g.panicStub(sp, "division by zero"))
@@ -587,17 +649,17 @@ func (g *gen) arith(op string, a, b reg, t *sema.Type, sp diag.Span) {
 			div = "sdiv"
 		}
 		if op == "/" {
-			g.emit("%s %s, %s, %s", div, A, A, B)
+			g.emit("%s %s, %s, %s", div, D, A, B)
 		} else {
 			g.emit("%s x16, %s, %s", div, A, B)
-			g.emit("msub %s, x16, %s, %s", A, B, A)
+			g.emit("msub %s, x16, %s, %s", D, B, A)
 		}
 	case "&":
-		g.emit("and %s, %s, %s", A, A, B)
+		g.emit("and %s, %s, %s", D, A, B)
 	case "|":
-		g.emit("orr %s, %s, %s", A, A, B)
+		g.emit("orr %s, %s, %s", D, A, B)
 	case "^":
-		g.emit("eor %s, %s, %s", A, A, B)
+		g.emit("eor %s, %s, %s", D, A, B)
 	case "<<", ">>":
 		amt := B
 		if t.Size < 8 {
@@ -611,9 +673,9 @@ func (g *gen) arith(op string, a, b reg, t *sema.Type, sp diag.Span) {
 				ins = "asr"
 			}
 		}
-		g.emit("%s %s, %s, %s", ins, A, A, amt)
+		g.emit("%s %s, %s, %s", ins, D, A, amt)
 	}
-	g.normalize(a, t)
+	g.normalize(d, t)
 }
 
 func (g *gen) cast(e *syntax.CastExpr, to *sema.Type) reg {
@@ -680,7 +742,12 @@ func (g *gen) call(e *syntax.CallExpr, ret *sema.Type) (reg, bool) {
 		if at == sema.TNull {
 			at = sema.TI64
 		}
-		r, _ := g.expr(a)
+		var r reg
+		if at.IsAggregate() {
+			r, _ = g.expr(a)
+		} else {
+			r = g.use(a)
+		}
 		if at.IsAggregate() {
 			// by-value semantics: pass a pointer to a private copy
 			off := g.slot(at.Size, at.Align)
@@ -729,7 +796,7 @@ func (g *gen) emitCall(direct string, callee reg, args []argLoc, ret *sema.Type,
 	// spill live vector/float temporaries that are not arguments
 	argF := map[int]bool{}
 	for _, a := range args {
-		if a.r.fp {
+		if a.r.fp && a.r.abs == 0 {
 			argF[a.r.n] = true
 		}
 	}
@@ -872,7 +939,7 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		g.free(a)
 		return r, true
 	case "load":
-		p, _ := g.expr(e.Args[0])
+		p := g.use(e.Args[0])
 		r := g.allocF(e.Sp)
 		g.emit("ldr %s, [%s]", rn(r, t), x(p))
 		g.free(p)
@@ -934,8 +1001,8 @@ func (g *gen) builtin(e *syntax.BuiltinCall, t *sema.Type) (reg, bool) {
 		}
 		return a, true
 	case "fma":
-		a, _ := g.expr(e.Args[0])
-		b, _ := g.expr(e.Args[1])
+		a := g.use(e.Args[0])
+		b := g.use(e.Args[1])
 		c, _ := g.expr(e.Args[2])
 		if t.Kind == sema.Vec {
 			g.emit("fmla %s.%s, %s.%s, %s.%s", v(c), arr(t), v(a), arr(t), v(b), arr(t))

@@ -74,10 +74,14 @@ func (g *gen) stmt(s syntax.Stmt) {
 			g.store(lo, g.mem(g.slots[lv]), t)
 		}
 		g.free(lo)
+		// the bound is evaluated once; it stays in a callee-saved register
+		// when the counter is promoted, otherwise in a frame slot
 		hiSlot := g.slot(8, 8)
 		hi, _ := g.expr(s.Hi)
-		g.emit("str %s, %s", x(hi), g.mem(hiSlot))
-		g.free(hi)
+		if !promoted {
+			g.emit("str %s, %s", x(hi), g.mem(hiSlot))
+			g.free(hi)
+		}
 		top, cont, test, end := g.newLabel("for"), g.newLabel("fnext"), g.newLabel("ftest"), g.newLabel("fend")
 		g.emit("b %s", test)
 		g.label(top)
@@ -98,8 +102,13 @@ func (g *gen) stmt(s syntax.Stmt) {
 		if !promoted {
 			g.emit("ldr x9, %s", g.mem(g.slots[lv]))
 		}
-		g.emit("ldr x10, %s", g.mem(hiSlot))
-		g.emit("cmp %s, x10", ctr)
+		if promoted {
+			g.emit("cmp %s, %s", ctr, x(hi))
+			g.free(hi)
+		} else {
+			g.emit("ldr x10, %s", g.mem(hiSlot))
+			g.emit("cmp %s, x10", ctr)
+		}
 		if t.Signed {
 			g.emit("b.lt %s", top)
 		} else {
@@ -210,13 +219,46 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 		g.free(r)
 		return
 	}
-	r, _ := g.expr(val)
+	if pr, ok := g.promoted[lv]; ok && !pr.fp {
+		if k, isConst := g.info.Consts[val]; isConst && t.Kind == sema.Int || isConst && t == sema.TBool {
+			g.movImm(fmt.Sprintf("x%d", pr.n), uint64(k.I))
+			return
+		}
+	}
+	if pr, ok := g.promoted[lv]; ok && g.arithInto(pr, t, val) {
+		return
+	}
+	r := g.use(val)
 	if pr, ok := g.promoted[lv]; ok {
 		g.writePromoted(pr, t, r)
 	} else {
 		g.store(r, g.mem(off), t)
 	}
 	g.free(r)
+}
+
+// arithInto computes an arithmetic expression straight into a promoted
+// variable's register (the destination is written by the last instruction).
+func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
+	b, ok := val.(*syntax.BinaryExpr)
+	if !ok || !opIsArith(b.Op) || t.Kind == sema.Vec || g.info.Consts[val] != (sema.Const{}) {
+		return false
+	}
+	if _, isConst := g.info.Consts[val]; isConst {
+		return false
+	}
+	a := g.use(b.X)
+	g.arithExpr3(b.Op, reg{abs: pr.n, fp: pr.fp}, a, b.Y, t, b.Sp)
+	g.free(a)
+	return true
+}
+
+func opIsArith(op string) bool {
+	switch op {
+	case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":
+		return true
+	}
+	return false
 }
 
 // promotedTarget returns the promoted variable an assignment targets, if any.
@@ -244,16 +286,19 @@ func (g *gen) assign(s *syntax.AssignStmt) {
 	t := g.typeOf(s.Target)
 	if _, pr, ok := g.promotedTarget(s.Target); ok {
 		if s.Op == "=" {
-			r, _ := g.expr(s.Value)
-			g.writePromoted(pr, t, r)
+			if g.arithInto(pr, t, s.Value) {
+				return
+			}
+			r := g.use(s.Value)
+			if r.abs != pr.n || r.fp != pr.fp {
+				g.writePromoted(pr, t, r)
+			}
 			g.free(r)
 			return
 		}
-		cur := g.alloc(t, s.Sp)
-		g.readPromoted(pr, t, cur)
-		g.arithExpr(s.Op[:len(s.Op)-1], cur, s.Value, t, s.Sp)
-		g.writePromoted(pr, t, cur)
-		g.free(cur)
+		// x op= y updates the promoted register in place
+		self := reg{abs: pr.n, fp: pr.fp}
+		g.arithExpr3(s.Op[:len(s.Op)-1], self, self, s.Value, t, s.Sp)
 		return
 	}
 	addr := g.addr(s.Target)
@@ -270,7 +315,7 @@ func (g *gen) assign(s *syntax.AssignStmt) {
 		return
 	}
 	if s.Op == "=" {
-		r, _ := g.expr(s.Value)
+		r := g.use(s.Value)
 		g.store(r, "["+x(addr)+"]", t)
 		g.free(r)
 		g.free(addr)
