@@ -68,6 +68,7 @@ type gen struct {
 	final     bool // last allocation attempt: report exhaustion as an error
 	exhausted bool
 	fprTouch  [8]bool // d8..d15
+	srcLines  []string
 }
 
 // Generate produces assembly for the whole program.
@@ -551,7 +552,10 @@ func (g *gen) srcText(sp diag.Span) string {
 	if g.opt.Src == nil || sp.Start.Line != sp.End.Line {
 		return ""
 	}
-	lines := strings.Split(string(g.opt.Src), "\n")
+	if g.srcLines == nil {
+		g.srcLines = strings.Split(string(g.opt.Src), "\n")
+	}
+	lines := g.srcLines
 	if sp.Start.Line-1 >= len(lines) {
 		return ""
 	}
