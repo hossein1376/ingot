@@ -41,6 +41,20 @@ brevity for regularity:
   `v8`–`v15`.
 * Safety checks (bounds and division) are explicit, cheap (`cmp` + `b.hs` to an
   out-of-line stub) and can be removed with `--unchecked`.
+* Errors are values with a fixed cost. A fallible function (`-> T ! E`) returns its
+  error code in `x1` next to the result, and each `try` or `catch` is one `cbz`. There are no
+  exceptions, unwind tables or hidden allocation, and an error cannot be silently dropped
+  (E0250).
+* `defer` is expanded inline at every exit (fallthrough, `return`, `break`,
+  `continue`, and a failing `try`), so cleanup costs exactly the deferred code.
+* Inlining is opt-in (`inline fn`) and never heuristic, so the code an agent reads in
+  `ingot asm` is predictable. `@select` gives branchless `csel`/`fcsel` when the agent
+  knows a branch is unpredictable.
+* Under register pressure, temporaries are parked in the frame instead of failing the
+  build. A deep expression costs a store and a load, not an error.
+* The heaviest M4 lever, SME (one FP32 `FMOPA` is a 16×16 outer product, about 18× a Neon
+  core per the research notes), is reachable today through `extern fn` and `--link`
+  kernels. It is planned as a language feature.
 
 ## Implementation language: Go
 
@@ -73,4 +87,6 @@ packing (see research.md §2).
   (ROADMAP).
 * **Struct-by-value across the C ABI.** The HFA and composite rules are
   error-prone, so the compiler rejects these cases rather than miscompile them.
-* **Multiple files and modules.** One file is one program for now.
+* **Namespaced modules.** `import` merges files into one namespace (with an embedded
+  `std`). Namespaces and package hashing come later.
+* **A formatter.** There is no `ingot fmt` yet, so fixes are minimal textual edits.
