@@ -126,6 +126,10 @@ switch s {
     Shape.rect(q) => { ... }
     Shape.point => { ... }
 }
+switch p.* {                       // p: *Shape
+    Shape.circle(&r) => { r.* = r.* * 2.0; }   // r: *f64 into the union itself
+    Shape.rect, Shape.point => {}
+}
 ```
 
 * Layout: a `u32` tag (the variant's index, in declaration order) at offset 0, then the
@@ -133,7 +137,9 @@ switch s {
   rounded to that alignment. `@zero` is the first variant with a zero payload.
 * The payload can only be read through a `switch`, so a mismatched read is impossible. A
   switch without `else` must cover every variant (E0504, with a fix). A binding case names
-  one variant. Bindings are immutable copies.
+  one variant. `U.v(x)` binds an immutable copy. `U.v(&p)` binds `p: *T`, which points
+  at the payload in place, so the case can update it. The switched value must then be
+  assignable storage (a `var`, a field or element of one, or `ptr.*`), otherwise E0301.
 * Unions are aggregates: they can be passed and returned by value (`x8`), stored in
   structs, arrays and slices, and returned from fallible functions. They can be generic
   (`union Option[T] { some: T, none }`, used as `Option.[i64].some(3)`). They cannot cross

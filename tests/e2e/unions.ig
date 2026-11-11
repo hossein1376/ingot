@@ -132,3 +132,33 @@ test "generic unions, unions in structs, unions through error unions" {
     let bad: i64 = eval(prog[0..6]) catch e => -1;
     @assert(bad == -1);
 }
+
+// U.v(&p) binds a pointer to the payload, so the case can update it in place
+fn grow(s: *Shape, k: f64) {
+    switch s.* {
+        Shape.circle(&r) => { r.* = r.* * k; }
+        Shape.rect(&q) => {
+            q.*.w = q.*.w * k;
+            q.*.h = q.*.h * k;
+        }
+        Shape.tri(&t) => { t.*[0] = t.*[0] * k; }
+        Shape.point => {}
+    }
+}
+
+test "pointer payload bindings update the union in place" {
+    var c: Shape = Shape.circle(2.0);
+    var r: Shape = Shape.rect(Rect.{ w: 1.0, h: 3.0 });
+    var t: Shape = Shape.tri([3]f64.{ 1.0, 2.0, 3.0 });
+    grow(&c, 2.0);
+    grow(&r, 2.0);
+    grow(&t, 10.0);
+    @assert(area(c) == 48.0);
+    @assert(area(r) == 12.0);
+    @assert(area(t) == 15.0);
+    switch r {
+        Shape.rect(&q) => { q.*.h = 0.5; }
+        Shape.circle, Shape.tri, Shape.point => {}
+    }
+    @assert(area(r) == 1.0);
+}

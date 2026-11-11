@@ -356,14 +356,19 @@ func (c *checker) unionSwitch(s *syntax.SwitchStmt, xt *Type) {
 	for _, cs := range s.Cases {
 		var bind *syntax.IdentExpr
 		var bindKey syntax.Expr
-		vi := -1
+		vi, bindPtr := -1, false
 		for _, v := range cs.Values {
 			fe, ok := v.(*syntax.FieldExpr)
 			var arg *syntax.IdentExpr
+			byPtr := false
 			if call, isCall := v.(*syntax.CallExpr); isCall {
 				fe, ok = call.Fn.(*syntax.FieldExpr)
 				if ok && len(call.Args) == 1 {
-					arg, ok = call.Args[0].(*syntax.IdentExpr)
+					a := call.Args[0]
+					if d, isRef := a.(*syntax.UnaryExpr); isRef && d.Op == "&" {
+						a, byPtr = d.X, true // U.v(&p): p points at the payload in place
+					}
+					arg, ok = a.(*syntax.IdentExpr)
 				} else {
 					ok = false
 				}
@@ -393,13 +398,20 @@ func (c *checker) unionSwitch(s *syntax.SwitchStmt, xt *Type) {
 				} else if u.Types[i] == TVoid {
 					c.dl.Errorf("E0272", v.ESpan(), "%s.%s has no payload to bind", xt.Name, fe.Name)
 				} else {
-					bind, bindKey, vi = arg, v, i
+					bind, bindKey, vi, bindPtr = arg, v, i, byPtr
+					if byPtr {
+						c.checkLvalue(s.X, true) // the pointer must alias real storage
+					}
 				}
 			}
 		}
 		if bind != nil {
 			c.sc = &scope{parent: c.sc, names: map[string]any{}}
-			bv := &Var{Name: bind.Name, Type: u.Types[vi]}
+			bt := u.Types[vi]
+			if bindPtr {
+				bt = PtrTo(bt)
+			}
+			bv := &Var{Name: bind.Name, Type: bt}
 			c.declare(bind.Name, bv, bind.Sp)
 			c.info.Defs[bindKey] = bv
 			c.body.Locals = append(c.body.Locals, bv)

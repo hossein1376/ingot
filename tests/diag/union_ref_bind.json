@@ -1,0 +1,2 @@
+{"severity":"error","code":"E0301","message":"cannot assign to immutable binding \"u\"","span":{"file":"diag/union_ref_bind.ig","start":{"line":9,"col":12},"end":{"line":9,"col":13}},"fixes":[{"message":"declare it with 'var'","edits":[{"span":{"file":"diag/union_ref_bind.ig","start":{"line":8,"col":5},"end":{"line":8,"col":8}},"text":"var"}]}]}
+{"severity":"error","code":"E0301","message":"expression is not assignable","span":{"file":"diag/union_ref_bind.ig","start":{"line":13,"col":12},"end":{"line":13,"col":18}}}

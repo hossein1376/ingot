@@ -692,7 +692,10 @@ func (g *gen) unionSwitch(s *syntax.SwitchStmt) {
 			src := g.allocG(s.Sp)
 			g.emit("ldr %s, %s", x(src), g.mem(as))
 			g.addImm(x(src), x(src), u.PayloadOff)
-			if pt.IsAggregate() {
+			if !sema.Identical(pt, u.Types[g.info.UnionCases[v]]) {
+				// U.v(&p): bind the payload's address, not a copy
+				g.store(src, g.mem(g.slots[bv]), pt)
+			} else if pt.IsAggregate() {
 				dst := g.varAddr(bv, s.Sp)
 				g.copyMem(x(dst), x(src), pt.Size)
 				g.free(dst)
