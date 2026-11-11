@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ usage:
   ingot test  FILE            compile and run the file's test blocks
   ingot fix   FILE            apply the compiler's suggested fixes in place
   ingot builtins              list @builtins
+  ingot explain [CODE|--json] explain a diagnostic code (all codes if none; --json for machines)
   ingot version
 
 flags:
@@ -55,6 +57,8 @@ func run(args []string) int {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return 0
+	case "explain":
+		return explain(args[1:])
 	}
 	cfg := driver.Config{Target: driver.DefaultTarget(), Safe: true}
 	diagFmt, out, file := "text", "", ""
@@ -221,4 +225,32 @@ func sortedKeys(m map[string]string) []string {
 		}
 	}
 	return ks
+}
+
+func explain(args []string) int {
+	if len(args) == 1 && args[0] == "--json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		for _, c := range diag.Codes {
+			enc.Encode(c)
+		}
+		return 0
+	}
+	if len(args) == 0 {
+		for _, c := range diag.Codes {
+			fmt.Printf("%s  %s\n", c.Code, c.Title)
+		}
+		return 0
+	}
+	status := 0
+	for _, a := range args {
+		c, ok := diag.LookupCode(strings.ToUpper(a))
+		if !ok {
+			fmt.Fprintf(os.Stderr, "ingot: unknown diagnostic code %q\n", a)
+			status = 1
+			continue
+		}
+		fmt.Printf("%s: %s\n  %s\n", c.Code, c.Title, c.Explain)
+	}
+	return status
 }

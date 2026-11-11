@@ -65,6 +65,7 @@ eval "$(scripts/setup-toolchain.sh)"
 ./ingot asm  examples/fib.ig                                  # read the generated assembly
 ./ingot check --diag json broken.ig                           # JSON Lines diagnostics
 ./ingot fix broken.ig                                         # apply suggested fixes
+./ingot explain E0106                                         # what a code means and how to fix it
 ```
 
 Environment variables: `INGOT_CC` sets the toolchain command (for example `zig cc` or `clang`),
@@ -81,7 +82,9 @@ $ ingot check --diag json bad.ig
                                               {"span":{...,"start":{"line":2,"col":17},...},"text":")"}]}]}
 ```
 
-Golden examples for each error class are in [`tests/diag/`](tests/diag).
+Golden examples for each error class are in [`tests/diag/`](tests/diag). Every code has an entry in
+`ingot explain` (`ingot explain --json` prints the whole catalog, one object per line), and a test
+fails if the compiler emits a code that the catalog does not document.
 
 ## Examples
 
@@ -95,6 +98,7 @@ Golden examples for each error class are in [`tests/diag/`](tests/diag).
 | [`examples/ffi.ig`](examples/ffi.ig) | Ingot function as a `qsort` callback, `snprintf`, exported `pub fn` |
 | [`examples/errors.ig`](examples/errors.ig) | a bounds-check panic with `file:line:col` |
 | [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
+| [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
 
 The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`) is embedded in the compiler,
 so `import "std/par.ig";` works with no setup.
@@ -102,7 +106,8 @@ so `import "std/par.ig";` works with no setup.
 ## Status and test results
 
 `go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (12 semantics tests plus the example tests),
+(run under qemu-aarch64), in-language `test` blocks (16 semantics tests plus the example tests),
+unit tests for the lexer, parser, checker rules, C struct layout and fix application,
 Mach-O header and load-command checks for every program, and byte-for-byte determinism on both targets.
 
 Compile speed: a generated 35,000-line file (5,000 functions) type-checks and emits 281,000 lines

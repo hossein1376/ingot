@@ -2,6 +2,10 @@ package diag
 
 import (
 	"bytes"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,5 +40,27 @@ func TestJSONIsOneObjectPerLineAndUnescaped(t *testing.T) {
 	}
 	if !strings.Contains(s, "& and == needs parentheses <here>") {
 		t.Fatalf("HTML escaping leaked into JSON: %s", s)
+	}
+}
+
+func TestEveryEmittedCodeIsDocumented(t *testing.T) {
+	re := regexp.MustCompile(`"(E\d{4})"`)
+	err := filepath.WalkDir("../..", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, "codes.go") {
+			return err
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			if _, ok := LookupCode(m[1]); !ok {
+				t.Errorf("%s uses %s, which has no entry in diag.Codes", p, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
