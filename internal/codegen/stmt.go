@@ -240,6 +240,31 @@ func (g *gen) initVar(lv *sema.Var, val syntax.Expr) {
 // arithInto computes an arithmetic expression straight into a promoted
 // variable's register (the destination is written by the last instruction).
 func (g *gen) arithInto(pr preg, t *sema.Type, val syntax.Expr) bool {
+	if bc, ok := val.(*syntax.BuiltinCall); ok {
+		switch {
+		case bc.Name == "zero" && pr.fp:
+			g.emit("movi v%d.16b, #0", pr.n)
+			return true
+		case bc.Name == "zero":
+			g.emit("mov x%d, #0", pr.n)
+			return true
+		case bc.Name == "fma" && pr.fp:
+			// acc = @fma(a, b, acc) accumulates in place
+			if _, cp, ok := g.promotedTarget(bc.Args[2]); ok && cp == pr {
+				a := g.use(bc.Args[0])
+				b := g.use(bc.Args[1])
+				if t.Kind == sema.Vec {
+					g.emit("fmla v%d.%s, %s.%s, %s.%s", pr.n, arr(t), v(a), arr(t), v(b), arr(t))
+				} else {
+					g.emit("fmadd %s, %s, %s, %s", pname(pr, t), rn(a, t), rn(b, t), pname(pr, t))
+				}
+				g.free(a)
+				g.free(b)
+				return true
+			}
+		}
+		return false
+	}
 	b, ok := val.(*syntax.BinaryExpr)
 	if !ok || !opIsArith(b.Op) || t.Kind == sema.Vec || g.info.Consts[val] != (sema.Const{}) {
 		return false

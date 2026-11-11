@@ -262,7 +262,21 @@ func (g *gen) addr(e syntax.Expr) reg {
 			}
 			g.emit("ldr %s, [%s]", x(base), x(base))
 		case sema.Ptr:
-			base, _ = g.expr(e.X)
+			pb := g.use(e.X)
+			if pb.abs != 0 {
+				if _, isK := g.info.Consts[e.Index]; !isK && (et.Size == 1 || et.Size == 2 || et.Size == 4 || et.Size == 8 || et.Size == 16) {
+					// base lives in a promoted register: one add forms the address
+					idx := g.use(e.Index)
+					base = g.allocG(e.Sp)
+					g.emit("add %s, x%d, %s, lsl #%d", x(base), pb.abs, x(idx), log2(et.Size))
+					g.free(idx)
+					return base
+				}
+				base = g.allocG(e.Sp)
+				g.emit("mov %s, x%d", x(base), pb.abs)
+			} else {
+				base = pb
+			}
 		case sema.Vec:
 			base = g.aggAddr(e.X)
 		}
