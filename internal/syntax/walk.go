@@ -52,6 +52,8 @@ func Inspect(n any, f func(any) bool) {
 		e(n.X)
 	case *TryExpr:
 		e(n.X)
+	case *InstExpr:
+		e(n.X)
 	case *CatchExpr:
 		e(n.X)
 		if n.Handler != nil {

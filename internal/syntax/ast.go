@@ -10,6 +10,7 @@ type TypeExpr interface{ TSpan() diag.Span }
 type (
 	NamedType struct {
 		Name string
+		Args []TypeExpr // type arguments of a generic struct: Pair.[f64]
 		Sp   diag.Span
 	}
 	PtrType struct {
@@ -139,6 +140,16 @@ func (e *IndexExpr) ESpan() diag.Span   { return e.Sp }
 func (e *SliceExpr) ESpan() diag.Span   { return e.Sp }
 func (e *CastExpr) ESpan() diag.Span    { return e.Sp }
 
+// InstExpr is an explicit generic instantiation: sum.[f64]. The driver
+// replaces every one with the name of a monomorphized copy before checking.
+type InstExpr struct {
+	X     Expr
+	Types []TypeExpr
+	Sp    diag.Span
+}
+
+func (e *InstExpr) ESpan() diag.Span { return e.Sp }
+
 // TryExpr is `try f(...)`: on error, run defers and return the error.
 type TryExpr struct {
 	X  Expr // a call to a fallible function
@@ -257,17 +268,20 @@ type Param struct {
 }
 
 type FnDecl struct {
-	Pub      bool
-	Extern   bool
-	Inline   bool // expanded at every direct call site
-	Name     string
-	Params   []Param
-	Variadic bool
-	Ret      TypeExpr // nil = void
-	Err      TypeExpr // error enum after '!', nil if the function cannot fail
-	Body     *Block   // nil for extern
-	Sp       diag.Span
-	NameSp   diag.Span
+	Pub    bool
+	Extern bool
+	Inline bool // expanded at every direct call site
+	// TypeParams are the names in `fn f[T, U](...)`; such a function is a
+	// template that is only checked once instantiated as f.[i64, f32].
+	TypeParams []string
+	Name       string
+	Params     []Param
+	Variadic   bool
+	Ret        TypeExpr // nil = void
+	Err        TypeExpr // error enum after '!', nil if the function cannot fail
+	Body       *Block   // nil for extern
+	Sp         diag.Span
+	NameSp     diag.Span
 }
 
 type Field struct {
@@ -277,9 +291,10 @@ type Field struct {
 }
 
 type StructDecl struct {
-	Name   string
-	Fields []Field
-	Sp     diag.Span
+	Name       string
+	TypeParams []string // struct Pair[T] { ... }, instantiated as Pair.[f64]
+	Fields     []Field
+	Sp         diag.Span
 }
 
 type GlobalDecl struct { // const NAME: T = expr;  or  var NAME: T = @zero;
@@ -311,6 +326,9 @@ type TestDecl struct {
 
 // File is a parsed source file.
 type File struct {
+	// Insts records each generic instantiation (filled by the driver), so
+	// errors inside a template can say which instance they come from.
+	Insts   []Instance
 	Name    string
 	Fns     []*FnDecl
 	Structs []*StructDecl
@@ -318,6 +336,13 @@ type File struct {
 	Tests   []*TestDecl
 	Imports []*ImportDecl
 	Enums   []*EnumDecl
+}
+
+// Instance is one monomorphized copy of a generic declaration.
+type Instance struct {
+	Name     string    // e.g. "sum[f64]"
+	Template diag.Span // the generic declaration
+	At       diag.Span // the first use with these type arguments
 }
 
 // ImportDecl is `import "path";` or `import "path" as name;`.

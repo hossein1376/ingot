@@ -75,6 +75,7 @@ func Load(path string, src []byte, dl *diag.List) *syntax.File {
 		merged.Enums = append(merged.Enums, f.Enums...)
 		merged.Globals = append(merged.Globals, f.Globals...)
 	}
+	Monomorphize(merged, dl)
 	return merged
 }
 

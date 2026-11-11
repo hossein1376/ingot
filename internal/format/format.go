@@ -37,7 +37,7 @@ func Source(file string, src []byte) ([]byte, error) {
 		closer := t.Kind == syntax.Punct && (t.Text == "}" || t.Text == ")" || t.Text == "]")
 		if t.Kind == syntax.Punct {
 			switch t.Text {
-			case "{", "(", "[", ".{":
+			case "{", "(", "[", ".{", ".[":
 				opens[l]++
 			case "}", ")", "]":
 				opens[l]--

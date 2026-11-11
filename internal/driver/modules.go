@@ -107,6 +107,9 @@ func (r *renamer) typ(t syntax.TypeExpr) syntax.TypeExpr {
 	switch t := t.(type) {
 	case *syntax.NamedType:
 		t.Name = r.name(t.Name, false)
+		for i := range t.Args {
+			t.Args[i] = r.typ(t.Args[i])
+		}
 	case *syntax.PtrType:
 		t.Elem = r.typ(t.Elem)
 	case *syntax.ArrayType:
@@ -219,6 +222,11 @@ func (r *renamer) expr(e syntax.Expr) {
 		r.expr(e.X)
 	case *syntax.TryExpr:
 		r.expr(e.X)
+	case *syntax.InstExpr:
+		r.expr(e.X)
+		for i := range e.Types {
+			e.Types[i] = r.typ(e.Types[i])
+		}
 	case *syntax.CatchExpr:
 		r.expr(e.X)
 		if e.Handler != nil {

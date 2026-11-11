@@ -30,9 +30,10 @@ func ParseTarget(s string) (Target, error) {
 }
 
 // Sym is the assembly name of a C-level symbol.
-// Module-qualified names ("map.put") become "map__put".
+// Module-qualified names ("map.put") become "map__put", and generic
+// instances ("sum[f64]", "Pair[*u8,i64]") get assembler-safe spellings.
 func (t Target) Sym(name string) string {
-	name = strings.ReplaceAll(name, ".", "__")
+	name = symReplacer.Replace(name)
 	if t.Darwin {
 		return "_" + name
 	}
@@ -97,3 +98,5 @@ func (t Target) DataSection() string {
 	}
 	return ".data"
 }
+
+var symReplacer = strings.NewReplacer(".", "__", "[", "_G_", "]", "_", ",", "_", "*", "P", "(", "_", ")", "_", "-", "_", ">", "_")

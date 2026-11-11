@@ -38,6 +38,7 @@ func Compile(path string, src []byte, cfg Config, dl *diag.List) (string, bool) 
 		return "", false
 	}
 	info := sema.Check(f, dl)
+	AnnotateInstances(f, dl)
 	if dl.HasErrors() {
 		return "", false
 	}

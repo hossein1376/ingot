@@ -165,6 +165,7 @@ func (ps *Parser) fnDecl() *FnDecl {
 	ps.expect("fn")
 	nt := ps.ident()
 	fd.Name, fd.NameSp = nt.Text, ps.sp(nt)
+	fd.TypeParams = ps.typeParams()
 	ps.expect("(")
 	for !ps.is(")") {
 		if ps.accept("...") {
@@ -198,6 +199,7 @@ func (ps *Parser) fnDecl() *FnDecl {
 func (ps *Parser) structDecl() *StructDecl {
 	start := ps.next().Pos
 	sd := &StructDecl{Name: ps.ident().Text}
+	sd.TypeParams = ps.typeParams()
 	ps.expect("{")
 	for !ps.is("}") {
 		ft := ps.ident()
@@ -323,7 +325,12 @@ func (ps *Parser) typeExpr() TypeExpr {
 		return ft
 	case t.Kind == Ident:
 		ps.next()
-		return &NamedType{Name: ps.qualified(t), Sp: ps.from(t.Pos)}
+		nt := &NamedType{Name: ps.qualified(t)}
+		if ps.is(".[") {
+			nt.Args = ps.typeArgs()
+		}
+		nt.Sp = ps.from(t.Pos)
+		return nt
 	}
 	ps.fail("E0104", ps.sp(t), "expected a type, found %s", t)
 	panic(bailout{})
@@ -590,11 +597,20 @@ func (ps *Parser) postfix() Expr {
 			ps.next()
 			x = &DerefExpr{X: x, Sp: ps.from(start)}
 		case ps.is(".{"):
+			if in, ok := x.(*InstExpr); ok {
+				if id, ok := in.X.(*IdentExpr); ok {
+					x = ps.composite(&NamedType{Name: id.Name, Args: in.Types, Sp: in.Sp}, start)
+					continue
+				}
+			}
 			id, ok := x.(*IdentExpr)
 			if !ok {
 				return x
 			}
 			x = ps.composite(&NamedType{Name: id.Name, Sp: id.Sp}, start)
+		case ps.is(".["):
+			ts := ps.typeArgs()
+			x = &InstExpr{X: x, Types: ts, Sp: ps.from(start)}
 		case ps.is("."):
 			ps.next()
 			f := ps.ident()
@@ -733,4 +749,37 @@ func (ps *Parser) qualified(t Tok) string {
 	}
 	ps.next()
 	return t.Text + "." + ps.next().Text
+}
+
+// typeParams parses an optional `[T, U]` after a declaration's name.
+func (ps *Parser) typeParams() []string {
+	if !ps.accept("[") {
+		return nil
+	}
+	var out []string
+	for !ps.is("]") {
+		out = append(out, ps.ident().Text)
+		if !ps.accept(",") {
+			break
+		}
+	}
+	ps.expect("]")
+	if len(out) == 0 {
+		ps.fail("E0111", ps.sp(ps.cur()), "a generic declaration needs at least one type parameter")
+	}
+	return out
+}
+
+// typeArgs parses `.[T1, T2]`.
+func (ps *Parser) typeArgs() []TypeExpr {
+	ps.expect(".[")
+	var out []TypeExpr
+	for !ps.is("]") {
+		out = append(out, ps.typeExpr())
+		if !ps.accept(",") {
+			break
+		}
+	}
+	ps.expect("]")
+	return out
 }
