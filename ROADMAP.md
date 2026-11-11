@@ -29,7 +29,7 @@
    and confirm `@qos` placement with `powermetrics`.
 2. **SSA IR and a real register allocator** (linear scan). This keeps values in registers across
    statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
-3. **Error unions, part 2**: `errdefer` and aggregate/vector results are done. `!` in fn-pointer types (`fn(f64) -> f64 ! E`) is done too. Still to do: error enums shared across modules.
+3. **Error unions, part 2**: `errdefer` and aggregate/vector results are done. `!` in fn-pointer types (`fn(f64) -> f64 ! E`) is done too. Error enums shared across modules work through aliases (`-> T ! m.E`, `try m.f()`). Next: per-variant error payloads.
 4. **Tagged unions, part 2**: `union` with payloads, exhaustive `switch` and payload binding are done. Next are mutable payload access through a pointer binding (`U.v(*p)`), a niche-optimized `Option` for pointers. Union switches already use jump tables when dense.
 4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
 5. **Modules, part 2**: namespaced imports (`import "p" as m;`) are done. Still to do: `pub` visibility for non-exported names, a module-relative suggestion when the alias differs from the module prefix, and a deterministic package hash.
