@@ -1,5 +1,0 @@
-{"severity":"error","code":"E0205","message":"type mismatch: expected fn(i64) -> i64 ! E, found fn(i64) -> i64 (Ingot has no implicit conversions)","span":{"file":"diag/fnptr_err.ig","start":{"line":12,"col":33},"end":{"line":12,"col":38}}}
-{"severity":"error","code":"E0205","message":"type mismatch: expected fn(i64) -> i64, found fn(i64) -> i64 ! E (Ingot has no implicit conversions)","span":{"file":"diag/fnptr_err.ig","start":{"line":13,"col":29},"end":{"line":13,"col":32}}}
-{"severity":"error","code":"E0242","message":"the error type after '!' must be an enum, found i64","span":{"file":"diag/fnptr_err.ig","start":{"line":14,"col":29},"end":{"line":14,"col":32}}}
-{"severity":"error","code":"E0205","message":"type mismatch: expected fn(i64) -> i64, found fn(i64) -> i64 ! E (Ingot has no implicit conversions)","span":{"file":"diag/fnptr_err.ig","start":{"line":14,"col":35},"end":{"line":14,"col":38}}}
-{"severity":"error","code":"E0250","message":"this call can fail with E; handle the error with try or catch","span":{"file":"diag/fnptr_err.ig","start":{"line":15,"col":18},"end":{"line":15,"col":22}}}

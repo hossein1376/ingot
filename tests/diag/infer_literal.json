@@ -1,1 +1,0 @@
-{"severity":"error","code":"E0204","message":"cannot infer the type of \"ptr\"; add a type annotation","span":{"file":"diag/infer_literal.ig","start":{"line":2,"col":9},"end":{"line":2,"col":12}}}

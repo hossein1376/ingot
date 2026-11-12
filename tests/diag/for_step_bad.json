@@ -1,1 +1,0 @@
-{"severity":"error","code":"E0103","message":"for-loop step must be a positive integer literal","span":{"file":"diag/for_step_bad.ig","start":{"line":2,"col":24},"end":{"line":2,"col":25}}}

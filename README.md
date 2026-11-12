@@ -1,160 +1,81 @@
 # Ingot
 
-**A low-overhead systems language that AI agents write and Apple silicon runs.**
+**A systems language written by AI agents, for two specific machines.**
 
-Ingot compiles straight to AArch64 machine code for the Apple M4 Pro (Mach-O,
-Apple arm64 ABI) and for Linux on arm64 (ELF). It has no garbage collector, no runtime
-and no implicit behavior, and it reports precise, machine-readable diagnostics with
-fixes that can be applied automatically.
+Ingot is designed for an Apple M4 Pro and an AMD Ryzen 7 7800X3D, and nothing else. It
+has no garbage collector, no hidden allocation and no implicit behavior. Safe code has
+no undefined behavior: memory errors and data races are compile errors, and bugs such as
+an out-of-range index or an integer overflow are deterministic traps. Parallelism is
+part of the language.
+
+> **Status: specification only.** The language is defined in [docs/](docs/README.md).
+> There is no compiler for it yet. See [ROADMAP.md](ROADMAP.md).
 
 ```ingot
-extern fn printf(fmt: *u8, ...) -> i32;
+import std.Env;
+import std.fs;
+import std.mem.Arena;
+import std.mem.AllocErr;
+import std.simd;
+import std.sync.Atomic;
 
-fn dot(a: *f32, b: *f32, n: i64) -> f32 {
-    var acc: f32x4 = @zero;                       // one NEON register
+enum AppErr { io: from fs.IoErr, alloc: from AllocErr, usage }
+
+/// Counts newline bytes with native-width vectors: 16 lanes on the M4, 64 on the 7800X3D.
+fn count_lines(data: []u8) -> i64 {
+    let n = @lanes(simd.U8);
+    let nl = @splat(simd.U8, '\n');
+    var total: i64 = 0;
     var i: i64 = 0;
-    while i < n {
-        acc = @fma(@load(f32x4, &a[i]), @load(f32x4, &b[i]), acc);   // fmla v.4s
-        i += 4;
+    while i + n <= data.len {
+        total += @count(@load(simd.U8, data, i) == nl);    // bounds check removed by the loop condition
+        i += n;
     }
-    return @reduce_add(acc);                      // faddp
+    return total + @count(@load_tail(simd.U8, data, i) == nl);
 }
 
-pub fn main() -> i32 {
-    var xs: [8]f32 = [8]f32.{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
-    printf(c"%.1f\n", dot(&xs[0], &xs[0], 8) as f64);
-    return 0;
-}
+pub fn main(env: &Env) -> void ! AppErr {
+    if env.args.len != 2 { fail .usage; }
 
-test "dot of ones" {
-    var ones: [4]f32 = [4]f32.{ 1.0, 1.0, 1.0, 1.0 };
-    @assert(dot(&ones[0], &ones[0], 4) == 4.0);
+    var arena = try Arena.init(env.vm, 1 << 30);
+    defer { arena.deinit(); }                              // forgetting this line is a compile error
+
+    let data: []u8 = try fs.read_all(env.fs, env.args[1], &arena);
+
+    let total = Atomic[i64].init(0);
+    par for chunk in data.chunks(1 << 20) {                // all cores; `data` is shared read-only
+        total.add(count_lines(chunk), .relaxed);
+    }
+    @format(env.stdout, "{}\n", total.load(.relaxed)) catch _ => {};
 }
 ```
 
-## Why Ingot
+## What the language is built around
 
-| For agents | For the machine |
+| For the agent writing it | For the machine running it |
 |---|---|
-| One obvious spelling and a regular, keyword-led grammar | Native AArch64, no VM, no runtime |
-| **No implicit conversions, truthiness, shadowing or precedence puzzles** | No GC; aggregates have C layout; heap use is explicit |
-| `--diag json`: stable codes, exact spans, **fix edits**; `ingot fix` applies them | First-class NEON vectors (`f32x4`, `i32x4`, ...) with 1:1 instructions |
-| `test` blocks and `@assert` in the language; `ingot test` runs them | LSE atomics, pthreads via FFI, `@qos` for P/E-core steering |
-| Errors can't be ignored: `-> T ! E` with `try` / `catch`, and `defer` for cleanup | Error checks cost one `cbz` (code in `x1`), with no unwinding tables |
-| Namespaced modules (`import "std/map.ig" as hm;` then `hm.map_put`), so large programs don't collide; explicit generics (`sum.[f64](xs)`, `Pair.[i64, f64]`) with no inference; tagged unions with exhaustive, payload-binding `switch` | Branchless SIMD: `@lanes_lt/le/eq` masks with per-lane `@select` (`fcmgt`/`cmhi` + `bsl`) |
-| `for x in s` over arrays and slices; `ingot api` lists any file's or std's signatures and doc comments | Bounds checks are left out where a loop range proves them, and are otherwise one `cmp`/`b.hs`; `--unchecked` drops them all |
-| Deterministic output (tested) | Darwin ABI details handled: `x18` reserved, variadic args on the stack, packed stack args |
+| A signature is a complete contract: errors, what the result borrows from, what is consumed | Three targets over two CPUs, every CPU feature assumed, no run-time detection |
+| Every check is local to one function body | No GC, no hidden calls, no dynamic dispatch unless written `dyn` |
+| Syntax close to Rust, Zig, Go and Swift, new only where it removes a class of mistake | Arenas as the primary memory strategy, allocators with static dispatch |
+| JSON diagnostics with fix edits, and no warnings | Vector types up to 512 bits on both CPUs, with comparisons giving lane masks |
+| `ingot cost` lists every check, allocation and indirect call that survived | Structured tasks and `par for` on a work-stealing runtime that is linked only when used |
+| The same semantics in every build mode | One kernel form that runs as SIMD, across cores, or on the GPU (Metal, Vulkan) |
 
-See [docs/design.md](docs/design.md) for why things are this way,
-[docs/spec.md](docs/spec.md) for the language and [docs/research.md](docs/research.md)
-for the M4 Pro and ABI facts behind it, with sources.
+## Targets
 
-## Quick start
-
-You need Go 1.22+ and an assembler/linker. On an Apple-silicon Mac, Xcode's `clang` works as-is.
-Anywhere else, `scripts/setup-toolchain.sh` installs `zig cc` and, on x86, `qemu-aarch64`.
-
-```sh
-go build -o ingot ./cmd/ingot
-
-# macOS on Apple silicon (default target there)
-./ingot run examples/fib.ig
-
-# Linux / x86 hosts: build Linux arm64 binaries and run them under qemu
-eval "$(scripts/setup-toolchain.sh)"
-./ingot run  --target linux-arm64 examples/fib.ig
-./ingot test --target linux-arm64 tests/e2e/semantics.ig
-./ingot build --target macos-arm64 examples/simd.ig -o simd   # cross-links a Mach-O binary
-./ingot asm  examples/fib.ig                                  # read the generated assembly
-./ingot check --diag json broken.ig                           # JSON Lines diagnostics
-./ingot fix broken.ig                                         # apply suggested fixes
-./ingot explain E0106                                         # what a code means and how to fix it
-./ingot api std                                               # every std signature and doc comment (--json for machines)
-./ingot fmt --check examples/*.ig                             # canonical indentation (token-preserving)
-```
-
-Environment variables: `INGOT_CC` sets the toolchain command (for example `zig cc` or `clang`),
-and `INGOT_RUNNER` sets the emulator for linux-arm64 on non-arm64 hosts.
-
-## Diagnostics an agent can act on
-
-```console
-$ ingot check --diag json bad.ig
-{"severity":"error","code":"E0106","message":"operator \"&\" mixed with \"==\" requires explicit parentheses",
- "span":{"file":"bad.ig","start":{"line":2,"col":12},"end":{"line":2,"col":17}},
- "notes":["Ingot has no implicit precedence between bitwise/shift operators and other operators"],
- "fixes":[{"message":"parenthesize","edits":[{"span":{...,"start":{"line":2,"col":12},...},"text":"("},
-                                              {"span":{...,"start":{"line":2,"col":17},...},"text":")"}]}]}
-```
-
-Golden examples for each error class are in [`tests/diag/`](tests/diag). Every code has an entry in
-`ingot explain` (`ingot explain --json` prints the whole catalog, one object per line), and a test
-fails if the compiler emits a code that the catalog does not document.
-
-## Examples
-
-| File | Shows |
+| Target | Machine |
 |---|---|
-| [`examples/hello.ig`](examples/hello.ig) | libc call, C strings |
-| [`examples/fib.ig`](examples/fib.ig) | recursion, loops, variadic `printf`, a test block |
-| [`examples/structs.ig`](examples/structs.ig) | structs, pointers (`p.*.x`), arrays, slices, value semantics |
-| [`examples/simd.ig`](examples/simd.ig) | `f32x4` dot product, 4 accumulators, `@ticks` timing |
-| [`examples/threads.ig`](examples/threads.ig) | pthreads, `@atomic_add` (LSE), `@qos` P/E-core steering |
-| [`examples/ffi.ig`](examples/ffi.ig) | Ingot function as a `qsort` callback, `snprintf`, exported `pub fn` |
-| [`examples/errors.ig`](examples/errors.ig) | a bounds-check panic with `file:line:col` |
-| [`examples/parallel.ig`](examples/parallel.ig) | `import "std/par.ig"`: dynamic-chunk `parallel_for` on all cores, NEON in each chunk |
-| [`examples/result.ig`](examples/result.ig) | error unions: `-> i64 ! ParseErr`, `try` through `defer`, `catch e => value` and `catch e => { break; }` |
-| [`examples/hashjoin.ig`](examples/hashjoin.ig) | `import "std/map.ig"`: 1M-key build and 2M-key probe, errors via `catch`, `continue` from a catch block |
-| [`examples/linecount.ig`](examples/linecount.ig) | `import "std/io.ig" as io;`: write and read an 8 MB file, count newlines with `@lanes_eq` masks (NEON) vs scalar, time both with `time.now_ns()` |
-| [`examples/matmul.ig`](examples/matmul.ig) | parallel NEON matrix multiply (4 FMA accumulators in registers), `defer` cleanup, checked against a scalar reference |
+| `aarch64-macos-m4` | Apple M4 Pro, macOS |
+| `x86_64-linux-znver4` | AMD Ryzen 7 7800X3D, Linux |
+| `x86_64-windows-znver4` | AMD Ryzen 7 7800X3D, Windows |
 
-[`examples/sme/`](examples/sme) calls a hand-written **SME** FP32 matmul kernel (`sgemm_sme.S`,
-one 16×16 `FMOPA` per k step on M4) through `extern fn` and `--link`, and checks it against a
-scalar reference: `ingot run --link examples/sme/sgemm_sme.S examples/sme/sgemm.ig`. It passes
-under qemu at 256-bit and 512-bit (M4's) streaming vector lengths, and the Mach-O build links. It
-has not been run on M4 hardware yet.
+## Reading the specification
 
-The standard library (`std/libc.ig`, `std/mem.ig`, `std/par.ig`, `std/map.ig`, `std/io.ig`, `std/time.ig`, `std/vec.ig`, `std/hashmap.ig`) is embedded in the compiler,
-so `import "std/par.ig";` works with no setup.
+Start with [docs/README.md](docs/README.md). It maps the goals to the design, gives the
+whole design on one page and records the decisions that shaped it.
 
-## Status and test results
+## History
 
-`go test ./...` covers JSON diagnostic goldens, the `ingot fix` round trip, e2e stdout and exit-code goldens
-(run under qemu-aarch64), in-language `test` blocks (33 semantics tests, plus module, generics, union, std and example tests),
-unit tests for the lexer, parser, checker rules, C struct layout and fix application,
-a mutation fuzzer (`internal/fz`: no compiler panics, no failure without a diagnostic; a 40,000-mutant
-run put 9,798 mutants through codegen, and a sample of 244 of them assembled cleanly for both targets),
-Mach-O header and load-command checks for every program, and byte-for-byte determinism on both targets.
-
-Compile speed: a generated 35,000-line file (5,000 functions) type-checks and emits 281,000 lines
-of assembly in about 0.19 s on the build box, an x86-64 Linux VM.
-
-Benchmarks (`bench/run.sh`): **these ran under qemu-user on x86-64, so they are emulated**. Only the
-relative order means anything:
-
-| kernel | Ingot | C -O0 | C -O2 (zig cc / clang) |
-|---|---|---|---|
-| collatz (integer; `inline fn` helper, branchless `@select` step) | 0.36 s | 2.40 s | 0.33 s |
-| dot (NEON f32x4 FMA) | 1.50 s | 3.39 s | 1.48–1.73 s |
-| vm (stack-VM bytecode interpreter, dense `switch` jump table) | 0.75–0.82 s (0.47–0.53 s `--unchecked`) | 5.05–5.26 s | 0.44–0.45 s |
-
-The box was noisier for the dot and vm runs (Nov 11, 2026) than for the collatz row. The vm
-kernel's gap to C -O2 comes from the bounds checks and from operands that still live in the
-frame. An SSA register allocator (roadmap item 2) is the fix.
-
-**Not verified on real Apple hardware yet:** running the Mach-O binaries (they link, carry
-`LC_MAIN`, `LC_CODE_SIGNATURE` and `LC_BUILD_VERSION`, and pass header checks), actual P/E
-placement from `@qos`, and real M4 Pro timings. See [ROADMAP.md](ROADMAP.md).
-
-## Layout
-
-```
-cmd/ingot          CLI driver
-internal/syntax    lexer, AST, parser (precedence-mixing rule lives here)
-internal/sema      types, C layouts, type checker, builtins
-internal/codegen   AArch64 backend: targets (Mach-O/ELF), frames, register promotion, ABI
-internal/diag      diagnostics, JSON output, fix application
-internal/driver    phases + toolchain invocation
-tests/             diag goldens, e2e goldens, in-language semantics tests
-bench/             Ingot vs C kernels
-```
+An earlier prototype compiler for a smaller language of the same name was removed from
+the tree when the specification in `docs/` became the definition of Ingot. It is in git
+history at commit `ab090de`.

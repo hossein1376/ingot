@@ -1,10 +1,10 @@
 # Research notes
 
-This file collects the facts that shaped Ingot's design. Every number here
-links to a source. Where nothing public settles a question, it says so
-instead of guessing. Sources were read on 2026-11-11.
+Facts that the specification depends on. Sections 1 to 3 link every number to a source;
+those sources were read on 2026-11-11. Section 4 lists what the specification currently
+states from general knowledge and still needs a source or a measurement on the machine.
 
-## 1. The target: Apple M4 Pro
+## 1. Apple M4 Pro
 
 | Fact | Source |
 |---|---|
@@ -16,74 +16,53 @@ instead of guessing. Sources were read on 2026-11-11.
 | M4 was the first publicly available silicon with SME. | Remke & Breuer, *Hello SME!* (arXiv:2409.18779), <https://arxiv.org/abs/2409.18779> |
 | On M4 the streaming vector length (SVL) is **512 bits**, so ZA is 4096 bytes and one FP32 `FMOPA` is a 16×16 outer product (512 flops). Measured on one M4 P core: Neon FP32 `FMLA` 113 GFLOPS, SME FP32 `FMOPA` 2009 GFLOPS with four ZA tiles in use (502 with one tile, so the latency is about 4 cycles). SSVE (streaming SVE) `FMLA` is only 31 GFLOPS. E cores reach 357 GFLOPS with `FMOPA`. The results point to two shared SME units, one per cluster, with about 2.3 TFLOPS combined. Direct loads into ZA are slower than loading into Z registers and then moving to ZA. These numbers are for the base M4 (an iPad Pro), not measured on an M4 Pro. | Remke & Breuer, *Hello SME!*, Sec. II-B, III-C, III-F, III-G and Table I |
 
-**What this means for codegen**
+**What this means for the design**
 
-* **128-bit NEON is the portable SIMD baseline.** M4 has no SVE, so
-  Ingot's first-class vector types are fixed 128-bit types (`f32x4`, `i32x4`, ...). Each one
-  maps to exactly one `V` register. SME/SME2 (streaming mode and the ZA tile) is the
-  path to matrix throughput. It needs an explicit mode switch (`smstart` and `smstop`),
-  so it belongs in a separate, explicit language feature. See ROADMAP. Until that exists,
-  `--link` lets an Ingot program call a hand-written SME kernel
-  (`examples/sme/sgemm_sme.S`). For FP32 matrix work this is the largest single speedup
-  on the chip (about 18× a Neon core in the measurements above). The kernel is written for any
-  vector length, so qemu can test it at 256 and 512 bits.
-* **Register-to-register moves are cheap.** On cores with zero-cycle moves, a
-  `mov` between registers is renamed instead of executed. The MVP backend leans on this:
-  promoted locals are copied into temporaries with plain `mov`. Removing those copies is
-  the job of the future register allocator, not a correctness issue.
-* **Compare and branch can fuse.** Ingot lowers `if`, `while` and `for`
-  conditions straight to `cmp` + `b.cond`, or to `cbz`/`cbnz`, and never
-  materializes a boolean first. Loops are rotated so each iteration has exactly one
-  backward branch.
+* **128-bit NEON is the native vector width**, because M4 has no SVE. Wider vector types
+  are lowered to several registers (specification section 26).
+* **SME is the path to matrix throughput**: about 18× a Neon core for FP32 in the
+  measurements above. It needs an explicit mode switch (`smstart`/`smstop`) and its own
+  register state, which is why the specification reaches it through a library first.
+* **Overflow and bounds checks are cheap here.** Arithmetic followed by a conditional
+  branch fuses, so a trapping `add` is close to free when the branch is predicted.
 * **Explicit core placement is impossible, and steering is the sanctioned route.** No
   Apple document gives user code hard thread-to-core affinity on Apple silicon. Apple
-  points developers to Quality-of-Service classes instead (§3). We have not found a
-  public, citable figure for M4 P-core decode width, ROB size or cache sizes, so
-  Ingot makes no design decision that depends on them.
+  points developers to quality-of-service classes instead (section 3 below).
+* We have not found a public, citable figure for M4 P-core decode width, reorder-buffer
+  size or cache sizes, so the design does not depend on them.
 
-## 2. The Darwin arm64 ABI (differences from AAPCS64)
+## 2. The Apple arm64 ABI (differences from AAPCS64)
 
 Source: Apple, *Writing ARM64 code for Apple platforms*,
 <https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms>.
 Base standard: Arm, *Procedure Call Standard for the Arm 64-bit Architecture*,
 <https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst>.
 
-| Rule | How Ingot handles it |
+| Rule | What the compiler must do |
 |---|---|
-| **`x18` is reserved.** Don't use it. | The backend never allocates `x18`, on any target. |
-| **`x29` must always address a valid frame record.** | Every function sets up `stp x29, x30` / `mov x29, sp`, so stack traces always work. |
-| **Variadic arguments always go on the stack, in 8-byte slots** (and `va_list` is `char*`). | `emitCall` puts every variadic argument on the stack for `macos-arm64`. On Linux, AAPCS64 passes them in registers. This is the most common cause of wrong `printf` output on Apple silicon. |
-| **Non-variadic stack arguments are packed at their natural alignment**, not rounded up to 8 bytes. | `stackSlot()` packs on Darwin and rounds to 8 on Linux, for both incoming and outgoing arguments. |
-| **The caller sign- or zero-extends arguments narrower than 32 bits.** (AAPCS64 makes the callee do it.) | Ingot keeps every integer extended to 64 bits in registers, which satisfies the Darwin rule. Callees still re-extend promoted narrow parameters for Linux callers. |
-| `char` is signed and `long` is 64 bits. `long double` is the same as `double`. | Ingot has no `char` or `long`; you write `i8`/`u8` and `i64`. FFI declarations say exactly what they mean. |
-| Red zone: 128 bytes below `sp` that the OS won't touch. | Not used yet; every function has a frame. It's a possible leaf-function optimization. |
-| `sp` is 16-byte aligned. | The frame size is rounded to 16. |
-| C symbols have a leading `_`, and `adrp`/`add` use `sym@PAGE` / `sym@PAGEOFF`. External addresses go through the GOT (`@GOTPAGE`/`@GOTPAGEOFF`). | `codegen.Target` abstracts symbols, relocations and section names (`__TEXT,__text`, `__TEXT,__cstring`, `__DATA,__bss` via `.zerofill`). |
+| **`x18` is reserved.** | Never allocate `x18`. |
+| **`x29` must always address a valid frame record.** | Keep a frame pointer in every function. |
+| **Variadic arguments always go on the stack, in 8-byte slots** (and `va_list` is `char*`). | Put every variadic argument of an `extern` call on the stack. This is the most common cause of wrong `printf` output on Apple silicon. |
+| **Non-variadic stack arguments are packed at their natural alignment**, not rounded up to 8 bytes. | Pack stack arguments for `extern` and `export` functions. |
+| **The caller sign- or zero-extends arguments narrower than 32 bits.** (AAPCS64 makes the callee do it.) | Extend narrow integers before an `extern` call. |
+| `char` is signed and `long` is 64 bits. `long double` is the same as `double`. | Nothing: Ingot declarations state exact widths. |
+| Red zone: 128 bytes below `sp` that the OS will not touch. | Optional leaf-function optimization. |
+| `sp` is 16-byte aligned. | Round frame sizes to 16. |
+| C symbols have a leading `_`. External addresses go through the GOT. | Handled by the object writer or by LLVM. |
 
 ### Memory, pages and W^X
 
-* **Pages are 16 KB on Apple silicon (4 KB is typical on x86 Linux).** Apple lists
-  "virtual memory page sizes" and "cache line sizes" as known differences when porting,
-  and says to query them at run time (`sysconf(_SC_PAGESIZE)`, `vm_page_size`).
-  Sources: Apple, *Porting your macOS apps to Apple silicon*,
+* **Pages are 16 KB on Apple silicon.** Source: Apple, *Porting your macOS apps to Apple
+  silicon*,
   <https://developer.apple.com/documentation/apple-silicon/porting-your-macos-apps-to-apple-silicon>.
-  Ingot doesn't bake in a page size. Allocation goes through libc (`malloc`, `mmap`), and a
-  future `std.mem.page_size()` will query it.
-* **W^X:** Apple silicon enforces that memory is never writable and executable *at the
-  same time*. JIT code must use `mmap(MAP_JIT)` and switch write access per thread with
-  `pthread_jit_write_protect_np`, then invalidate the instruction cache.
-  Hardened-runtime apps also need the `com.apple.security.cs.allow-jit` entitlement.
-  Source: Apple, *Porting just-in-time compilers to Apple silicon*,
+* **W^X:** memory is never writable and executable at the same time. JIT code must use
+  `mmap(MAP_JIT)` and `pthread_jit_write_protect_np`. Source: Apple, *Porting
+  just-in-time compilers to Apple silicon*,
   <https://developer.apple.com/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon>.
-  Ingot's MVP compiles ahead of time, so W^X doesn't apply yet. The planned in-process JIT
-  mode (`ingot run --jit`) has to follow this protocol.
-* **Mach-O executables on arm64 must be code-signed** (ad hoc at minimum). This is
-  general macOS knowledge, not something we could exercise here. The `zig cc` link
-  used on this box emits an `LC_CODE_SIGNATURE` load command, and `TestMachO` checks
-  for it together with `LC_MAIN` and `LC_BUILD_VERSION`. Whether the kernel accepts
-  that signature at exec time is *not verified*, because the build box is Linux.
+  Ingot compiles ahead of time, so this matters only if a JIT is ever added.
+* **Mach-O executables on arm64 must be code-signed**, ad hoc at minimum.
 
-## 3. Threads and P/E cores
+## 3. Threads and P/E cores on macOS
 
 Apple's guidance (*Tuning your code's performance for Apple silicon*,
 <https://developer.apple.com/documentation/apple-silicon/tuning-your-code-s-performance-for-apple-silicon>,
@@ -91,49 +70,59 @@ and *Optimize for Apple Silicon with performance and efficiency cores*,
 <https://developer.apple.com/news/?id=vk3m204o>):
 
 * Placement on P or E cores is driven by **QoS classes**: user-interactive,
-  user-initiated, utility, background. For pthreads, `pthread_set_qos_class_self_np` sets them.
-* Don't statically split work evenly across threads, because P and E cores progress at
-  different speeds. Instead, use many small chunks with work stealing (GCD's
-  `dispatch_apply`), and at least 3× as many iterations as there are cores.
+  user-initiated, utility, background. For pthreads, `pthread_set_qos_class_self_np`
+  sets them. The values are the `qos_class_t` constants from `<sys/qos.h>` (0x21, 0x19,
+  0x11, 0x09).
+* Do not split work evenly across threads, because P and E cores progress at different
+  speeds. Use many small chunks with work stealing, and at least 3× as many chunks as
+  there are cores.
 
-Ingot exposes this with no runtime of its own:
+This is the basis for the worker groups and the chunking rule in specification sections
+19 and 23.
 
-* `@qos(class)` calls `pthread_set_qos_class_self_np(class, 0)` on macOS and does
-  nothing on Linux. The class values are the `qos_class_t` constants (0x21 interactive,
-  0x19 user-initiated, 0x11 utility, 0x09 background) from `<sys/qos.h>`.
-* Threads are plain pthreads through FFI. `fn` values are C function pointers, so
-  `pthread_create(&t, null, worker, arg)` works directly. A work-stealing `std.par` is on
-  the roadmap.
-* Atomics use the ARMv8.1 LSE instructions (`ldaddal`, `casal`) plus `ldar` and `stlr`.
-  These are single instructions, not LL/SC loops.
+## 4. Not yet sourced
 
-## 4. What languages do well or badly for AI-agent authors
+The specification states the following from general knowledge. Each needs a primary
+source or a measurement on the machine before the value is frozen.
 
-This section is the design argument, drawn from known language properties rather than
-measured studies. No rigorous public benchmark of LLM error rates across languages
-exists, so we don't quote one.
+**M4 Pro**
 
-| Property | Helps agents | Hurts agents | Ingot's choice |
-|---|---|---|---|
-| Grammar | Regular, keyword-led statements (Go, Zig) | Context-sensitive parsing (C declarators, C++ templates, Rust turbofish) | Every declaration and statement starts with a keyword or is an expression statement. Types are written `name: T`, never with C-style declarator syntax. |
-| Implicit conversions | None (Go, Zig, Rust) | C integer promotions and usual arithmetic conversions | **None.** Mixing types is error `E0205`, with a machine-applicable `as` fix. |
-| Operator precedence | Few levels | C's bitwise and comparison trap (`a & b == 0`) | Mixing bitwise, shift and arithmetic or comparison operators **requires parentheses** (`E0106`). Comparisons don't chain. |
-| Truthiness | Must be explicit | `if (n)`, `if (ptr)` | Conditions must be `bool` (`E0307`), with a fix that adds `!= 0` or `!= null`. |
-| Shadowing | None | Rust-style rebinding hides bugs in long generated code | Shadowing a local is error `E0211`. |
-| Memory | Explicit and visible (C, Zig) | GC pauses (Go, Java); hidden allocations (C++, Swift) | No GC and no hidden allocation. Every heap byte comes from an explicit call. |
-| Errors at compile time | Structured, stable codes (Rust's `--error-format=json`, `rustc --explain`) | Prose-only diagnostics (classic C compilers) | JSON Lines output with stable codes, exact spans, notes and **fix edits** that tools can apply without reading prose. |
-| Lifetimes and borrowing | Safety | Borrow-checker fights cost agents many iterations | Deliberately left out of v0. Bounds checks and explicit pointers are the safety net instead. See ROADMAP for optional region annotations. |
-| Build system | One command, deterministic | Make, CMake, autotools | `ingot build file.ig`. Output is byte-for-byte deterministic, and a test checks this. |
-| Self-checking | Built-in tests (Zig, Rust, Go) | External frameworks | `test "name" { ... }` blocks and `@assert` are in the language; `ingot test` runs them. |
+* `hw.cachelinesize` is 128 (specification: `@target.cache_line`).
+* The exact feature list assumed for the target: LSE, CRC32, DotProd and the rest of
+  the "other assumed features" row. `sysctl hw.optional.arm` on the machine settles it.
+* Whether macOS on arm64 offers large pages to user code.
+* Metal: shared-storage buffers created over page-aligned memory without a copy, and
+  the absence of `double` in Metal Shading Language.
 
-## 5. Toolchain reality for this repository
+**Ryzen 7 7800X3D**
 
-* The development box is **x86-64 Linux**. Ingot generates AArch64 assembly. Linux
-  binaries are linked statically against musl with `zig cc` and run under
-  **qemu-aarch64** user-mode emulation. macOS binaries are linked with `zig cc -target
-  aarch64-macos`, which ships Apple's libSystem stubs, and are checked by inspecting
-  the Mach-O header.
-* **Not verified on real Apple hardware:** running the Mach-O output, ad hoc code
-  signing, `@qos` placement behavior, `@ticks` frequency on macOS, and every timing
-  number. The benchmark numbers in the README come from emulation and only show relative
-  order.
+* 8 cores, 16 threads, 96 MB L3, 64-byte cache lines.
+* The AVX-512 subsets of Zen 4 as listed in the targets table, and that 512-bit
+  operations run on a 256-bit datapath without a frequency penalty.
+* LLVM's `znver4` CPU model and what it enables.
+
+**Linux on x86-64**
+
+* io_uring as the event interface, and which kernel version the runtime requires.
+* System V AMD64 calling convention details for variadic calls and struct
+  classification.
+* Transparent and explicit 2 MiB huge pages.
+
+**Windows on x86-64**
+
+* The Microsoft x64 calling convention: four register arguments, 32 bytes of shadow
+  space, `xmm6`–`xmm15` callee-saved, variadic floating-point arguments duplicated in
+  integer registers.
+* Stack rules for code that switches stacks: updating the stack base and limit in the
+  thread information block, the guard-page mechanism, and `__chkstk` probing for frames
+  larger than a page.
+* `VirtualAlloc` reserve and commit semantics, the 64 KiB allocation granularity and
+  the commit limit.
+* I/O completion ports, and whether the newer I/O ring API is worth using instead.
+* Thread affinity and CPU sets.
+* Large pages needing the lock-pages privilege.
+
+**RTX 4070**
+
+* 12 GB of memory, Vulkan compute support under both systems, and `shaderFloat64`
+  availability.

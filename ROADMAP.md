@@ -1,47 +1,60 @@
 # Roadmap
 
-## Done (v0.1)
-- Lexer, parser, type checker, AArch64 backend (Mach-O and ELF assembly), driver.
-- Integers, floats, bool, pointers, arrays, slices, structs, fn pointers and NEON vector types.
-- Checked indexing and division. `@assert`, `@panic`, `test` blocks, `ingot test`.
-- JSON diagnostics with fix edits, and `ingot fix`.
-- C FFI with the Darwin variadic and stack-packing rules. pthreads, LSE atomics, `@qos`.
-- Register promotion of locals, immediate operands, rotated loops.
-- `enum` (with an explicit base type) and `switch` with exhaustiveness checking and fixes.
-- Error unions: `-> T ! E`, `return @err(E.x)`, `try`, `catch e => value | { block }`; error code in x1, one `cbz` per check.
-- `--link FILE` for hand-written assembly or C. `examples/sme/` is an SME FMOPA sgemm kernel called from Ingot, checked under qemu at SVL 256 and 512.
-- `std/map.ig`: open-addressing u64 hash map with error-union API; `examples/hashjoin.ig`.
-- Leaf functions take caller-saved `x2`–`x7` as extra temporaries (no save/restore), and promote up to 8 locals.
-- Slice `{ptr,len}` register caching, dense-`switch` jump tables, tagged unions, generics, namespaced imports, `errdefer`, `ingot api`.
-- `for x in s` element loops. Bounds checks proven by for-loop ranges are left out. `let x = s[i]` loads straight into x's register. Fallible fn-pointer types `fn(..) -> T ! E`. Union pointer bindings `U.v(&p)`.
-- Spilling under register pressure: binary operands and call arguments are parked in the frame, so deep expressions (tested to 120 levels) compile instead of failing with E0900.
-- Lane masks (`@lanes_lt/le/eq`) and per-lane `@select` (BSL) for branchless SIMD.
-- `@select(c, a, b)`: branchless `csel`/`fcsel`, written straight into promoted registers.
-- `inline fn`: explicit call-site expansion; callee locals join the caller's register promotion.
-- `ingot explain`: documented catalog of every diagnostic code.
-- `defer` blocks (inline at every exit, LIFO, checked: no return/escape inside).
-- In-place FMA accumulation into promoted NEON registers, logical immediates, `tst`, single-add addressing.
-- `import`, an embedded `std` (libc, mem arena, par `parallel_for` with QoS), and compile-time `@is_macos()` branches.
-- Examples include a parallel NEON matmul checked against a scalar reference.
-- Tests: diagnostic goldens, e2e goldens under qemu, in-language tests, Mach-O header checks, determinism.
+The specification in [docs/](docs/README.md) is the definition of the language. Nothing
+below is built yet.
 
-## Next
-1. **Verify on real M4 Pro hardware.** Run `go test ./...` with `INGOT_CC=clang`, run `bench/run.sh TARGET=macos-arm64`,
-   and confirm `@qos` placement with `powermetrics`.
-2. **SSA IR and a real register allocator** (linear scan). This keeps values in registers across
-   statements, allocates across inlined bodies, and generalizes today's pressure-driven spilling.
-3. **Error unions, part 2**: `errdefer` and aggregate/vector results are done. `!` in fn-pointer types (`fn(f64) -> f64 ! E`) is done too. Error enums shared across modules work through aliases (`-> T ! m.E`, `try m.f()`). Next: per-variant error payloads.
-4. **Tagged unions, part 2**: `union` with payloads, exhaustive `switch` and payload binding are done. In-place payload updates through a pointer binding (`U.v(&p)`) are done too. Next is a niche-optimized `Option` for pointers. Union switches already use jump tables when dense.
-4b. **`ingot fmt`, part 2**: today it re-indents by bracket depth and trims whitespace while keeping every token and comment (and verifies that by re-lexing). Next it should also normalize spacing inside lines and wrap long lines.
-5. **Modules, part 2**: namespaced imports (`import "p" as m;`) are done. Module-private `_names` (E0006) are done. Still to do: a module-relative suggestion when the alias differs from the module prefix, and a deterministic package hash.
-6. **Generics, part 2**: explicit monomorphized templates (`fn sum[T]`, `struct S[T]`, `sum.[f64](xs)`) are done. Next are optional bounds (`T: Num`), which would check a template once rather than per instance, and constant parameters (`[N: i64]`).
-7. **`std`**: `std.mem` (arenas, `page_size()` from `sysconf`), `std.io`, `std.par` (a work-stealing pool
-   with QoS-tagged workers, ≥3× chunks per core as Apple recommends), and `std.time` (`mach_absolute_time`).
-8. **SME/SME2 in the language** (today it is reached through `--link` kernels): `streaming { ... }` regions that emit `smstart`/`smstop`, with ZA tile types for matrix
-   kernels, gated by `--cpu apple-m4`.
-9. **Direct Mach-O and ELF object writers** for faster builds with no external assembler. Keep `ingot asm` for inspection.
-10. **JIT mode** (`ingot run --jit`) that follows Apple's W^X protocol (`MAP_JIT`, `pthread_jit_write_protect_np`,
-    `sys_icache_invalidate`).
-11. **Optional region and lifetime annotations** for pointers that can't outlive a scope, as warnings first.
-12. **Self-hosting** the compiler in Ingot.
-13. **Struct-by-value C ABI** (HFA and composite rules) and `extern` globals.
+## 0. Before writing the compiler
+
+Test the five bets listed in section 13 of [docs/rationale.md](docs/rationale.md) on
+paper, by writing real programs in the language as specified and checking them by hand:
+
+1. A hash map and a JSON parser, to see whether linear cleanup is tolerable.
+2. Iterator adaptors, to see whether one origin set per struct is enough.
+3. A recursive-descent parser running as a task, to size task stacks.
+4. An integer-heavy kernel (a hash function, a bytecode interpreter), to see whether the
+   required check removals in section 31 are enough.
+5. A stencil and a histogram as kernels, to see whether the kernel subset is too narrow.
+
+Source the facts in section 4 of [docs/research.md](docs/research.md) on the real
+machines.
+
+## 1. First target: `aarch64-macos-m4`
+
+1. Front end, in Go: lexer, parser, modules, name resolution, JSON diagnostics with fix
+   edits.
+2. Types and checking: structs, enums with payloads, `match`, `?T`, `T ! E`, tuples,
+   interfaces and `impl`, generics with bounds, trapping arithmetic and the conversion
+   builtins, compile-time evaluation.
+3. A control-flow-graph IR, and on it the ownership checker: moves, linear consumption,
+   borrows, origins. Everything in the standard library depends on this.
+4. Code generation through LLVM IR, linking for Mach-O, and the Apple arm64 C ABI for
+   `extern` and `export`.
+5. Standard library core: `sys.macos`, `mem` (arena, heap), `list`, `map`, `str`, `fmt`,
+   `fs`, `text`.
+6. SIMD types and builtins.
+7. Runtime: scheduler, task stacks, `scope`/`spawn`, `par for`, `sync`, kqueue I/O.
+8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `fmt`.
+
+## 2. Second target: `x86_64-linux-znver4`
+
+1. x86-64 code generation with AVX-512, ELF, the System V AMD64 C ABI.
+2. `sys.linux` with direct system calls, io_uring in the runtime, thread affinity.
+3. `ingot check --all-targets`.
+
+## 3. Third target: `x86_64-windows-znver4`
+
+1. PE/COFF and the Microsoft x64 C ABI. Code generation is shared with the Linux target.
+2. `sys.windows`: `kernel32`/`ntdll` imports, UTF-16 conversion at the boundary.
+3. Runtime: stack switching that follows the Windows rules, I/O completion ports.
+
+## 4. Kernels and the GPU
+
+1. Kernel IR, and `exec.seq`, `exec.simd`, `exec.par` on all targets.
+2. Metal backend on the M4 Pro.
+3. Vulkan backend for the RTX 4070, on Linux and Windows.
+
+## 5. Later
+
+The deferred list in section 12 of the rationale: a struct-of-arrays container,
+contracts, static borrow types, named origin parameters on structs, SME streaming
+regions, GPU textures and multi-pass pipelines. Self-hosting the compiler.

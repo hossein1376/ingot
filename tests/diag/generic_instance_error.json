@@ -1,1 +1,0 @@
-{"severity":"error","code":"E0302","message":"operator \"+=\" is not defined for bool","span":{"file":"diag/generic_instance_error.ig","start":{"line":4,"col":9},"end":{"line":4,"col":20}},"notes":["in sum[bool], instantiated at diag/generic_instance_error.ig:13:19"]}

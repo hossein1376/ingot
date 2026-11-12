@@ -1,3 +1,0 @@
-particle 7 at (3.00, -4.00), shifted (13.00, 6.00)
-sum(all)=135 sum(2..6)=18 len=4 sizeof(Particle)=40
-grid[3]=255 wraps to 0

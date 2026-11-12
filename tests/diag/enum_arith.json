@@ -1,1 +1,0 @@
-{"severity":"error","code":"E0302","message":"operator \"+\" is not defined for enum values","span":{"file":"diag/enum_arith.ig","start":{"line":3,"col":12},"end":{"line":3,"col":17}},"notes":["convert explicitly, e.g. ((v as i64) + 1) as Color"]}

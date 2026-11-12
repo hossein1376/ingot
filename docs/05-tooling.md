@@ -1,0 +1,214 @@
+# Ingot v1 specification, part 5: tooling and the standard library
+
+The tools are part of the language definition. An implementation that compiles Ingot but
+does not provide `check --json`, `fix`, `cost` and `audit` is not complete, because the
+intended author cannot work without them.
+
+## 30. Diagnostics
+
+* Every diagnostic is an **error**. There are no warnings, lints or notes that can be
+  ignored. Something is either allowed or it is not.
+* `ingot check --json` prints one JSON object per line, in a stable order:
+
+  ```json
+  {"code":"E0412","message":"`buf` is borrowed here and moved while the borrow is live",
+   "span":{"file":"io.ingot","start":{"line":41,"col":18},"end":{"line":41,"col":21}},
+   "related":[{"role":"borrow","span":{"file":"io.ingot","start":{"line":38,"col":16},"end":{"line":38,"col":20}}},
+              {"role":"later_use","span":{"file":"io.ingot","start":{"line":44,"col":9},"end":{"line":44,"col":14}}}],
+   "fixes":[{"message":"move after the last use of the borrow","edits":[...]}]}
+  ```
+
+* A code is stable forever and has an entry in `ingot explain CODE` with a minimal
+  failing example and its corrected form. A test fails the build of the compiler if it
+  can emit a code the catalog lacks.
+* `related` carries the other places that explain the error, each with a fixed `role`:
+  for ownership errors `borrow`, `move`, `later_use`, `declared`, `scope_end`,
+  `signature`. An agent should not have to parse prose to find them.
+* `fixes` are edits that make this diagnostic go away without changing behavior that
+  already compiled. `ingot fix` applies the first fix of each diagnostic, re-checks and
+  repeats until nothing changes.
+* Lines and columns are 1-based, columns count bytes, spans are half-open.
+* The compiler reports every independent error in a file in one run. It does not report
+  errors that are only consequences of an earlier one.
+
+## 31. Cost reports and guaranteed check removal
+
+`ingot cost FILE [--fn NAME] --json` reports what a function costs beyond the arithmetic
+that is visible in its source. One object per item:
+
+| `kind` | Meaning |
+|---|---|
+| `bounds_check`, `overflow_check`, `div_check`, `shift_check` | a check that survived, with the expression's span |
+| `alloc` | a call that may allocate, with the allocator's static type |
+| `indirect_call` | a call through `fn`, `&dyn` or an `extern fn` pointer |
+| `copy` | a copy or move of more than 64 bytes |
+| `not_inlined` | a call to a small function that was not inlined, and why |
+| `loop` | one entry per loop: vectorized or not, the vector width, the reason if not |
+| `task_spawn`, `lock`, `park_point` | concurrency costs |
+| `frame` | stack frame size |
+
+The report is the same for the debug and release pipelines, because the items are
+properties of checked semantics, not of optimization luck. The removals below are
+**required**: a conforming compiler performs them in every build, so an agent can rely
+on them when writing a hot loop.
+
+1. `for x in xs` and `for i, x in xs` over an array or slice: no bounds check on the
+   element.
+2. `a[i]` inside `for i in lo..hi` where `lo` is a non-negative constant and `hi` is
+   `a.len` or a constant not larger than the array length, and `a` is not reassigned in
+   the loop.
+3. `a[i + k]`, `s[i..i + k]`, `@load(V, s, i)` and `@store(s, i, v)` when the access is
+   dominated by a condition or `@assert` of the form `i + c <= s.len` (or `<`) with
+   constant `c` large enough, `i` is known non-negative, and neither `i` nor `s` changes
+   in between.
+4. No overflow check on a `for` loop counter, on `i += c` in a loop guarded by
+   `i + c <= n`, or on an operation whose operands were widened with `as` so that the
+   result always fits.
+5. No overflow check where both operands are constants (it is evaluated at compile
+   time and an overflow is a compile error).
+6. A second identical check on the same values in the same block.
+
+The compiler may remove more. `ingot cost` is the source of truth for what is left, and
+the way to remove a remaining check is to restructure the code or add an `@assert` that
+hoists it, not a build flag.
+
+`ingot audit --json` lists every `unsafe` block with its reason string, every `extern`
+declaration, every `@forget`, every `@debug`, and every `unsafe impl`.
+
+`ingot layout TYPE --json` prints size, alignment, field offsets and padding.
+
+`ingot asm FILE --fn NAME` prints the generated assembly for one function.
+
+## 32. Tests
+
+* `test "name" { ... }` blocks live next to the code. `ingot test` compiles and runs
+  them and prints one JSON line per test: name, `ok` or the failure with its span.
+* A test body may use `try`. The test fails on a trap or if an error reaches the end.
+* `@test_env()` is available only inside tests. It gives a `&Env` whose file system is a
+  fresh temporary directory, whose clock can be stepped by hand, and whose network is
+  loopback only.
+* `ingot test --seed N` fixes the scheduler's stealing and `select` choices, so a
+  failing interleaving can be replayed. Tests run with a randomized seed otherwise and
+  print it on failure.
+* Tests in a dependency are not run.
+* `bench "name" { ... }` blocks are measured by `ingot bench`, which reports time per
+  iteration and, where the OS exposes them, cycles and instructions.
+
+## 33. Packages and builds
+
+```toml
+# ingot.toml
+name = "linecount"
+targets = ["aarch64-macos-m4", "x86_64-linux-znver4", "x86_64-windows-znver4"]
+
+[deps]
+csv = { path = "../csv" }
+zstd = { git = "https://example.com/zstd-ingot", hash = "b3:9f2c..." }
+
+[link.aarch64-macos-m4]
+frameworks = ["Metal"]
+
+[link.x86_64-linux-znver4]
+libs = ["vulkan"]
+
+[link.x86_64-windows-znver4]
+libs = ["vulkan-1"]
+```
+
+* A package is a directory tree of `.ingot` files with one `ingot.toml`. The entry point
+  of an executable is `pub fn main` in `main.ingot`.
+* A dependency is source, pinned by content hash. There is no version solving.
+* A build is deterministic: the same sources, compiler and target give the same bytes.
+* `--target NAME` selects one of the listed targets and defaults to the host. `ingot
+  check --all-targets` type-checks every listed target, which needs nothing from the
+  other systems. Building for another target is possible from any host once that
+  target's system libraries are available to the linker.
+* There is one language and two pipelines. `ingot build` optimizes. `ingot build --fast`
+  compiles quickly with little optimization, for the edit-and-test loop. Both have
+  identical semantics, traps included. There is no build mode that removes checks.
+* Commands: `build`, `run`, `check`, `fix`, `test`, `bench`, `fmt`, `explain`, `api`,
+  `cost`, `audit`, `layout`, `asm`. Every command accepts `--json`.
+
+`ingot api [PATH] --json` prints the public surface of a module, a package or `std`:
+each item's signature exactly as written (including `from`, `into`, `! E`, bounds and
+modifiers), its doc comment, and for types their properties (`Copy`, linear, view,
+`Send`, `Sync`), size and alignment. This is how an agent learns a library without
+reading its implementation.
+
+### 33.1 Program entry
+
+```ingot
+import std.Env;
+
+pub fn main(env: &Env) -> void ! AppErr { ... }
+```
+
+`main` takes `&Env` and returns `void` or `u8` (the exit status), optionally fallible.
+If an error is returned, the runtime prints it to standard error and exits with status 1.
+`Env` holds everything the process was given:
+
+| Field | Type | Gives |
+|---|---|---|
+| `env.args` | `[][]u8` | command-line arguments |
+| `env.vars` | `&Vars` | environment variables |
+| `env.heap` | `Heap` | the general allocator |
+| `env.vm` | `Vm` | address-space reservation, for arenas |
+| `env.fs` | `&Fs` | the file system |
+| `env.net` | `&Net` | sockets |
+| `env.clock` | `&Clock` | wall and monotonic time, timers |
+| `env.rand` | `&Rand` | OS entropy |
+| `env.stdin`, `env.stdout`, `env.stderr` | `&Reader`, `&Writer` | standard streams |
+| `env.gpu` | `?gpu.Device` | the GPU, if there is one |
+
+A function that is not handed one of these, directly or inside something else, cannot
+perform that kind of effect in safe code. `@debug("fmt", args...)` is the single
+exception: it writes to standard error from anywhere, and `ingot audit` lists it.
+
+## 34. Formatting
+
+`ingot fmt` produces the one canonical layout: four-space indentation, one statement
+per line, a fixed line-breaking rule for long calls and declarations, imports sorted.
+It never changes a token other than whitespace and trailing commas. `ingot fmt --check`
+is how a repository enforces it.
+
+## 35. Standard library outline
+
+Only the shape is specified here. Each module gets its own document as it is designed.
+
+| Module | Contents |
+|---|---|
+| `std.mem` | `Allocator`, `Heap`, `Vm`, `Arena`, `FixedBuf`, `Box`, `Arc`, `Pool`/`Handle`, `copy`, `fill`, `eq` |
+| `std.list`, `std.map`, `std.set`, `std.str`, `std.ring`, `std.heap` | `List[T, A]`, `Map[K, V, A]` (open addressing, SIMD group probing), `Set`, `Str[A]`, fixed ring buffer, binary heap |
+| `std.text` | UTF-8 validation and decoding, number parsing and printing, splitting, searching (SIMD) |
+| `std.fmt` | `@format(writer, "x={} y={:.3}", x, y)`: the format string is checked at compile time against the argument types |
+| `std.io`, `std.fs`, `std.net` | `Reader`, `Writer`, buffered wrappers, files, directories, memory mapping, TCP and UDP. Blocking calls park the task |
+| `std.time` | `Clock`, `Instant`, `Duration` |
+| `std.sync` | `Atomic`, `Mutex`, `RwLock`, `Once`, `Chan`, `WaitGroup` |
+| `std.task`, `std.thread` | `Scope`, `Task`, `set_qos`, `yield`, `canceled`, `first_of`; dedicated OS threads |
+| `std.par` | `Split`, `chunks`, `zip`, `sum`, `map_reduce`, `try_each`, `sort`, `Arenas` |
+| `std.simd` | native-width aliases (`simd.F32`, `simd.U8`, ...), chunked iteration helpers |
+| `std.exec`, `std.gpu` | executors, `Device`, `Queue`, `Buffer`, `Grid` |
+| `std.linalg` | dense vectors and matrices, `matmul` (SME on the M4, AVX-512 on the 7800X3D) |
+| `std.math`, `std.hash`, `std.rand`, `std.sort` | correctly rounded elementary functions with the same results on every target; hashing; PRNGs; sorting |
+| `std.sys` | the `unsafe` OS layer everything above is built on, one implementation per operating system (`std.sys.macos`, `std.sys.linux`, `std.sys.windows`) behind a common internal interface |
+| `arch.aarch64`, `arch.x86_64` | per-instruction intrinsics |
+
+Library conventions that every module follows:
+
+* A function that allocates takes an allocator or belongs to a container that has one,
+  and returns `! AllocErr` or an error enum with a `from AllocErr` variant.
+* A function that performs I/O takes the capability it needs as a parameter.
+* A linear type's consuming function is named `deinit` when it cannot fail, and has a
+  specific name (`close`, `commit`, `join`, `unlock`) when it has meaning beyond
+  release.
+* A function that returns a borrow into a container is named for it (`items`, `get`,
+  `get_mut`), and a function that copies out says so (`to_owned`, `clone_into`).
+* Nothing in `std` panics on bad input. A trap in `std` is a bug in the caller's use of
+  indices or in `std`.
+* The public API is the same on all three targets. Paths, arguments and environment
+  values are `[]u8`. On Windows `std` converts to and from UTF-16 at the system boundary
+  using WTF-8, so every Windows file name survives a round trip. `std.fs` accepts `/` as
+  a separator everywhere.
+* `std` exposes no concept that only one system has (`fork`, signals, drive letters as a
+  type). Where behavior cannot be made the same, the difference is documented on the
+  function and not hidden.
