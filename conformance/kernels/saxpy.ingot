@@ -1,0 +1,18 @@
+//! expect: run
+//! section: 27
+
+import std.Env;
+import std.exec;
+
+kernel fn saxpy(i: Idx, a: f32, x: []f32, y: []mut f32) {
+    y[i] = a * x[i] + y[i];
+}
+
+pub fn main(env: &Env) -> u8 {
+    let xs: [4]f32 = [4]f32.{ 1.0, 2.0, 3.0, 4.0 };
+    var ys: [4]f32 = [4]f32.{ 1.0, 1.0, 1.0, 1.0 };
+    dispatch saxpy(2.0, &xs[0..4], &mut ys[0..4]) over 0..4 on exec.simd;
+    @assert(ys[0] == 3.0);
+    @assert(ys[3] == 9.0);
+    return 0;
+}

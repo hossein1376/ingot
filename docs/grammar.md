@@ -87,11 +87,11 @@ if_stmt      = "if" cond block [ "else" ( block | if_stmt ) ] ;
 cond         = expr | "let" pattern "=" expr ;
 loop_stmt    = "while" cond block
              | "loop" block
-             | [ "par" [ "(" "grain" ":" expr ")" ] ] "for" IDENT [ "," IDENT ] "in" expr [ ".." expr [ "step" expr ] ] block ;
+             | [ "par" [ "(" "grain" ":" expr ")" ] ] "for" IDENT [ "," IDENT ] "in" expr [ ( ".." | "..=" ) expr [ "step" expr ] ] block ;
 match_stmt   = "match" expr "{" { arm } "}" ;
 arm          = ( pattern { "|" pattern } [ "if" expr ] | "else" ) "=>" ( block | expr "," ) ;
 
-pattern      = "_" | IDENT | literal | literal ".." literal
+pattern      = "_" | IDENT | literal | literal ( ".." | "..=" ) literal
              | [ path_type ] "." IDENT [ "(" pattern ")" ]
              | "(" pattern "," pattern { "," pattern } ")"
              | path_type ".{" [ fpat { "," fpat } [ "," ] ] "}" ;
@@ -153,5 +153,9 @@ literal      = INT | FLOAT | STRING | CSTRING | "true" | "false" ;
 * **The parenthesization rule** (section 5.1) and the ban on chained comparisons are
   enforced by the parser on top of this grammar.
 * **`step`** takes a positive constant expression.
+* **Tuple fields.** After a `.`, the lexer reads digits as an integer field index, so
+  `t.0.1` is never lexed as a float.
+* **`..=`** is allowed in `for` ranges and in patterns. Slices and `dispatch` domains
+  use `..` only.
 * **Trailing commas** are allowed wherever a comma-separated list is closed by a
   bracket on a later line, and `ingot fmt` adds them.

@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+fn sum(xs: []i64) -> i64 {
+    var s: i64 = 0;
+    for i in 0..xs.len {
+        s = s +% xs[i];
+    }
+    return s;
+}

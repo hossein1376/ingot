@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3, 5.4
+
+fn widen(a: i32) -> i64 {
+    let b: i64 = a; //~ E0401
+    return b;
+}

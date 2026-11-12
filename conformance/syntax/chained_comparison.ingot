@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.1
+
+fn between(a: i64, b: i64, c: i64) -> bool {
+    return a < b < c; //~ E0205
+}

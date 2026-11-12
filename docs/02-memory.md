@@ -17,6 +17,7 @@ signatures of the functions it calls.
 | `Discard` | may go out of scope without being consumed | every type that is not linear |
 | **linear** (not `Discard`) | must be consumed exactly once on every path | `linear struct`, `T ! E`, `Task[R]`, and any array, tuple, struct or enum containing a linear type |
 | **view** | contains a borrow, so it is bound to the lifetime of what it borrows | `&T`, `&mut T`, `[]T`, `[]mut T`, `&dyn I`, closures with `&` captures, and anything containing one |
+| `Owned` | contains no borrow, so a value can outlive everything around it | every type that is not a view |
 
 `&mut T` and `[]mut T` are neither `Copy` nor linear: they move, and they may be dropped.
 
@@ -43,10 +44,13 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
 ```
 
 * A linear value that is still owned at the end of its scope, on any path, is an error.
-  The fix inserts the `defer`.
+  When the type has exactly one consuming function that takes nothing else, the fix
+  inserts the `defer` that calls it. Otherwise the diagnostic lists the candidates.
 * A value consumed inside a `defer` block counts as consumed at scope exit. Until then it
   can be borrowed, but not moved. `errdefer` counts for the error exits only, so the
   usual pattern for "hand it to the caller on success, clean up on failure" checks.
+* A linear struct is taken apart, by destructuring or by moving a field out of it, only
+  in its own module. Elsewhere it can only be passed on whole.
 * `@forget(x)` consumes any value without running anything. It is safe, because leaking
   is not a memory-safety problem, and `ingot audit` lists every use.
 * The compiler never inserts a call to release anything. If a scope ends and no cleanup
@@ -60,6 +64,8 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
   `static`. Use `@swap(&mut a, &mut b)`, `@replace(&mut place, new_value)` (returns the
   old value) or an `?T` field with `.take()`.
 * A `var` that was moved from can be assigned again and is then usable.
+* Assigning to a place that still holds a linear value is an error, because the old
+  value would be lost. Take it out first with `@replace`.
 * A variable moved in one branch and not the other is moved after the join. For a linear
   value that is an error at the join, because one path would leak it.
 * Uninitialized memory does not exist in safe code. `@uninit(T)` is an `unsafe` builtin.
@@ -85,8 +91,10 @@ free. Array and slice elements are not distinguished: `a[i]` and `a[j]` are the 
 place to the checker. Disjoint parts of a slice are obtained through library functions
 that prove disjointness once (`split_at_mut`, `chunks_mut`, iteration over `[]mut T`).
 
-**Reborrowing.** Passing a `&mut T` variable to a function, or writing `&mut r.*`, lends
-it for the duration of that use and the original is usable again afterwards.
+**Reborrowing.** Passing a `&mut T` or `[]mut T` variable to a function, iterating it
+with `for`, or writing `&mut r.*`, lends it for the duration of that use and the original
+is usable again afterwards. Through a shared borrow, an exclusive borrow stored in the
+referent can only be reborrowed as shared.
 
 **Call arguments.** All arguments of a call are evaluated left to right first. Borrows
 written directly as arguments, and the automatic receiver borrow, become active when the
@@ -101,6 +109,17 @@ Ingot has no lifetime parameters. Instead, each value of a view type has an **or
 set**: the loans it may hold. Within a function body the checker computes origin sets by
 following assignments. At a call it uses the callee's signature, which states the flow
 in three ways.
+
+Inside a body, three rules build the sets:
+
+* `&p` and `&mut p` give a value that holds the new loan. If `p` is reached through a
+  borrow `r`, the value also holds the origins of `r`.
+* Copying or moving a view carries its origin set along. Where control flow joins, the
+  sets are united.
+* **Storing a view through a borrow widens what the borrow points at.** After
+  `r.* = v` or `r.field = v`, the origins of `v` are added to the origin set of every
+  variable that `r` may borrow from, transitively. This is what stops a short-lived
+  borrow from being left behind in a long-lived container.
 
 ### 13.1 `from`: where a returned borrow comes from
 
@@ -130,13 +149,19 @@ So after `let r = parser.rest();` the parser may be mutated or dropped while `r`
 use, because `r` borrows the source text and not the parser. After
 `let p = parser.pos_mut();` the parser is exclusively borrowed until `p` is dead.
 
+A view has origin `p.*` only if it was **copied or moved out** of what `p` refers to. A
+reborrow made *through* `p` has origin `p`, because it is valid only while `p` is:
+`&p.field`, `&mut p.field`, or a slice of an exclusive slice stored in `p.*`. Without
+this distinction a method could hand out the same `[]mut u8` twice. Slicing a *shared*
+slice stored in `p.*` copies it first, which is why `rest` above is `from self.*`.
+
 The body is checked against the clause: returning a borrow whose origin is not covered
 is an error, and the fix adds the missing source.
 
 ### 13.2 `into`: where a stored borrow goes
 
-A function may store a view argument inside something it was given by `&mut`, but only
-if the parameter says so.
+A function may store a view argument inside something it was given by `&mut`, or start
+a task with it in a scope it was given (section 18), but only if the parameter says so.
 
 ```ingot
 impl Lexer {
@@ -170,16 +195,48 @@ other `T`.
 ### 13.4 What the caller and the callee each check
 
 * **Callee.** For each returned view, its origins must be covered by the `from` clause.
-  For each store of a view through a `&mut` parameter `p`, the stored origins must be
-  `p.*` itself, `static`, or a parameter declared `into p`.
-* **Caller.** The result's origin set is the union named by `from`. `into p` and the
-  type-parameter rule add origins to the argument variable. Then the rules of section 12
-  apply to every loan that is still live.
+  For each store of a view that reaches a parameter `p` (by the widening rule above),
+  the stored origins must be `p.*` itself, `static`, a parameter declared `into p`, or
+  a value whose type is a type parameter that the type of `p` mentions. A loan on one
+  of the callee's own locals can never be stored through a parameter.
+* **Caller.** The result's origin set is the union named by `from`. `into p` adds the
+  argument's origins to the variable behind `p`. For each type parameter `T`, the
+  origins of every argument whose type mentions `T` are united, and that union is added
+  to the variable behind every `&mut` argument whose type mentions `T`, and to the
+  result if its type mentions `T`. Then the rules of section 12 apply to every loan
+  that is still live.
 * A view struct has **one** origin set for all its borrow fields together. A struct
   holding borrows of two different things is treated as borrowing both for as long as
   either is needed.
 
-### 13.5 What this does not express
+### 13.5 Function values and interface methods
+
+* An interface method is declared with its `from` and `into` clauses like any function.
+  An implementation may declare the same clauses or fewer, never more, so a call
+  through the interface is checked against the interface alone.
+* A `fn(...)` type and an `Fn`, `FnMut` or `FnOnce` bound have unnamed parameters and
+  carry no clauses. A view returned by a call through one is assumed to hold the
+  origins of every argument and of the callable itself, which covers a closure's
+  captures. A function with an `into` clause does not convert to a `fn` type and does
+  not satisfy an `Fn` bound.
+
+### 13.6 Interior mutability holds only owned data
+
+Everything above rests on one fact: a view is stored into a place only through an
+exclusive borrow, and the checker follows exclusive borrows. A type whose contents can
+be replaced through a *shared* borrow breaks that. With a `Mutex[[]u8]`, one task could
+store a slice that another task reads back and keeps after the slice's source is gone,
+and no analysis of one function at a time can see it.
+
+So every type with interior mutability bounds its contents with `Owned`:
+`Mutex[T]`, `RwLock[T]`, `Chan[T, A]` and `Once[T]` accept no view types. Borrowed data
+reaches other tasks as arguments to `spawn` and as the items of `par for`, where the
+flow is written down. Channels and locks carry owned values, indices and handles.
+A `Scope` is the one built-in exception, and `into` covers it (section 18). An arena is
+not such a type: allocating through `&Arena` hands out new memory and offers no way to
+read back what another holder stored.
+
+### 13.7 What this does not express
 
 * A struct that borrows from itself. Use indices or handles (section 14.4).
 * A function that returns a borrow whose source depends on run-time data in a way more
@@ -219,7 +276,7 @@ memory they cannot back and end the process later.
 
 ```ingot
 fn handle(req: &Request, vm: Vm, out: &mut Writer) -> void ! AppErr {
-    var arena = try Arena.init(vm, 64 << 20);     // reserves 64 MiB of address space
+    let arena = try Arena.init(vm, 64 << 20);     // reserves 64 MiB of address space
     defer { arena.deinit(); }
     let words: []mut []u8 = try split_words(req.body, &arena);
     try render(words, out);
@@ -293,9 +350,16 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   `@assume(cond)`, read a slice's `.ptr`, and write `unsafe impl Send`/`Sync`.
 * `unsafe` does not turn off any check on safe constructs. Borrows are still checked and
   `a[i]` is still bounds-checked inside the block.
+* An `unsafe` block that contains nothing that needs it is an error, so that the list
+  `ingot audit` prints is exactly the list of places that matter.
 * An `unsafe fn` documents its preconditions in its doc comment. `ingot api` shows them.
 * A module that contains `unsafe` is responsible for making its `pub` surface safe for
   every possible safe caller.
+* A borrow made from a raw pointer has no origins. The checker accepts it wherever a
+  `from` or `into` clause is needed, and keeping it valid for as long as it is used is
+  the block's obligation.
+* A type that builds interior mutability out of `unsafe` must bound its contents with
+  `Owned` (section 13.6), and must not be `Sync` unless it synchronizes every access.
 
 ## 16. The complete list of run-time failures
 
@@ -310,8 +374,13 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 | failed assertion | `@assert`, `@panic`, `@unreachable` |
 | stack exhaustion | function entry (guard page; large frames are probed) |
 | deadlock of every task | the scheduler (section 23) |
+| no memory for a task record or a task stack | `spawn`, `par for`, parking a task (section 23) |
+| a repeated index | `@scatter` (section 26.3) |
+| a dispatch range that a buffer does not cover | `dispatch` (section 27.2) |
+| blocking, `spawn` or `par for` outside a task | an `export fn` called on a foreign thread (section 23) |
 
-A trap is never undefined behavior and never continues.
+A trap is never undefined behavior and never continues. Each trap has a stable code
+(`T01` to `T17`) that appears in its message.
 
 ### 16.2 Undefined behavior
 
@@ -324,7 +393,7 @@ an `unsafe` block or from foreign code:
    memory.
 3. Reading memory obtained from `@uninit` before writing it.
 4. Producing an invalid value: a `bool` other than 0 or 1, an enum tag with no variant,
-   a null `&T`.
+   a null `&T` or slice pointer.
 5. A false `@assume`, or an `@unchecked_*` operation whose checked form would trap.
 6. A data race through raw pointers, or a wrong `unsafe impl Send`/`Sync`.
 7. Calling an `extern` function with a signature that does not match its definition, or

@@ -1,0 +1,15 @@
+//! expect: trap
+//! section: 5.5
+
+import std.Env;
+
+fn pick(xs: []i64, i: i64) -> i64 {
+    return xs[i]; //~ T01
+}
+
+pub fn main(env: &Env) -> u8 {
+    let data: [3]i64 = [3]i64.{ 1, 2, 3 };
+    let r = pick(&data[0..3], 3);
+    @assert(r == 0);
+    return 0;
+}

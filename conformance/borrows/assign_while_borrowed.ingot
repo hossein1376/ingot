@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 12
+
+fn show(x: i64) -> i64 {
+    return x;
+}
+
+fn f() -> i64 {
+    var x: i64 = 1;
+    let r = &x;
+    x = 2; //~ E1101
+    return show(r.*);
+}

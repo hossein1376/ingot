@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 18
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn f() -> i64 {
+    var total: i64 = 0;
+    scope s {
+        let h = spawn bump(&mut total) in s;
+        h.join();
+        total += 1; //~ E1101
+    }
+    return total;
+}

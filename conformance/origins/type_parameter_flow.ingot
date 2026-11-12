@@ -1,0 +1,17 @@
+//! expect: reject
+//! section: 13.3
+
+struct Slot[T] { v: T }
+
+fn put[T: Discard](s: &mut Slot[T], x: T) {
+    s.v = x;
+}
+
+fn f(a: []u8) -> i64 {
+    var slot = Slot[[]u8].{ v: a };
+    {
+        let local: [4]u8 = @zero;
+        put(&mut slot, &local[0..4]); //~ E1105
+    }
+    return slot.v.len;
+}

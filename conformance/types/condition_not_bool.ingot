@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 7
+
+fn any(n: i64) -> bool {
+    if n { //~ E0403
+        return true;
+    }
+    return false;
+}

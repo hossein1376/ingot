@@ -1,0 +1,18 @@
+//! expect: run
+//! section: 19
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+
+    var data: [8]i64 = @zero;
+    par for x in &mut data[0..8] {
+        x.* = 3;
+    }
+    var sum: i64 = 0;
+    for v in data {
+        sum += v;
+    }
+    @assert(sum == 24);
+    return 0;
+}

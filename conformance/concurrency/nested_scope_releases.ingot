@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 18
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn f() -> i64 {
+    var total: i64 = 0;
+    scope outer {
+        scope inner {
+            spawn bump(&mut total) in inner;
+        }
+        total += 1;
+        spawn bump(&mut total) in outer;
+    }
+    return total;
+}

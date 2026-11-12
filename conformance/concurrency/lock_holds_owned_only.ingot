@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 13.6
+
+import std.sync.Mutex;
+
+fn hold(m: &Mutex[[]u8]) { //~ E0801
+}

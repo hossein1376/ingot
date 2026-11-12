@@ -1,0 +1,14 @@
+//! expect: run
+//! section: 19, 21
+
+import std.Env;
+import std.sync.Atomic;
+
+pub fn main(env: &Env) -> u8 {
+    let sum = Atomic[i64].init(0);
+    par for i in 0..1000 {
+        sum.add(i, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == 499500);
+    return 0;
+}

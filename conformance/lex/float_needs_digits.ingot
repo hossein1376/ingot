@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 1
+
+fn f() -> f64 {
+    return 1.; //~ E0105
+}

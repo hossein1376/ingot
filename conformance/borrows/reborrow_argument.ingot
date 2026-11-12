@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 12
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn twice(x: &mut i64) {
+    bump(x);
+    bump(x);
+}

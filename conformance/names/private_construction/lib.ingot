@@ -1,0 +1,9 @@
+pub struct Ticket { id: i32 }
+
+pub fn issue() -> Ticket {
+    return Ticket.{ id: 1 };
+}
+
+pub fn number(t: &Ticket) -> i32 {
+    return t.id;
+}

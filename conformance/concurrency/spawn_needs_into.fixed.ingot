@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 13.2, 18
+
+import std.task.Scope;
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn start(s: &Scope, x: &mut i64 into s) {
+    spawn bump(x) in s;
+}

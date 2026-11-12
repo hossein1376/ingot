@@ -1,0 +1,17 @@
+//! expect: run
+//! section: 5.2
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+
+    let top: i32 = 2147483647;
+    let low: i32 = -2147483648;
+    @assert(top +% 1 == low);
+    @assert(top +| 1 == top);
+    @assert(-%low == low);
+    let zero: u8 = 0;
+    @assert(zero -% 1 == 255);
+    @assert(zero -| 1 == 0);
+    return 0;
+}

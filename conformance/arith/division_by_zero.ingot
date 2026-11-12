@@ -1,0 +1,14 @@
+//! expect: trap
+//! section: 5.2
+
+import std.Env;
+
+fn div(a: i64, b: i64) -> i64 {
+    return a / b; //~ T04
+}
+
+pub fn main(env: &Env) -> u8 {
+    let r = div(1, 0);
+    @assert(r == 0);
+    return 0;
+}

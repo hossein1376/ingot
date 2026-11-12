@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 1
+
+fn second_of_first(t: ((i64, i64), i64)) -> i64 {
+    return t.0.1;
+}

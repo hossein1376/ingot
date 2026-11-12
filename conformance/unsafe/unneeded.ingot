@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(x: i64) -> i64 {
+    return unsafe("nothing here needs it") { x +% 1 }; //~ E1304
+}

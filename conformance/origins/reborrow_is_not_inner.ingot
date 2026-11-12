@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 13.1
+
+struct Window { buf: []mut u8 }
+
+impl Window {
+    fn head(self: &mut Window) -> []mut u8 from self.* {
+        return self.buf[0..1]; //~ E1202
+    }
+}

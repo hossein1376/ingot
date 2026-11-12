@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 19
+
+fn f() -> i64 {
+    var total: i64 = 0;
+    par for i in 0..10 {
+        total += i; //~ E1407
+    }
+    return total;
+}

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn shift(i: Idx, x: []f32, y: []mut f32) {
+    y[i] = x[i.offset(1)]; //~ E1513
+}

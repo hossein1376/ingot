@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 6.3
+
+enum A { a }
+
+enum B { b }
+
+fn first() -> i64 ! A {
+    fail .a;
+}
+
+fn second() -> i64 ! B {
+    return try first(); //~ E0703
+}

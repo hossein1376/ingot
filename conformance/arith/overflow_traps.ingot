@@ -1,0 +1,15 @@
+//! expect: trap
+//! section: 5.2
+
+import std.Env;
+
+fn bump(x: i32) -> i32 {
+    return x + 1; //~ T03
+}
+
+pub fn main(env: &Env) -> u8 {
+    let top: i32 = 2147483647;
+    let r = bump(top);
+    @assert(r == 0);
+    return 0;
+}

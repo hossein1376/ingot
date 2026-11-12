@@ -1,0 +1,6 @@
+//! expect: cost
+//! section: 31
+
+fn pick(xs: []i64, i: i64) -> i64 {
+    return xs[i]; //~ bounds_check
+}

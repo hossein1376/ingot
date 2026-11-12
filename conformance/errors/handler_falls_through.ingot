@@ -1,0 +1,15 @@
+//! expect: reject
+//! section: 6.3
+
+enum E { e }
+
+fn f() -> i64 ! E {
+    fail .e;
+}
+
+fn g() -> i64 {
+    let v = f() catch _ => {
+        @debug("failed");
+    }; //~ E0707
+    return v;
+}

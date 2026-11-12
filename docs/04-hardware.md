@@ -53,8 +53,10 @@ object format.
 * There is no run-time feature detection and no generic fallback. A binary built for one
   target is not expected to run on any other CPU.
 * `@target` is a compile-time record: `.os`, `.arch`, `.cpu`, `.simd_bits`,
-  `.cache_line`, `.page_size`, `.perf_cores`, `.eff_cores`, `.smt`, `.gpu_unified`, and
-  `.has(.sme)` style feature queries. Use it with `when` (section 7.3).
+  `.cache_line`, `.page_size`, `.hybrid_cores`, `.smt`, `.gpu_unified`, and
+  `.has(.sme)` style feature queries. Use it with `when` (section 7.3). Core counts are
+  not in it: the M4 Pro is sold with different numbers of cores, so the runtime reads
+  them at start-up (`task.workers()`).
 * Code that differs per operating system sits under `when @target.os == ...`. Because
   only the taken branch of a `when` is compiled, `ingot check --all-targets` checks a
   package once per target it lists, so a branch for another system cannot rot unseen.
@@ -118,8 +120,9 @@ Vectors are `Copy` values. They are passed and returned in registers.
 | `& \| ^ ~`, `<< >>` by a scalar count | integer vectors |
 | `== != < <= > >=` | lane-wise, result `boolxN` |
 | `& \| ^ !` on masks | |
-| `v[k]` with constant `k` | read one lane |
+| `v[k]` with constant `k` | read one lane. `@insert(v, k, x)` gives a copy with lane `k` replaced |
 | `@splat(V, x)`, `@iota(V)` | broadcast; `0, 1, 2, ...` |
+| `@lanes(V)` | the lane count of vector type `V`, a constant |
 | `@select(mask, a, b)` | per-lane choice |
 | `@any(m)`, `@all(m)`, `@count(m)`, `@first(m)` | mask queries. `@count` and `@first` give `i64` |
 | `@mask_bits(m)` | the mask as a `u64`, lane 0 in bit 0 |
@@ -134,7 +137,7 @@ Vectors are `Copy` values. They are passed and returned in registers.
 |---|---|
 | `@load(V, s, i)` | one check that `0 <= i` and `i + lanes <= s.len` |
 | `@store(s, i, v)` | the same, `s` is `[]mut T` |
-| `@load_tail(V, s, i)` | reads the lanes that exist from `i` to `s.len` and zero-fills the rest |
+| `@load_tail(V, s, i)` | reads the lanes that exist from `i` to `s.len` and zero-fills the rest. One check that `0 <= i <= s.len` |
 | `@store_tail(s, i, v)` | writes only the lanes that fit |
 | `@gather(V, s, idx)`, `@scatter(s, idx, v)` | one check that every index is in range. `@scatter` requires distinct indices, checked |
 
@@ -193,7 +196,10 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
 ### 27.1 Rules for a kernel
 
 * The first parameter is the index: `Idx` for one dimension, `Idx2` or `Idx3` for a
-  grid. The others are **uniforms** (`Copy` scalars, vectors and structs of them),
+  grid. These are built-in types and need no import. An index is opaque: `i.pos()`
+  gives its position as an `i32` (`.x()`, `.y()`, `.z()` on a grid index), and
+  `i.offset(d)` gives a neighboring index for use with `at_clamped` and `at_or`.
+  Only the kernel's own index parameter, unchanged, may be used with `[]`. The others are **uniforms** (`Copy` scalars, vectors and structs of them),
   **inputs** (`[]T`, `Grid[T]`) and **outputs** (`[]mut T`, `GridMut[T]`).
 * An output may be written only at the kernel's own index: `out[i] = ...`. It may be
   read at its own index.
@@ -207,7 +213,9 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
   constant range, `while`, and calls to other functions that meet these rules. It may
   not allocate, borrow, recurse, call through a pointer, spawn, block or fail.
 * Nothing in a kernel traps. Integer `+ - *` and `/ %` are errors inside a kernel: write
-  `+%`, `+|`, `@div_or(a, b, fallback)`.
+  `+%`, `+|`, `@div_or(a, b, fallback)`. A shift by a count that is not a constant is
+  written `@shl(x, n)` or `@shr(x, n)`, which take the count modulo the width.
+  `@assert`, `@panic` and `@narrow` are not available.
 * A kernel with `reduce(op)` returns one value per index, and the dispatch combines them
   with `op`, one of `+ * min max & | ^`. The combination order is chosen by the
   executor. For floats this is the one place in the language where the association

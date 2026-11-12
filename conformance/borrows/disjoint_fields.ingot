@@ -1,0 +1,13 @@
+//! expect: accept
+//! section: 12
+
+struct Pair { a: i64, b: i64 }
+
+fn f() -> i64 {
+    var p = Pair.{ a: 1, b: 2 };
+    let x = &mut p.a;
+    let y = &mut p.b;
+    x.* = 10;
+    y.* = 20;
+    return p.a + p.b;
+}

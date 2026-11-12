@@ -5,7 +5,7 @@ below is built yet.
 
 ## 0. Before writing the compiler
 
-Test the five bets listed in section 13 of [docs/rationale.md](docs/rationale.md) on
+Test the bets listed in section 13 of [docs/rationale.md](docs/rationale.md) on
 paper, by writing real programs in the language as specified and checking them by hand:
 
 1. A hash map and a JSON parser, to see whether linear cleanup is tolerable.
@@ -14,11 +14,17 @@ paper, by writing real programs in the language as specified and checking them b
 4. An integer-heavy kernel (a hash function, a bytecode interpreter), to see whether the
    required check removals in section 31 are enough.
 5. A stencil and a histogram as kernels, to see whether the kernel subset is too narrow.
+6. A pipeline of tasks joined by channels, to see what the `Owned` rule and
+   scope-long borrows cost.
 
 Source the facts in section 4 of [docs/research.md](docs/research.md) on the real
 machines.
 
 ## 1. First target: `aarch64-macos-m4`
+
+Follow [docs/impl/](docs/impl/README.md). Each step is done when the conformance tests
+for its area pass, and each new rule or error code gets a test before it is
+implemented.
 
 1. Front end, in Go: lexer, parser, modules, name resolution, JSON diagnostics with fix
    edits.

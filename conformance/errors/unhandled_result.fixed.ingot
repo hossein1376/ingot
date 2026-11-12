@@ -1,0 +1,14 @@
+//! expect: accept
+//! section: 6.2, 6.3
+
+enum HalfErr { odd }
+
+fn half(n: i64) -> i64 ! HalfErr {
+    if n % 2 != 0 { fail .odd; }
+    return n / 2;
+}
+
+fn quarter(n: i64) -> i64 ! HalfErr {
+    let h: i64 = try half(n);
+    return try half(h);
+}

@@ -1,0 +1,15 @@
+//! expect: run
+//! section: 6.4
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+
+    var n: i64 = 0;
+    {
+        defer { n = n * 10 + 1; }
+        defer { n = n * 10 + 2; }
+    }
+    @assert(n == 21);
+    return 0;
+}

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 13.1
+
+fn first(s: []u8) -> []u8 { //~ E1201
+    return s[0..1];
+}

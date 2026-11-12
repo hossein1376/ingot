@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.4
+
+fn shrink(a: i64) -> i32 {
+    return a as i32; //~ E0402
+}

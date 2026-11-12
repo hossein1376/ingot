@@ -1,0 +1,14 @@
+//! expect: trap
+//! section: 5.2
+
+import std.Env;
+
+fn shl(x: u32, n: i64) -> u32 {
+    return x << n; //~ T06
+}
+
+pub fn main(env: &Env) -> u8 {
+    let r = shl(1, 32);
+    @assert(r == 0);
+    return 0;
+}

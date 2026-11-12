@@ -57,6 +57,13 @@ struct holds borrows of things with different lifetimes. The work-around is to s
 the struct. If this proves common, named origin parameters on structs can be added
 later without changing existing code.
 
+*Known cost:* locks and channels hold only `Owned` values (section 13.6). Rust can put
+a `&'a [u8]` in a channel because the lifetime is part of the channel's type. Ingot's
+origin sets are computed per function and per moment, and a store made through a shared
+borrow by another task is invisible to that. Rather than add type-level lifetimes for
+this one case, borrowed data crosses task boundaries only as `spawn` arguments and
+`par for` items, and a pipeline passes offsets, handles or owned buffers.
+
 ## 3. Linear types and no implicit drops
 
 *Chosen:* the compiler never inserts a cleanup call. Types that own something are
@@ -142,7 +149,10 @@ cheap there, so those contexts require the explicit operators.
 
 *Known costs:* a runtime of a few thousand lines linked into concurrent programs; stacks
 are fixed reservations, so very deep recursion inside a task traps where a growable
-stack would not; a blocking foreign call must be declared as such.
+stack would not; a blocking foreign call must be declared as such; and `spawn` traps
+when task memory runs out, because making every `spawn` fallible would put a `try` on
+the most common concurrent statement for a failure that programs cannot usefully
+handle.
 
 Stackful tasks and stack borrows fit together only because stacks never move. That is
 why Go-style copying stacks were not an option and reservations with lazy commit were.
@@ -221,6 +231,9 @@ to be part of the normal loop.
 | `i64` for every length and index | One integer type for sizes on a 64-bit-only language. A negative index fails the same unsigned compare as a too-large one |
 | Structs in declaration order | Layout is predictable and FFI-compatible, and `ingot layout` shows the padding |
 | No operator overloading, no function overloading, no default arguments | One meaning per name and per operator |
+| Import cycles allowed inside a package | Nothing runs at load time, so there is no order to get wrong, and files can stay small enough to read whole |
+| Construction respects field privacy, including `@zero` and `@bits` | Without it, safe code could forge a `List` with any pointer or conjure a capability |
+| `Option` is `{ none, some }` | All-zero bytes are `.none` for every `?T`, with or without the pointer niche |
 
 ## 12. Left out on purpose
 
@@ -247,6 +260,10 @@ textures and multi-pass pipelines; a `packed struct` with bit fields.
    would push authors to `+%` everywhere and lose the point of trapping.
 5. **The kernel subset may be too narrow** for real GPU workloads, which often want
    scatter writes and neighbor access with custom boundaries.
+6. **`Owned`-only channels and locks may force copies** in pipelines that would pass
+   borrowed slices between stages.
+7. **Arguments of a task stay borrowed until the scope ends**, not until the task is
+   joined. Code that joins early and then wants the data back needs a nested scope.
 
 Each of these is cheap to test with a small prototype before the corresponding part of
 the compiler is built.

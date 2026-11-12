@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.1
+
+fn is_clear(a: u32, b: u32) -> bool {
+    return a & b == 0; //~ E0204
+}

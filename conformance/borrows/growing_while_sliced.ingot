@@ -1,0 +1,22 @@
+//! expect: reject
+//! section: 12, 14.3
+
+struct Buf { items: [4]i64, len: i64 }
+
+impl Buf {
+    fn view(self: &Buf) -> []i64 from self {
+        return &self.items[0..self.len];
+    }
+    fn push(self: &mut Buf, v: i64) {
+        self.items[self.len] = v;
+        self.len += 1;
+    }
+}
+
+fn f() -> i64 {
+    var b = Buf.{ items: @zero, len: 0 };
+    b.push(1);
+    let s = b.view();
+    b.push(2); //~ E1102
+    return s[0];
+}

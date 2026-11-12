@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 2
+
+fn f() -> i64 {
+    return missing_value; //~ E0304
+}

@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 7
+
+fn f() -> i64 {
+    var total: i64 = 2; //~ E0312
+    return total;
+}

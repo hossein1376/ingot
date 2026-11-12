@@ -1,0 +1,32 @@
+//! expect: run
+//! section: 4.3, 6.3
+
+import std.Env;
+
+enum Inner { bad }
+
+enum Outer { inner: from Inner, other }
+
+fn low(ok: bool) -> i64 ! Inner {
+    if !ok { fail .bad; }
+    return 1;
+}
+
+fn high(ok: bool) -> i64 ! Outer {
+    let v = try low(ok);
+    return v + 1;
+}
+
+pub fn main(env: &Env) -> u8 {
+    let a = high(true) catch _ => 0;
+    @assert(a == 2);
+    match high(false) {
+        .ok(_) => { return 1; }
+        .err(e) => {
+            match e {
+                .inner(_) => { return 0; }
+                .other => { return 2; }
+            }
+        }
+    }
+}

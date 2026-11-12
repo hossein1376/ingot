@@ -1,0 +1,7 @@
+//! expect: accept
+//! section: 7
+
+fn f() -> i64 {
+    let total: i64 = 2;
+    return total;
+}

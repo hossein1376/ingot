@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 26.2
+
+fn add(a: i32x4, b: i32x4) -> i32x4 {
+    return a + b; //~ E0407
+}

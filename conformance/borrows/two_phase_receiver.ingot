@@ -1,0 +1,15 @@
+//! expect: accept
+//! section: 12
+
+struct Counter { n: i64 }
+
+impl Counter {
+    fn get(self: &Counter) -> i64 { return self.n; }
+    fn add(self: &mut Counter, k: i64) { self.n += k; }
+}
+
+fn f() -> i64 {
+    var c = Counter.{ n: 1 };
+    c.add(c.get());
+    return c.get();
+}

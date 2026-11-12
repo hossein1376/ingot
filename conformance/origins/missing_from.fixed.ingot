@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 13.1
+
+fn first(s: []u8) -> []u8 from s {
+    return s[0..1];
+}

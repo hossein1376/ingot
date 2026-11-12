@@ -3,9 +3,11 @@
 Words used with a fixed meaning throughout the specification:
 
 * **error**: the compiler rejects the program and emits a diagnostic with a stable code.
-* **trap**: the running program prints `file:line:col: message` to standard error and the
-  whole process exits with status 101. A trap is deterministic and happens in every
-  build. There is no unwinding, so no `defer` runs.
+* **trap**: the running program prints `file:line:col: trap TNN: message` to standard
+  error and the whole process exits with status 101. A trap is deterministic and
+  happens in every build. There is no unwinding, so no `defer` runs. Section 16.1
+  lists the traps, and [impl/diagnostics.md](impl/diagnostics.md) gives each its code
+  and exact text.
 * **safe code**: any code outside an `unsafe` block.
 
 Design rule: **one obvious spelling, nothing implicit.** When
@@ -38,6 +40,10 @@ warnings.
 * Integer literals: `123`, `1_000_000`, `0xff`, `0o17`, `0b1010`. A character literal
   `'a'`, `'\n'`, `'\x7f'` is an integer literal with that byte value.
 * Float literals: `1.5`, `2e10`, `1.0e-3`. A digit is required on both sides of the dot.
+* After a `.`, a run of digits is a tuple field index: `t.0.1` is two field accesses,
+  never a float.
+* A `-` written directly before a numeric literal is part of the literal, so `-128` is
+  a valid `i8` and `-9223372036854775808` a valid `i64`.
 * String literals: `"..."` has type `[]u8` and lives for the whole program. `c"..."` has
   type `*u8`, is NUL-terminated and exists for FFI. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
 * Statements end with `;`. Blocks use braces and braces are never optional.
@@ -51,7 +57,10 @@ warnings.
   used directly). `import a.b.c as d;` binds it under another name.
 * There is no wildcard import and no merged namespace. Two imports that bind the same
   name are an error.
-* Imports form a directed acyclic graph. A cycle is an error.
+* Modules of one package may import each other freely, cycles included. Names are
+  resolved for the whole package at once and no code runs at load time (section 4.5),
+  so there is no initialization order to get wrong. Packages form a directed acyclic
+  graph.
 * An item is private to its module unless it is marked `pub`. Struct fields are private
   unless marked `pub`. Enum variants and interface methods are as visible as their type.
 * A program is compiled whole. There are no separately compiled Ingot libraries.
@@ -69,7 +78,7 @@ warnings.
 | `(A, B, ...)` | struct layout | tuple of two or more. Fields are `.0`, `.1`, ... |
 | `struct` | section 25 | fields in declaration order |
 | `enum` | section 25 | a tag and at most one payload per variant |
-| `?T` | section 25 | optional. The same as the enum `Option[T] { some: T, none }` |
+| `?T` | section 25 | optional. The same as the enum `Option[T] { none, some: T }` |
 | `T ! E` | section 6 | result. The same as the enum `Result[T, E] { ok: T, err: E }` |
 | `&T`, `&mut T` | 8 | shared and exclusive borrow of one `T`. Never null |
 | `[]T`, `[]mut T` | 16 | shared and exclusive slice: a borrow of `len` consecutive `T`. Fields `.len: i64` and, in `unsafe`, `.ptr` |
@@ -85,6 +94,7 @@ explicitly.
 **Type properties.** Every type has four properties that the compiler computes from its
 structure. Section 10 defines them. They are `Copy`, `Discard`, `Send` and `Sync`, and a
 type is additionally either a **view type** (it contains a borrow) or **self-contained**.
+The bound `Owned` names the self-contained types.
 
 **No implicit conversions.** A value only flows between identical types. The only
 exceptions are untyped numeric literals, which take the type their context expects, and
@@ -139,6 +149,13 @@ linear struct File { fd: i32 }                  // must be consumed exactly once
   given. There are no default field values.
 * Destructuring: `let Vec3.{ x, y, z } = v;`. Destructuring a struct with private fields
   is only possible inside its module. This is how a linear struct is finally taken apart.
+* **Construction respects privacy.** Outside a struct's module, a value of it can be
+  made from nothing only if every field is `pub`. This covers a literal, `@zero` and
+  `@bits` alike, and a struct with no fields counts as having a private one. A type
+  with a private field is therefore only ever produced by its own module's functions.
+  That is what lets a module keep an invariant (a `List` whose pointer and length
+  agree), and what stops a capability such as `Heap` or `Fs` from being conjured.
+  The same holds for an enum with a payload of such a type.
 
 ### 4.3 Enums
 
@@ -183,7 +200,7 @@ impl Hash for Vec3 {
 
 * `impl T { ... }` adds functions to the namespace of `T`. A function whose first
   parameter is named `self` is a method and may be called as `value.name(args)`.
-  Others are called `T.name(args)`.
+  Others are called `T.name(args)`. The type of `self` is `T`, `&T` or `&mut T`.
 * **Receiver passing is the one place a borrow is inserted for you.** `v.dot(o)` passes
   `v`, `&v` or `&mut v` according to the declared type of `self`. Every other argument is
   passed exactly as written, so a callee that mutates an argument shows `&mut` at the
@@ -191,13 +208,18 @@ impl Hash for Vec3 {
 * An interface lists required functions, may declare associated types (`type Item;`) and
   may provide default bodies. `Self` is the implementing type.
 * `impl I for T` must be in the module that declares `I` or the module that declares `T`.
-  A type implements an interface at most once.
+  A type implements an interface at most once. `T` is a named type, possibly generic
+  (`impl[K: Hash] Hash for Pair[K, K]`), never a bare type parameter, so two
+  implementations can never overlap.
+* `value.name(args)` looks in `impl T` first and then in the interfaces `T` implements.
+  If two interfaces supply the name, the call is written `I.name(value, args)`.
 * Calls through a generic parameter are resolved at compile time. Dynamic dispatch
   happens only through `&dyn I` and `&mut dyn I`, and only for interfaces whose methods
   do not mention `Self` by value and have no generic parameters.
 * There is no inheritance and no operator overloading. `+` is never a function call.
   The built-in interfaces `Eq`, `Ord` and `Hash` are ordinary: `a.eq(&b)`, `a.cmp(&b)`.
-  The operators `==` and `<` work only on scalars, raw pointers and payload-free enums.
+  The operators `==` and `<` work only on scalars, raw pointers and payload-free enums,
+  and lane-wise on vectors (section 26).
 
 ### 4.5 Constants, statics and aliases
 
@@ -207,7 +229,8 @@ static hits: Atomic[i64] = Atomic[i64].init(0);     // one address, lives for th
 type Bytes = List[u8, Heap];
 ```
 
-* A `const` initializer is evaluated at compile time (section 9).
+* A `const` initializer and a `static` initializer are evaluated at compile time
+  (section 9). No code runs before `main`.
 * A `static` is immutable through its name. Its type must be `Sync`, so any mutation
   goes through an atomic or a lock. There are no mutable global variables.
 * A `static` or `const` that holds a borrow may only borrow other statics and literals.
@@ -262,6 +285,9 @@ assignment the target place is evaluated before the value.
 | `/ %` | trap on a zero divisor and on `MIN / -1`. `/` truncates toward zero and `%` has the sign of the dividend |
 | `<< >>` | trap if the count is negative or not less than the bit width. `>>` is arithmetic for signed types |
 
+Unary `-` is defined for signed integers and floats, and `-%` for every integer type.
+A shift count may have any integer type.
+
 The behavior is identical in every build. The compiler removes an overflow check when it
 can prove the result is in range (section 31 says exactly when it must), and `ingot cost`
 lists the checks that remain. Code that wants wrapping says so with `+%`.
@@ -297,7 +323,8 @@ a builtin that names what happens to values that do not fit:
 * `r.field`, `r.method()` and `r[i]` reach through a borrow. Reading or writing the
   whole value is explicit: `r.*`. A raw pointer has no shorthand: `p.*.field`, in
   `unsafe`.
-* `a[i]` on an array or slice traps if `i < 0 || i >= len`. It is a place.
+* `a[i]` on an array or slice takes an `i64` index and traps if `i < 0 || i >= len`. It
+  is a place.
 * `s[lo..hi]` on a slice gives a slice of the same kind and traps unless
   `0 <= lo <= hi <= s.len`. Taking a slice of an array is a borrow and is written as
   one: `&a[lo..hi]` gives `[]T`, `&mut a[lo..hi]` gives `[]mut T`.
@@ -309,8 +336,10 @@ a builtin that names what happens to values that do not fit:
 ### 5.6 Calls and closures
 
 * A call passes each argument by value: a `Copy` value is copied, anything else is moved.
-* Type arguments of a generic function are inferred from the argument types alone. When
-  a type parameter does not appear in a parameter type, write `f.[T](args)`.
+* Type arguments of a generic function are inferred from the argument types alone. An
+  untyped literal does not decide a type parameter; if nothing else does, the literal's
+  default type is used. When a type parameter does not appear in a parameter type,
+  write `f.[T](args)`.
 * A **closure** is written with an explicit capture list:
 
   ```ingot
@@ -324,7 +353,8 @@ a builtin that names what happens to values that do not fit:
   closure has its own anonymous type, so it is passed to a generic parameter bounded by
   `Fn(A) -> R` (callable through `&`), `FnMut(A) -> R` (through `&mut`) or
   `FnOnce(A) -> R` (consumed by the call), and the call is direct. `&dyn Fn(A) -> R` is
-  the dynamic form.
+  the dynamic form. Because a closure's type has no name, a closure is stored in a field
+  or returned only through a type parameter or as `&dyn`.
 
 ### 5.7 Conditional and match expressions
 
@@ -405,7 +435,8 @@ let k = parse_u32(text) catch e => {                 // run a block that leaves
 * `defer { ... }` runs the block when the enclosing block exits by any path: falling off
   the end, `return`, `fail`, `break`, `continue` or a propagating `try`. Deferred blocks
   run in reverse order. A `return` value is computed before they run.
-* `errdefer { ... }` runs only when the function exits with an error.
+* `errdefer { ... }` runs only when its block is left because the function is failing:
+  a `fail`, or a `try` that propagates.
 * A deferred block may not contain `return`, `fail`, `try`, or a `break`/`continue` that
   leaves it. A fallible call inside it must be handled with `catch`.
 * Deferred blocks are expanded at each exit. A trap does not run them.
@@ -425,14 +456,21 @@ var buf: [64]u8 = @zero;  // mutable, explicit type
 _ = g();                  // discard a result on purpose (the type must be Discard)
 ```
 
-* Every binding is initialized. `@zero` is the all-zero value and is allowed only for
-  types where that is valid: numbers, `bool`, arrays and structs of those, raw pointers,
-  `?T`. It is an error for a type that contains a borrow or an enum with no zero tag.
+* Every binding is initialized. `@zero` is the all-zero value. It is allowed for
+  numbers, `bool`, raw pointers and vectors, for arrays, tuples and structs of types
+  that allow it (subject to the privacy rule of section 4.2), and for an enum whose
+  first variant has no payload or a payload that allows it. For any `?T` it is `.none`.
+  It is an error for a type that contains a borrow.
 * A name may not shadow another local or a parameter.
+* The pattern of a `let` or `var` cannot fail to match: a name, `_`, a tuple pattern
+  or a struct pattern. Anything that can fail belongs in `if let` or `match`.
 * Only a call may be an expression statement, optionally under `try` or followed by
   `catch`, and what is left after that must be `void`. Any other result is used, bound,
   or discarded with `_ =`.
 * Conditions are `bool`. There is no truthiness.
+* An unused import, an unused local binding, and a `var` that is never assigned or
+  exclusively borrowed after its initialization are errors, each with a fix. A
+  parameter may go unused.
 
 ### 7.1 Control flow
 
@@ -443,6 +481,7 @@ while i < n { ... }
 while let .some(item) = it.next() { ... }
 loop { ... }                                   // forever; leave with break or return
 for i in lo..hi { ... }                        // i: the type of lo and hi, immutable
+for i in lo..=hi { ... }                       // hi included
 for i in lo..hi step 4 { ... }
 for x in xs { ... }
 for i, x in xs { ... }                         // with the i64 index
@@ -455,10 +494,12 @@ outer: for row in rows { for c in row { if c == 0 { break outer; } } }
 |---|---|
 | `[]T` or an array, with `T: Copy` | `T`, a copy of each element |
 | `[]mut T` | `&mut T` |
+| an array value `[N]T`, with `T` not `Copy` | `T`, moved out. The array is consumed, and if `T` is linear the loop cannot be left early |
 | a value whose type implements `Iter` | `Iter.Item`, by calling `next` until `.none` |
 
 `xs.refs()` iterates a shared slice by `&T`, for elements that are not `Copy`. Loops
-over arrays, slices and ranges are counted loops with no iterator object.
+over arrays, slices and ranges are counted loops with no iterator object. A range whose
+start is not below its end runs zero times.
 
 ### 7.2 Match and patterns
 
@@ -474,7 +515,7 @@ match msg {
 * A `match` must cover every value. For an enum that means every variant or an `else`
   arm. For integers, an `else` arm is required. The fix for a missing variant inserts
   the arms.
-* Patterns: `_`, a binding name, a literal, a range `a..b`, `.variant`, `.variant(p)`,
+* Patterns: `_`, a binding name, a literal, a range `a..b` or `a..=b`, `.variant`, `.variant(p)`,
   `(p, q)`, `T.{ field, field: p }`.
 * Bindings follow the scrutinee. `match v` moves or copies payloads out of `v`.
   `match &v` binds shared borrows of the payloads and `match &mut v` binds exclusive
@@ -494,7 +535,9 @@ when @target.os == .macos {
 }
 ```
 
-`when` takes a constant condition. Only the taken branch is type-checked and compiled.
+`when` takes a constant condition built only from `@target`, literals, comparisons and
+`&& || !`. It cannot name a constant or call a function, because it is decided before
+names are resolved. Only the taken branch is type-checked and compiled.
 It may appear as a statement or around items at module level. `ingot check
 --all-targets` (section 33) is how the branches for other targets get checked.
 
@@ -519,7 +562,12 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
 * Generic parameters are types or `const` values of integer, `bool` or enum type.
 * A generic body is checked **once**, against its bounds. An operation not granted by a
   bound is an error in the generic, not in some instantiation.
-* Each distinct instantiation is compiled as its own copy.
+* Each distinct instantiation is compiled as its own copy. Checking the generic once is
+  the whole check: an instantiation can fail only because a constant expression that
+  depends on an argument traps, because instantiation nests too deep, or because a
+  kernel is dispatched on an executor that lacks one of its types.
+* `@zero` and `@bits` on a type parameter need a bound that grants them. `Num` and its
+  relatives grant `@zero`. Nothing grants `@bits`, which needs concrete types.
 * Built-in bounds:
 
   | Bound | Grants |
@@ -527,6 +575,7 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
   | `Copy` | implicit duplication |
   | `Discard` | letting a value go out of scope unused |
   | `Send`, `Sync` | crossing task boundaries (section 20) |
+  | `Owned` | holding no borrow, so a value may outlive everything around it (section 13.6) |
   | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Each implies `Copy` |
   | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value |
 

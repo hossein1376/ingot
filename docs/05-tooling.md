@@ -11,7 +11,7 @@ intended author cannot work without them.
 * `ingot check --json` prints one JSON object per line, in a stable order:
 
   ```json
-  {"code":"E0412","message":"`buf` is borrowed here and moved while the borrow is live",
+  {"code":"E1104","name":"move_while_borrowed","message":"`buf` is moved while it is borrowed",
    "span":{"file":"io.ingot","start":{"line":41,"col":18},"end":{"line":41,"col":21}},
    "related":[{"role":"borrow","span":{"file":"io.ingot","start":{"line":38,"col":16},"end":{"line":38,"col":20}}},
               {"role":"later_use","span":{"file":"io.ingot","start":{"line":44,"col":9},"end":{"line":44,"col":14}}}],
@@ -20,7 +20,11 @@ intended author cannot work without them.
 
 * A code is stable forever and has an entry in `ingot explain CODE` with a minimal
   failing example and its corrected form. A test fails the build of the compiler if it
-  can emit a code the catalog lacks.
+  can emit a code the catalog lacks. The catalog is
+  [impl/diagnostics.md](impl/diagnostics.md): every code, the exact condition, the
+  primary span, the roles and the fix.
+* The order is: by file path, then by the start of the primary span, then by code.
+* A file with a lexical or syntax error is not analyzed further. Other files are.
 * `related` carries the other places that explain the error, each with a fixed `role`:
   for ownership errors `borrow`, `move`, `later_use`, `declared`, `scope_end`,
   `signature`. An agent should not have to parse prose to find them.
@@ -47,8 +51,9 @@ that is visible in its source. One object per item:
 | `task_spawn`, `lock`, `park_point` | concurrency costs |
 | `frame` | stack frame size |
 
-The report is the same for the debug and release pipelines, because the items are
-properties of checked semantics, not of optimization luck. The removals below are
+The check, `alloc`, `indirect_call`, `copy` and concurrency rows are the same for both
+build pipelines, because they are properties of the checked semantics. `not_inlined`,
+`loop` and `frame` describe the optimizing pipeline only. The removals below are
 **required**: a conforming compiler performs them in every build, so an agent can rely
 on them when writing a hot loop.
 
@@ -60,7 +65,8 @@ on them when writing a hot loop.
 3. `a[i + k]`, `s[i..i + k]`, `@load(V, s, i)` and `@store(s, i, v)` when the access is
    dominated by a condition or `@assert` of the form `i + c <= s.len` (or `<`) with
    constant `c` large enough, `i` is known non-negative, and neither `i` nor `s` changes
-   in between.
+   in between. A constant index counts as `i = 0`, so `@assert(s.len >= 2)` removes the
+   checks on `s[0]` and `s[1]`.
 4. No overflow check on a `for` loop counter, on `i += c` in a loop guarded by
    `i + c <= n`, or on an operation whose operands were widened with `as` so that the
    result always fits.
@@ -73,7 +79,8 @@ the way to remove a remaining check is to restructure the code or add an `@asser
 hoists it, not a build flag.
 
 `ingot audit --json` lists every `unsafe` block with its reason string, every `extern`
-declaration, every `@forget`, every `@debug`, and every `unsafe impl`.
+declaration, every `@forget`, every `@debug`, every `unsafe impl`, and every `static`
+with interior mutability.
 
 `ingot layout TYPE --json` prints size, alignment, field offsets and padding.
 
@@ -87,9 +94,11 @@ declaration, every `@forget`, every `@debug`, and every `unsafe impl`.
 * `@test_env()` is available only inside tests. It gives a `&Env` whose file system is a
   fresh temporary directory, whose clock can be stepped by hand, and whose network is
   loopback only.
-* `ingot test --seed N` fixes the scheduler's stealing and `select` choices, so a
-  failing interleaving can be replayed. Tests run with a randomized seed otherwise and
-  print it on failure.
+* `ingot test --seed N` runs the scheduler on one worker thread and takes every
+  scheduling decision from the seed: which task runs at each spawn and park point, and
+  each `select` choice. An interleaving that fails this way replays exactly. Without
+  `--seed`, tests run on all workers, and a failure that depends on real parallel
+  timing is not reproducible by seed.
 * Tests in a dependency are not run.
 * `bench "name" { ... }` blocks are measured by `ingot bench`, which reports time per
   iteration and, where the OS exposes them, cycles and instructions.
@@ -105,6 +114,9 @@ targets = ["aarch64-macos-m4", "x86_64-linux-znver4", "x86_64-windows-znver4"]
 csv = { path = "../csv" }
 zstd = { git = "https://example.com/zstd-ingot", hash = "b3:9f2c..." }
 
+[runtime]
+task_stack = "1MiB"
+
 [link.aarch64-macos-m4]
 frameworks = ["Metal"]
 
@@ -116,7 +128,8 @@ libs = ["vulkan-1"]
 ```
 
 * A package is a directory tree of `.ingot` files with one `ingot.toml`. The entry point
-  of an executable is `pub fn main` in `main.ingot`.
+  of an executable is `pub fn main` in `main.ingot`. `ingot check` and `ingot test` do
+  not need one.
 * A dependency is source, pinned by content hash. There is no version solving.
 * A build is deterministic: the same sources, compiler and target give the same bytes.
 * `--target NAME` selects one of the listed targets and defaults to the host. `ingot
@@ -160,9 +173,13 @@ If an error is returned, the runtime prints it to standard error and exits with 
 | `env.stdin`, `env.stdout`, `env.stderr` | `&Reader`, `&Writer` | standard streams |
 | `env.gpu` | `?gpu.Device` | the GPU, if there is one |
 
-A function that is not handed one of these, directly or inside something else, cannot
-perform that kind of effect in safe code. `@debug("fmt", args...)` is the single
-exception: it writes to standard error from anywhere, and `ingot audit` lists it.
+Authority starts only here. The capability types in this table cannot be constructed
+outside `std`
+(section 4.2), so safe code performs an effect only with a value that traces back to
+`main`'s `Env`. Code that was given a capability can park it in a `static` behind a
+lock for other code to pick up, and `ingot audit` lists every such `static` so that
+this is visible. `@debug("fmt", args...)` is the single built-in exception: it writes
+to standard error from anywhere, and `ingot audit` lists it too.
 
 ## 34. Formatting
 
@@ -180,10 +197,10 @@ Only the shape is specified here. Each module gets its own document as it is des
 | `std.mem` | `Allocator`, `Heap`, `Vm`, `Arena`, `FixedBuf`, `Box`, `Arc`, `Pool`/`Handle`, `copy`, `fill`, `eq` |
 | `std.list`, `std.map`, `std.set`, `std.str`, `std.ring`, `std.heap` | `List[T, A]`, `Map[K, V, A]` (open addressing, SIMD group probing), `Set`, `Str[A]`, fixed ring buffer, binary heap |
 | `std.text` | UTF-8 validation and decoding, number parsing and printing, splitting, searching (SIMD) |
-| `std.fmt` | `@format(writer, "x={} y={:.3}", x, y)`: the format string is checked at compile time against the argument types |
+| `std.fmt` | `@format(writer, "x={} y={:.3}", x, y)`: the format string is checked at compile time against the argument types. Any value prints with `{}`: a type that does not implement `Format` gets a structural form generated by the compiler |
 | `std.io`, `std.fs`, `std.net` | `Reader`, `Writer`, buffered wrappers, files, directories, memory mapping, TCP and UDP. Blocking calls park the task |
 | `std.time` | `Clock`, `Instant`, `Duration` |
-| `std.sync` | `Atomic`, `Mutex`, `RwLock`, `Once`, `Chan`, `WaitGroup` |
+| `std.sync` | `Atomic`, `Mutex`, `RwLock`, `Once`, `Chan`, `WaitGroup`. Contents are `Owned` (section 13.6) |
 | `std.task`, `std.thread` | `Scope`, `Task`, `set_qos`, `yield`, `canceled`, `first_of`; dedicated OS threads |
 | `std.par` | `Split`, `chunks`, `zip`, `sum`, `map_reduce`, `try_each`, `sort`, `Arenas` |
 | `std.simd` | native-width aliases (`simd.F32`, `simd.U8`, ...), chunked iteration helpers |

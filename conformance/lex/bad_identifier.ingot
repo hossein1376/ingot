@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 1
+
+fn f() -> i64 {
+    let myCount: i64 = 1; //~ E0104
+    return myCount; //~ E0104
+}

@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 5.2, 9
+
+const too_big: i32 = 2147483647 + 1; //~ E0806

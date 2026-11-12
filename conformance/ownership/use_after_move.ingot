@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 11
+
+struct Buf { len: i64 }
+
+fn take(b: Buf) -> i64 {
+    return b.len;
+}
+
+fn f() -> i64 {
+    let b = Buf.{ len: 3 };
+    let n = take(b);
+    return n + b.len; //~ E1001
+}

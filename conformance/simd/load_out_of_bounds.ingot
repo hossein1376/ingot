@@ -1,0 +1,15 @@
+//! expect: trap
+//! section: 26.3
+
+import std.Env;
+
+fn head(xs: []f32) -> f32x4 {
+    return @load(f32x4, xs, 0); //~ T14
+}
+
+pub fn main(env: &Env) -> u8 {
+    let a: [2]f32 = [2]f32.{ 1.0, 2.0 };
+    let v = head(&a[0..2]);
+    @assert(v[0] == 1.0);
+    return 0;
+}

@@ -1,0 +1,18 @@
+//! expect: run
+//! section: 18
+
+import std.Env;
+
+fn fib(n: i64) -> i64 {
+    if n < 2 { return n; }
+    scope s {
+        let left = spawn fib(n - 1) in s;
+        let right = fib(n - 2);
+        return left.join() + right;
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(fib(15) == 610);
+    return 0;
+}

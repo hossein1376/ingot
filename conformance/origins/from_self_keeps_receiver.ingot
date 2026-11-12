@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 13.1
+
+struct Parser { src: []u8, pos: i64 }
+
+impl Parser {
+    fn pos_mut(self: &mut Parser) -> &mut i64 from self {
+        return &mut self.pos;
+    }
+}
+
+fn f(text: []u8) -> i64 {
+    var p = Parser.{ src: text, pos: 0 };
+    let slot = p.pos_mut();
+    let n = p.src.len; //~ E1103
+    slot.* = n;
+    return p.pos;
+}

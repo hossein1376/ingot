@@ -1,0 +1,14 @@
+//! expect: trap
+//! section: 5.4
+
+import std.Env;
+
+fn small(x: i64) -> i8 {
+    return @narrow(i8, x); //~ T07
+}
+
+pub fn main(env: &Env) -> u8 {
+    let r = small(128);
+    @assert(r == 0);
+    return 0;
+}

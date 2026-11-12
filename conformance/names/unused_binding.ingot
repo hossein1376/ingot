@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 7
+
+fn f() -> i64 {
+    let spare: i64 = 2; //~ E0311
+    return 1;
+}

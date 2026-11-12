@@ -1,0 +1,5 @@
+//! expect: accept
+//! section: 8, 10
+
+fn drop_it[T: Discard](x: T) {
+}

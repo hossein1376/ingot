@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 4.2
+
+import private_construction.lib;
+
+fn forge() -> lib.Ticket {
+    return lib.Ticket.{ id: 7 }; //~ E0315
+}
+
+fn blank() -> lib.Ticket {
+    let t: lib.Ticket = @zero; //~ E0315
+    return t;
+}

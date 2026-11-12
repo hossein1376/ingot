@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.7
+
+fn pick(c: bool) -> i64 {
+    return if c { let y: i64 = 1; y } else { 2 }; //~ E0207
+}

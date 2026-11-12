@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn read(p: *i64) -> i64 {
+    return unsafe("") { p.* }; //~ E1302
+}

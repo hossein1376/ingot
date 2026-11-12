@@ -37,7 +37,7 @@ fn count_lines(data: []u8) -> i64 {
 pub fn main(env: &Env) -> void ! AppErr {
     if env.args.len != 2 { fail .usage; }
 
-    var arena = try Arena.init(env.vm, 1 << 30);
+    let arena = try Arena.init(env.vm, 1 << 30);
     defer { arena.deinit(); }                              // forgetting this line is a compile error
 
     let data: []u8 = try fs.read_all(env.fs, env.args[1], &arena);
@@ -73,6 +73,11 @@ pub fn main(env: &Env) -> void ! AppErr {
 
 Start with [docs/README.md](docs/README.md). It maps the goals to the design, gives the
 whole design on one page and records the decisions that shaped it.
+
+To implement the language, read [docs/impl/](docs/impl/README.md) next: the glossary,
+the catalog of every error code and trap, the compiler pipeline, and the ownership
+checker written out as algorithms. [conformance/](conformance/README.md) holds the
+programs every implementation must agree on.
 
 ## History
 
