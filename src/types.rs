@@ -414,6 +414,7 @@ pub struct StructDef {
     pub generics: Vec<String>,
     pub span: crate::source::Span,
     pub file: String,
+    pub module: String,
 }
 
 #[derive(Clone, Debug)]
@@ -425,6 +426,7 @@ pub struct EnumDef {
     pub tag: Option<Type>,
     pub span: crate::source::Span,
     pub file: String,
+    pub module: String,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -1,0 +1,11 @@
+import demo.lib;
+import demo.lib.Counter;
+
+pub fn main(env: &Env) -> u8 {
+    var c = Counter.make(4);
+    c.bump();
+    @assert(c.get() == 5);
+    @assert(lib.add(2, 3) == 5);
+    @assert(lib.limit == 10);
+    return 0;
+}

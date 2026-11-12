@@ -4,9 +4,8 @@
 //! the parts the MVP can decide: `accept`, `reject`, and (once the evaluator
 //! lands) `run` and `trap`. `cost` is skipped until phase 10 exists.
 
-use crate::check::{Analysis, analyze};
+use crate::check::Analysis;
 use crate::interp;
-use crate::source::Source;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -57,6 +56,11 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     };
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.path());
+    // A directory with `main.ingot` is one package test, not one test per file.
+    if dir.join("main.ingot").exists() {
+        out.push(dir.join("main.ingot"));
+        return;
+    }
     for e in entries {
         let p = e.path();
         if p.is_dir() {
@@ -163,19 +167,14 @@ pub fn run(root: &Path) -> Report {
                 }
             }
             Expect::Accept | Expect::Reject => {
-                let text = match std::fs::read_to_string(&case.path) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        report.failed += 1;
-                        report.failures.push(Failure {
-                            path: case.path.clone(),
-                            message: e.to_string(),
-                        });
-                        continue;
-                    }
+                let Some(analysis) = analyze_case(&case) else {
+                    report.failed += 1;
+                    report.failures.push(Failure {
+                        path: case.path.clone(),
+                        message: "could not read source".to_string(),
+                    });
+                    continue;
                 };
-                let source = Source::new(case.path.to_string_lossy().replace('\\', "/"), text);
-                let analysis = analyze(source);
                 let actual: BTreeSet<(String, u32)> = analysis
                     .diagnostics
                     .iter()
@@ -291,9 +290,5 @@ pub fn supported(case: &Case) -> bool {
 }
 
 pub fn analyze_case(case: &Case) -> Option<Analysis> {
-    let text = std::fs::read_to_string(&case.path).ok()?;
-    Some(analyze(Source::new(
-        case.path.to_string_lossy().replace('\\', "/"),
-        text,
-    )))
+    crate::check::analyze_file(&case.path).ok()
 }

@@ -70,7 +70,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
                 }
                 return Ok(1);
             }
-            match ingotc::interp::run_tests(&analysis.program, &analysis.sources.files[0]) {
+            match ingotc::interp::run_tests(&analysis.program, &analysis.sources) {
                 Ok((passed, failed)) => {
                     eprintln!("{passed} passed, {failed} failed");
                     Ok(if failed == 0 { 0 } else { 1 })
@@ -139,14 +139,7 @@ fn path_arg(args: &[String]) -> Result<PathBuf, String> {
         return Err("give a source file".to_string());
     };
     if path.is_dir() {
-        let main = path.join("main.ingot");
-        if main.exists() {
-            return Ok(main);
-        }
-        return Err(format!(
-            "{} is a directory without main.ingot",
-            path.display()
-        ));
+        return Ok(path);
     }
     if !Path::new(&path).exists() {
         return Err(format!("{} does not exist", path.display()));

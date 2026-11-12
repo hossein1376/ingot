@@ -13,6 +13,7 @@ pub mod cost;
 pub mod diagnostic;
 pub mod interp;
 pub mod lexer;
+pub mod loader;
 pub mod ownership;
 pub mod parser;
 pub mod source;

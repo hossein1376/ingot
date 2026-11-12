@@ -83,13 +83,13 @@ fn json_escape(s: &str) -> String {
 
 pub fn cost_items(program: &Program) -> Vec<CostItem> {
     let mut out = Vec::new();
-    for (name, f) in &program.functions {
-        if name.contains('.') || f.external {
+    for f in program.functions.values() {
+        if f.owner.is_some() || f.external {
             continue;
         }
         if let Some(body) = &f.decl.body {
             let mut facts = Facts::default();
-            let canonical = format!("t.main.{}", f.decl.name);
+            let canonical = format!("{}.{}.{}", program.package_name, f.module, f.decl.name);
             walk_statements(&body.stmts, &mut facts, &canonical, &mut out);
         }
     }
@@ -100,7 +100,7 @@ pub fn cost_items(program: &Program) -> Vec<CostItem> {
             }
             if let Some(body) = &f.decl.body {
                 let mut facts = Facts::default();
-                let canonical = format!("t.main.{}", f.decl.name);
+                let canonical = format!("{}.{}.{}", program.package_name, f.module, f.decl.name);
                 walk_statements(&body.stmts, &mut facts, &canonical, &mut out);
             }
         }

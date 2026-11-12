@@ -1,0 +1,7 @@
+import demo.lib.Secret;
+
+pub fn main(env: &Env) -> u8 {
+    let s = Secret.{ hidden: 1 };
+    @assert(s.hidden == 1);
+    return 0;
+}

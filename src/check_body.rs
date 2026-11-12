@@ -44,6 +44,7 @@ pub struct Checker<'a> {
     kernel_index: Option<String>,
     param_into: HashMap<String, Option<String>>,
     from: Vec<Origin>,
+    module: String,
 }
 
 impl<'a> Checker<'a> {
@@ -57,6 +58,7 @@ impl<'a> Checker<'a> {
         generic_bounds: HashMap<String, Vec<String>>,
         self_ty: Option<Type>,
         is_test: bool,
+        module: &str,
     ) -> Self {
         Checker {
             source,
@@ -78,6 +80,7 @@ impl<'a> Checker<'a> {
             kernel_index: None,
             param_into: HashMap::new(),
             from: Vec::new(),
+            module: module.to_string(),
         }
     }
 
@@ -361,53 +364,63 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        if self.program.defs.structs.contains_key(&name) {
-            return Type::Struct(name, self.resolve_args(&p.args));
-        }
-        if self.program.defs.enums.contains_key(&name) {
-            return Type::Enum(name, self.resolve_args(&p.args));
-        }
-        if p.segments.len() > 1 || self.program.defs.external.contains(&name) {
-            let mut base = if p.segments.len() > 1 {
-                p.segments
-                    .iter()
-                    .map(|(s, _)| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(".")
-            } else {
-                name
-            };
-            let args = self.resolve_args(&p.args);
-            if matches!(base.as_str(), "Mutex" | "RwLock" | "Chan" | "Once")
-                && args.iter().any(|t| t.is_view(&self.program.defs))
-            {
-                self.diag(
-                    "E0801",
-                    format!("{base} requires `Owned` contents, but this argument is a view"),
-                    p.span,
-                );
+        if name == "Option" && p.segments.len() == 1 {
+            if let Some(t) = self.resolve_args(&p.args).into_iter().next() {
+                return Type::Optional(Box::new(t));
             }
-            if !args.is_empty() {
-                base = format!(
+        }
+        if name == "Result" && p.segments.len() == 1 {
+            let mut it = self.resolve_args(&p.args).into_iter();
+            if let (Some(t), Some(e)) = (it.next(), it.next()) {
+                return Type::Result(Box::new(t), Box::new(e));
+            }
+        }
+        let resolved = self
+            .program
+            .resolve_type_path(&self.module, p)
+            .or_else(|| {
+                if p.segments.len() == 1 && self.program.defs.external.contains(&name) {
+                    Some(ResolvedName::External(name.clone()))
+                } else {
+                    None
+                }
+            });
+        match resolved {
+            Some(ResolvedName::Local(canonical)) => {
+                if self.program.defs.structs.contains_key(&canonical) {
+                    return Type::Struct(canonical, self.resolve_args(&p.args));
+                }
+                if self.program.defs.enums.contains_key(&canonical) {
+                    return Type::Enum(canonical, self.resolve_args(&p.args));
+                }
+                return Type::External(canonical);
+            }
+            Some(ResolvedName::External(mut base)) => {
+                if let Some(stripped) = base.strip_prefix("External:") {
+                    base = stripped.to_string();
+                }
+                let args = self.resolve_args(&p.args);
+                if matches!(base.as_str(), "Mutex" | "RwLock" | "Chan" | "Once")
+                    && args.iter().any(|t| t.is_view(&self.program.defs))
+                {
+                    self.diag(
+                        "E0801",
+                        format!("{base} requires `Owned` contents, but this argument is a view"),
+                        p.span,
+                    );
+                }
+                if args.is_empty() {
+                    return Type::External(base);
+                }
+                return Type::External(format!(
                     "{base}[{}]",
                     args.iter()
                         .map(|t| t.to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
-                );
+                ));
             }
-            return Type::External(base);
-        }
-        if name == "Option" {
-            if let Some(t) = self.resolve_args(&p.args).into_iter().next() {
-                return Type::Optional(Box::new(t));
-            }
-        }
-        if name == "Result" {
-            let mut it = self.resolve_args(&p.args).into_iter();
-            if let (Some(t), Some(e)) = (it.next(), it.next()) {
-                return Type::Result(Box::new(t), Box::new(e));
-            }
+            None => {}
         }
         self.diag("E0305", format!("undefined type `{name}`"), p.span);
         Type::Error
@@ -434,8 +447,7 @@ impl<'a> Checker<'a> {
             ExprKind::Paren(x) => self.const_i64(x),
             ExprKind::Ident(n) => self
                 .program
-                .consts
-                .get(n)
+                .const_value_in(&self.module, n)
                 .and_then(|c| match c.value {
                     Some(ConstVal::Int(v)) => Some(v as i64),
                     _ => None,
@@ -1598,8 +1610,17 @@ impl<'a> Checker<'a> {
                 if name == "_" {
                     return Type::Error;
                 }
-                match self.local(name, expr.span, false) {
-                    Some(ty) => ty,
+                if let Some(ty) = self.local(name, expr.span, false) {
+                    return ty;
+                }
+                match self.program.resolve_value_name(&self.module, name) {
+                    Some(ResolvedName::External(_)) => Type::External(name.clone()),
+                    Some(ResolvedName::Local(canonical)) => {
+                        if let Some(info) = self.program.consts.get(&canonical) {
+                            return info.ty.clone();
+                        }
+                        Type::External(canonical)
+                    }
                     None => Type::Error,
                 }
             }
@@ -1708,12 +1729,22 @@ impl<'a> Checker<'a> {
                 name,
                 name_span,
             } => {
+                if let ExprKind::Ident(alias) = &base.kind {
+                    if let Some(crate::check::ResolvedName::Local(canonical)) =
+                        self.program.resolve_qualified_name(&self.module, alias, name)
+                    {
+                        if let Some(info) = self.program.consts.get(&canonical) {
+                            return info.ty.clone();
+                        }
+                    }
+                }
                 let base_ty = self.check_expr(base, None);
                 if base_ty.is_error() {
                     return Type::Error;
                 }
-                let lookup_ty = base_ty.strip_borrows();
-                if let Some(ft) = self.program.defs.field(lookup_ty, name) {
+                let lookup_ty = base_ty.strip_borrows().clone();
+                if let Some(ft) = self.program.defs.field(&lookup_ty, name) {
+                    self.check_member_visibility(&lookup_ty, name, *name_span);
                     return ft;
                 }
                 match &base_ty {
@@ -2499,6 +2530,44 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn constructible(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct(name, _) => self
+                .program
+                .defs
+                .structs
+                .get(name)
+                .map(|d| {
+                    d.module == self.module
+                        || (!d.fields.is_empty() && d.fields.iter().all(|(_, _, public)| *public))
+                })
+                .unwrap_or(true),
+            Type::Enum(name, _) => self.program.defs.enums.get(name).is_some(),
+            _ => true,
+        }
+    }
+
+    fn check_member_visibility(&mut self, ty: &Type, name: &str, span: Span) {
+        if let Type::Struct(struct_name, _) = ty {
+            if let Some(def) = self.program.defs.structs.get(struct_name) {
+                if def.module != self.module {
+                    if let Some((_, _, public)) =
+                        def.fields.iter().find(|(f, _, _)| f == name)
+                    {
+                        if !*public {
+                            self.diag(
+                                "E0307",
+                                format!("field `{name}` of `{struct_name}` is private"),
+                                span,
+                            )
+                            .relate_in("declared", &def.file, def.span);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_struct_lit(&mut self, structural: &Type, fields: &[FieldInit], braces: Span) -> Type {
         if structural.is_error() {
             for f in fields {
@@ -2532,6 +2601,20 @@ impl<'a> Checker<'a> {
         let Some(def) = def else {
             return structural.clone();
         };
+        if def.module != self.module
+            && (def.fields.is_empty() || def.fields.iter().any(|(_, _, public)| !public))
+        {
+            self.diag(
+                "E0315",
+                format!("cannot construct `{name}`: a field is not visible here"),
+                braces,
+            )
+            .relate_in("declared", &def.file, def.span);
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return structural.clone();
+        }
         let mut seen = HashSet::new();
         for f in fields {
             if !seen.insert(f.name.clone()) {
@@ -2574,7 +2657,7 @@ impl<'a> Checker<'a> {
     ) -> Type {
         match &callee.kind {
             ExprKind::Ident(name) => {
-                let Some(f) = self.program.function(name).cloned() else {
+                let Some(f) = self.program.function_in(&self.module, name).cloned() else {
                     if let Some((_, local)) = self.find_local(name) {
                         let ty = local.ty.clone();
                         return self.check_fn_value_call(&ty, args, args_span, call_span);
@@ -2599,6 +2682,24 @@ impl<'a> Checker<'a> {
                 name,
                 name_span,
             } => {
+                if let ExprKind::Ident(alias) = &base.kind {
+                    if let Some(f) = self
+                        .program
+                        .function_qualified(&self.module, alias, name)
+                        .cloned()
+                    {
+                        return self.check_args(&f, args, args_span, false, call_span);
+                    }
+                    if matches!(
+                        self.program.resolve_qualified_name(&self.module, alias, name),
+                        Some(ResolvedName::External(_))
+                    ) {
+                        for a in args {
+                            self.check_expr(a, Some(&Type::Error));
+                        }
+                        return Type::Error;
+                    }
+                }
                 if let ExprKind::Path(path) = &base.kind {
                     let target = self.resolve_path_ty(path);
                     if let Type::Enum(..) = target {
@@ -2853,7 +2954,7 @@ impl<'a> Checker<'a> {
                     self.diag("E0404", "`@zero` needs an expected type", span);
                     return Type::Error;
                 };
-                if matches!(t, Type::External(_)) {
+                if matches!(t, Type::External(_)) || !self.constructible(&t) {
                     self.diag(
                         "E0315",
                         format!("cannot construct `{t}`: its fields are not visible here"),
@@ -3072,7 +3173,7 @@ impl<'a> Checker<'a> {
     fn check_dispatch_call(&mut self, call: &Expr) {
         if let ExprKind::Call { callee, args, .. } = &call.kind {
             if let ExprKind::Ident(n) = &callee.kind {
-                if let Some(f) = self.program.function(n).cloned() {
+                if let Some(f) = self.program.function_in(&self.module, n).cloned() {
                     for (i, a) in args.iter().enumerate() {
                         let expected = f.signature_params.get(i + 1);
                         let actual = self.check_expr(a, expected);
@@ -3232,6 +3333,7 @@ impl<'a> Checker<'a> {
                 let base_ty = self.check_place(base, mutable);
                 let lookup_ty = base_ty.strip_borrows().clone();
                 if let Some(ft) = self.program.defs.field(&lookup_ty, name) {
+                    self.check_member_visibility(&lookup_ty, name, *name_span);
                     ft
                 } else {
                     if !base_ty.is_error() {
@@ -3317,6 +3419,7 @@ impl<'a> Checker<'a> {
                 let base_ty = self.check_assign_place(base)?;
                 let lookup_ty = base_ty.strip_borrows().clone();
                 if let Some(ft) = self.program.defs.field(&lookup_ty, name) {
+                    self.check_member_visibility(&lookup_ty, name, *name_span);
                     Some(ft)
                 } else {
                     if !base_ty.is_error() {

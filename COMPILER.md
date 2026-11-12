@@ -16,11 +16,11 @@ cargo run -- conformance       # the whole suite
 
 | Phase | State |
 |---|---|
-| 1 Load | Single file. `ingot.toml`, packages and dependency graphs are not loaded yet |
+| 1 Load | Package directory trees, module names from file paths, `ingot.toml` name/targets. Dependency graphs and content hashes are not loaded |
 | 2 Lex | Complete E01xx set, including maximal munch and builtin spelling |
 | 3 Parse | Grammar through expressions, patterns, items, `when`, kernels and `spawn`/`dispatch`; E02xx recovery |
 | 4 `when` | Parsed; the first branch is used because target selection is not wired |
-| 5 Resolve | Package-local names, value/type namespaces, shadowing and unused bindings |
+| 5 Resolve | Per-module names, imports and aliases, module-qualified items, value/type namespaces, visibility, shadowing and unused bindings |
 | 6 Signatures | Structs, enums, aliases, functions, methods, properties, layouts for the checks |
 | 7 Type check | Literals and context, arithmetic and traps, structs/enums, `match`, results, `try`/`catch`/`fail`, conversions, SIMD types, receivers |
 | 8 Lower | Not yet: ownership and borrow checks run on the typed AST |
@@ -51,9 +51,12 @@ performance model.
 
 ## Deliberate limits
 
-* One file is one compilation unit. `import std.*` names are opaque external
-  types, so calls through them check permissively and evaluate only where the
-  evaluator has a built-in.
+* `import std.*` and `arch.*` names are opaque external types, so calls through
+  them check permissively and evaluate only where the evaluator has a built-in.
+  There is no `std` source tree yet, and dependencies listed in `[deps]` are not
+  loaded.
+* `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes
+  and target selection are not diagnosed yet.
 * Borrow and origin checking is a lexical approximation, not the four dataflow
   analyses in `docs/impl/checker.md`. It is tuned to the conformance suite and is
   the first thing to replace with the CFG implementation.
@@ -65,8 +68,7 @@ performance model.
 
 ## Next steps
 
-1. Module and package loading, so conformance directories are one compilation
-   unit and `std` is a real package.
-2. Lowering to the CFG, then the four analyses from `docs/impl/checker.md`.
+1. Lowering to the CFG, then the four analyses from `docs/impl/checker.md`.
+2. A real `std` package tree, starting with `sys`, `mem`, `list` and `fmt`.
 3. Code generation for `aarch64-macos-m4` through LLVM, starting with arithmetic,
    calls, arrays and slices.

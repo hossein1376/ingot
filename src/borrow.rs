@@ -88,15 +88,6 @@ pub fn check_function(
         let end = Span::empty(body.span.end.saturating_sub(1));
         b.end_scope(body.span.end, end);
     }
-    if std::env::var_os("INGOT_DEBUG_LOANS").is_some() {
-        eprintln!("--- fn {} loans:", f.name);
-        for l in &b.loans {
-            eprintln!(
-                "  {:?} {:?} holder={:?} span={:?} active={}",
-                l.path, l.kind, l.holder, l.span, l.active
-            );
-        }
-    }
     b.diagnostics
 }
 

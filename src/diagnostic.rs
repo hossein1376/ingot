@@ -71,6 +71,16 @@ impl Diagnostic {
         self
     }
 
+    /// Add a related span in another file.
+    pub fn relate_in(&mut self, role: &'static str, file: &str, span: Span) -> &mut Self {
+        self.related.push(Related {
+            role,
+            file: file.to_string(),
+            span,
+        });
+        self
+    }
+
     pub fn fix(&mut self, message: impl Into<String>, edit: Edit) -> &mut Self {
         self.fixes.push(Fix {
             message: message.into(),

@@ -1,14 +1,14 @@
 //! Phases 4 to 7: imports, name resolution, signatures, and body type checking.
 //!
-//! The MVP checks one module at a time. `std` names are treated as opaque
-//! external types so programs that only pass `Env` around still check; calls on
-//! those opaque values are accepted and evaluated only by the interpreter when
-//! the interpreter knows them. The module loader and multi-file package graph
-//! are the next front-end milestone.
+//! A package is loaded as a tree of modules. Names are resolved per module:
+//! local items, then imports. `std` names are opaque external types for now;
+//! calls through them are permissive and the evaluator understands the few used
+//! by the conformance programs.
 
 use crate::ast::*;
 use crate::diagnostic::{Diagnostic, Edit, sort_diagnostics};
 use crate::lexer::lex;
+use crate::loader::{LoadedModule, LoadedPackage};
 use crate::parser::{check_operator_mixing, parse};
 use crate::source::{Source, Sources, Span};
 use crate::token::ScalarTy;
@@ -36,6 +36,7 @@ pub struct ConstInfo {
 pub struct Function {
     pub decl: FnDecl,
     pub file: String,
+    pub module: String,
     pub owner: Option<Type>,
     pub interface: Option<String>,
     pub external: bool,
@@ -47,20 +48,186 @@ pub struct Function {
 // The signature types are stored on the Function itself; the AST keeps the
 // written types for tools.
 
+#[derive(Clone, Debug)]
+pub enum ImportBinding {
+    Type(String),
+    Value(String),
+    Module(String),
+    External(String),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModuleContext {
+    pub name: String,
+    pub file: String,
+    /// Names bound by imports, in this module.
+    pub imports: HashMap<String, ImportBinding>,
+    /// Local type names to canonical names.
+    pub types: BTreeMap<String, String>,
+    /// Local value names to canonical names.
+    pub values: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TestInfo {
+    pub decl: TestDecl,
+    pub module: String,
+    pub file: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Program {
+    pub package_name: String,
+    pub root_module: String,
     pub module: Module,
+    pub modules: BTreeMap<String, ModuleContext>,
     pub defs: TypeDefs,
     pub functions: BTreeMap<String, Function>,
     pub methods: BTreeMap<String, BTreeMap<String, Function>>,
     pub consts: BTreeMap<String, ConstInfo>,
     pub statics: BTreeMap<String, StaticDecl>,
-    pub tests: Vec<TestDecl>,
+    pub tests: Vec<TestInfo>,
     pub imports: Vec<Import>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedName {
+    Local(String),
+    External(String),
+}
+
 impl Program {
-    /// Function named by a direct call.
+    pub fn qualify(&self, module: &str, name: &str) -> String {
+        if module == self.root_module {
+            name.to_string()
+        } else {
+            format!("{module}.{name}")
+        }
+    }
+
+    pub fn module_ctx(&self, module: &str) -> Option<&ModuleContext> {
+        self.modules.get(module)
+    }
+
+    /// Resolve an unqualified type name in a module.
+    pub fn resolve_type_name(&self, module: &str, name: &str) -> Option<ResolvedName> {
+        let ctx = self.modules.get(module)?;
+        if let Some(c) = ctx.types.get(name) {
+            return Some(ResolvedName::Local(c.clone()));
+        }
+        match ctx.imports.get(name) {
+            Some(ImportBinding::Type(c)) => Some(ResolvedName::Local(c.clone())),
+            Some(ImportBinding::External(prefix)) => Some(ResolvedName::External(prefix.clone())),
+            Some(ImportBinding::Module(target)) => self
+                .modules
+                .get(target)
+                .and_then(|c| c.types.get(name))
+                .map(|c| ResolvedName::Local(c.clone())),
+            _ => None,
+        }
+    }
+
+    /// Resolve an unqualified value name in a module.
+    pub fn resolve_value_name(&self, module: &str, name: &str) -> Option<ResolvedName> {
+        let ctx = self.modules.get(module)?;
+        if let Some(c) = ctx.values.get(name) {
+            return Some(ResolvedName::Local(c.clone()));
+        }
+        match ctx.imports.get(name) {
+            Some(ImportBinding::Value(c)) => Some(ResolvedName::Local(c.clone())),
+            Some(ImportBinding::External(prefix)) => Some(ResolvedName::External(prefix.clone())),
+            Some(ImportBinding::Module(target)) => self
+                .modules
+                .get(target)
+                .and_then(|c| c.values.get(name))
+                .map(|c| ResolvedName::Local(c.clone())),
+            _ => None,
+        }
+    }
+
+    /// Resolve `module_alias.item` in a module.
+    pub fn resolve_qualified_name(
+        &self,
+        module: &str,
+        alias: &str,
+        item: &str,
+    ) -> Option<ResolvedName> {
+        let ctx = self.modules.get(module)?;
+        match ctx.imports.get(alias)? {
+            ImportBinding::Module(target) => {
+                let target_ctx = self.modules.get(target)?;
+                target_ctx
+                    .types
+                    .get(item)
+                    .or_else(|| target_ctx.values.get(item))
+                    .map(|c| ResolvedName::Local(c.clone()))
+            }
+            ImportBinding::External(prefix) => {
+                Some(ResolvedName::External(format!("{prefix}.{item}")))
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve a written type path (`lib.Ticket`, `mem.Arena`) to a local
+    /// canonical name or an external spelling.
+    pub fn resolve_type_path(&self, module: &str, path: &PathTy) -> Option<ResolvedName> {
+        let mut segments: Vec<String> = path.segments.iter().map(|(s, _)| s.clone()).collect();
+        if segments
+            .first()
+            .map(|s| s == &self.package_name)
+            .unwrap_or(false)
+        {
+            segments.remove(0);
+        }
+        if segments.is_empty() {
+            return None;
+        }
+        if segments.len() == 1 {
+            return self.resolve_type_name(module, &segments[0]);
+        }
+        if matches!(segments[0].as_str(), "std" | "arch") {
+            return Some(ResolvedName::External(segments.join(".")));
+        }
+        let ctx = self.modules.get(module)?;
+        match ctx.imports.get(&segments[0]) {
+            Some(ImportBinding::External(prefix)) => Some(ResolvedName::External(format!(
+                "{}.{}",
+                prefix,
+                segments[1..].join(".")
+            ))),
+            Some(ImportBinding::Module(target)) => {
+                let item = segments.last()?;
+                let target_ctx = self.modules.get(target)?;
+                target_ctx
+                    .types
+                    .get(item)
+                    .map(|c| ResolvedName::Local(c.clone()))
+            }
+            Some(ImportBinding::Type(c)) if segments.len() == 1 => {
+                Some(ResolvedName::Local(c.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Function named by a direct call in a module.
+    pub fn function_in(&self, module: &str, name: &str) -> Option<&Function> {
+        match self.resolve_value_name(module, name)? {
+            ResolvedName::Local(c) => self.functions.get(&c),
+            ResolvedName::External(_) => None,
+        }
+    }
+
+    /// Function named by `alias.name` in a module.
+    pub fn function_qualified(&self, module: &str, alias: &str, name: &str) -> Option<&Function> {
+        match self.resolve_qualified_name(module, alias, name)? {
+            ResolvedName::Local(c) => self.functions.get(&c),
+            ResolvedName::External(_) => None,
+        }
+    }
+
+    /// Function or method named with a canonical key (used by tools).
     pub fn function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
@@ -73,6 +240,13 @@ impl Program {
 
     pub fn const_value(&self, name: &str) -> Option<&ConstInfo> {
         self.consts.get(name)
+    }
+
+    pub fn const_value_in(&self, module: &str, name: &str) -> Option<&ConstInfo> {
+        match self.resolve_value_name(module, name)? {
+            ResolvedName::Local(c) => self.consts.get(&c),
+            ResolvedName::External(_) => None,
+        }
     }
 }
 
@@ -101,60 +275,62 @@ pub fn analyze(source: Source) -> Analysis {
 }
 
 pub fn analyze_file(path: &std::path::Path) -> std::io::Result<Analysis> {
-    let bytes = std::fs::read(path)?;
-    let text = match String::from_utf8(bytes) {
-        Ok(t) => t,
-        Err(e) => {
-            let bad = e.utf8_error().valid_up_to();
-            let lossy = String::from_utf8_lossy(e.as_bytes()).into_owned();
-            let source = Source::with_absolute(
-                path.to_string_lossy().replace('\\', "/"),
-                path.to_path_buf(),
-                lossy,
-            );
-            let mut sources = Sources::default();
-            sources.add(source);
-            let mut a = Analysis {
-                sources,
-                ..Analysis::default()
-            };
-            a.diagnostics.push(Diagnostic::new(
-                "E0101",
-                "file is not valid UTF-8",
-                &a.sources.files[0],
-                Span::new(bad, bad + 1),
-            ));
-            return Ok(a);
-        }
-    };
-    let source = Source::with_absolute(
-        path.to_string_lossy().replace('\\', "/"),
-        path.to_path_buf(),
-        text,
-    );
-    Ok(analyze(source))
+    let package = crate::loader::load(path)?;
+    Ok(analyze_loaded(package))
 }
 
 pub fn analyze_sources(sources: Sources) -> Analysis {
-    if sources.files.is_empty() {
-        return Analysis::default();
-    }
-    let source = &sources.files[0];
-    let (tokens, mut diagnostics) = lex(source);
-    let (module, parse_diagnostics) = parse(source, tokens);
-    diagnostics.extend(parse_diagnostics);
-    diagnostics.extend(check_operator_mixing(&module, source));
+    let package_name = "t".to_string();
+    let root = std::env::current_dir().unwrap_or_default();
+    let modules = if sources.files.is_empty() {
+        Vec::new()
+    } else {
+        vec![LoadedModule {
+            name: "main".to_string(),
+            source_id: 0,
+            root: true,
+        }]
+    };
+    analyze_loaded(LoadedPackage {
+        package_name,
+        root,
+        manifest: None,
+        sources,
+        modules,
+        diagnostics: Vec::new(),
+    })
+}
 
+pub fn analyze_loaded(package: LoadedPackage) -> Analysis {
+    let mut diagnostics = package.diagnostics.clone();
+    let mut modules_ast: BTreeMap<String, (LoadedModule, Module)> = BTreeMap::new();
+    for loaded in &package.modules {
+        let source = &package.sources.files[loaded.source_id];
+        let (tokens, mut lex_diags) = lex(source);
+        let (module, parse_diags) = parse(source, tokens);
+        lex_diags.extend(parse_diags);
+        lex_diags.extend(check_operator_mixing(&module, source));
+        diagnostics.extend(lex_diags);
+        modules_ast.insert(loaded.name.clone(), (loaded.clone(), module));
+    }
     sort_diagnostics(&mut diagnostics);
     let syntax_gate = diagnostics
         .iter()
         .any(|d| d.code.starts_with("E01") || d.code.starts_with("E02"));
+    let root_module = package.root_module().to_string();
+    let root_ast = modules_ast
+        .get(&root_module)
+        .map(|(_, m)| m.clone())
+        .or_else(|| modules_ast.values().next().map(|(_, m)| m.clone()))
+        .unwrap_or_default();
     if syntax_gate {
         return Analysis {
-            sources,
-            module: Some(module.clone()),
+            sources: package.sources,
+            module: Some(root_ast.clone()),
             program: Program {
-                module: module.clone(),
+                package_name: package.package_name,
+                root_module,
+                module: root_ast,
                 ..Program::default()
             },
             diagnostics,
@@ -163,82 +339,224 @@ pub fn analyze_sources(sources: Sources) -> Analysis {
 
     let (semantic_diagnostics, program) = {
         let mut analyzer = Analyzer {
-            source,
+            sources: &package.sources,
             diagnostics: Vec::new(),
             program: Program {
-                module: module.clone(),
+                package_name: package.package_name.clone(),
+                root_module: root_module.clone(),
+                module: root_ast.clone(),
                 ..Program::default()
             },
+            current_module: root_module.clone(),
+            current_source: modules_ast
+                .get(&root_module)
+                .map(|(m, _)| m.source_id)
+                .or_else(|| modules_ast.values().next().map(|(m, _)| m.source_id))
+                .unwrap_or(0),
             generic_bounds: HashMap::new(),
             self_ty: None,
         };
-        analyzer.collect_imports(&module);
-        analyzer.collect_types(&module);
-        analyzer.collect_values(&module);
+        analyzer.prepare_modules(&modules_ast);
+        analyzer.collect_all(&modules_ast);
         analyzer.check_all_bodies();
         (analyzer.diagnostics, analyzer.program)
     };
     diagnostics.extend(semantic_diagnostics);
     sort_diagnostics(&mut diagnostics);
     Analysis {
-        sources,
-        module: Some(module),
+        sources: package.sources,
+        module: Some(root_ast),
         program,
         diagnostics,
     }
 }
 
 struct Analyzer<'a> {
-    source: &'a Source,
+    sources: &'a Sources,
     diagnostics: Vec<Diagnostic>,
     program: Program,
+    current_module: String,
+    current_source: usize,
     generic_bounds: HashMap<String, Vec<String>>,
     self_ty: Option<Type>,
 }
 
 impl<'a> Analyzer<'a> {
+    fn source(&self) -> &'a Source {
+        &self.sources.files[self.current_source]
+    }
+
     fn diag(
         &mut self,
         code: &'static str,
         message: impl Into<String>,
         span: Span,
     ) -> &mut Diagnostic {
+        let source = &self.sources.files[self.current_source];
         self.diagnostics
-            .push(Diagnostic::new(code, message, self.source, span));
+            .push(Diagnostic::new(code, message, source, span));
         self.diagnostics.last_mut().unwrap()
     }
 
-    fn collect_imports(&mut self, module: &Module) {
-        self.program.imports = module.imports.clone();
-        for import in &module.imports {
-            let name = import.bound_name().to_string();
-            // An import that names a type introduces that name as an external
-            // type. `std.mem` names a module; paths through it are also external.
-            if name
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_uppercase())
-                .unwrap_or(false)
-            {
-                self.program.defs.external.insert(name);
-            } else {
-                for (seg, _) in &import.segments {
-                    if seg
-                        .chars()
-                        .next()
-                        .map(|c| c.is_ascii_uppercase())
-                        .unwrap_or(false)
-                    {
-                        self.program.defs.external.insert(seg.clone());
+    fn set_module(&mut self, loaded: &LoadedModule) {
+        self.current_module = loaded.name.clone();
+        self.current_source = loaded.source_id;
+    }
+
+    fn prepare_modules(&mut self, modules: &BTreeMap<String, (LoadedModule, Module)>) {
+        for (name, (loaded, module)) in modules {
+            let mut ctx = ModuleContext {
+                name: name.clone(),
+                file: self.sources.files[loaded.source_id].path.clone(),
+                ..ModuleContext::default()
+            };
+            for item in &module.items {
+                match item {
+                    Item::Struct(s) => {
+                        ctx.types
+                            .insert(s.name.clone(), self.program.qualify(name, &s.name));
                     }
+                    Item::Enum(e) => {
+                        ctx.types
+                            .insert(e.name.clone(), self.program.qualify(name, &e.name));
+                    }
+                    Item::TypeAlias(t) => {
+                        ctx.types
+                            .insert(t.name.clone(), self.program.qualify(name, &t.name));
+                    }
+                    Item::Interface(i) => {
+                        ctx.types
+                            .insert(i.name.clone(), self.program.qualify(name, &i.name));
+                    }
+                    Item::Fn(f) => {
+                        ctx.values
+                            .insert(f.name.clone(), self.program.qualify(name, &f.name));
+                    }
+                    Item::Const(c) => {
+                        ctx.values
+                            .insert(c.name.clone(), self.program.qualify(name, &c.name));
+                    }
+                    Item::Static(s) => {
+                        ctx.values
+                            .insert(s.name.clone(), self.program.qualify(name, &s.name));
+                    }
+                    _ => {}
                 }
             }
+            self.program.modules.insert(name.clone(), ctx);
         }
-        // Builtin names that are not imported.
+        // External names are always available as types when no local or import
+        // binds them.
         for name in [
             "Option", "Result", "Self", "Env", "Task", "Scope", "Idx", "Idx2", "Idx3",
         ] {
             self.program.defs.external.insert(name.to_string());
+        }
+        for (name, (loaded, module)) in modules {
+            self.set_module(loaded);
+            self.resolve_module_imports(name, module);
+        }
+    }
+
+    fn resolve_module_imports(&mut self, module_name: &str, module: &Module) {
+        if module_name == self.program.root_module {
+            self.program.imports = module.imports.clone();
+        }
+        for import in &module.imports {
+            let binding = self.resolve_import(import);
+            let Some(binding) = binding else {
+                continue;
+            };
+            let bound = import.bound_name().to_string();
+            let ctx = self.program.modules.get_mut(module_name).unwrap();
+            if ctx.imports.contains_key(&bound) {
+                let first = ctx.imports.get(&bound).cloned();
+                let d = self.diag(
+                    "E0302",
+                    format!("`{bound}` is imported more than once"),
+                    import
+                        .alias_span
+                        .unwrap_or_else(|| import.segments.last().unwrap().1),
+                );
+                if first.is_some() {
+                    d.relate("previous", import.segments.last().unwrap().1);
+                }
+            } else {
+                ctx.imports.insert(bound, binding);
+            }
+        }
+    }
+
+    fn resolve_import(&mut self, import: &Import) -> Option<ImportBinding> {
+        let mut segments: Vec<(String, Span)> = import.segments.clone();
+        if segments
+            .first()
+            .map(|(s, _)| s == &self.program.package_name)
+            .unwrap_or(false)
+        {
+            segments.remove(0);
+        }
+        if segments.is_empty() {
+            return None;
+        }
+        let first = segments[0].clone();
+        if matches!(first.0.as_str(), "std" | "arch") {
+            let bound = import.bound_name().to_string();
+            self.program.defs.external.insert(bound.clone());
+            return Some(ImportBinding::External(bound));
+        }
+        let full = segments
+            .iter()
+            .map(|(s, _)| s.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        if self.program.modules.contains_key(&full) && segments.len() > 0 {
+            // A path that names both a module and an item is ambiguous (§E0316).
+            let bound = import.bound_name().to_string();
+            let _ = bound;
+            return Some(ImportBinding::Module(full));
+        }
+        for i in (1..segments.len()).rev() {
+            let prefix = segments[..i]
+                .iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if let Some(ctx) = self.program.modules.get(&prefix) {
+                let (item, item_span) = segments.last().unwrap();
+                let ty = ctx.types.get(item).cloned();
+                let value = ctx.values.get(item).cloned();
+                match (ty, value) {
+                    (Some(c), None) => return Some(ImportBinding::Type(c)),
+                    (None, Some(c)) => return Some(ImportBinding::Value(c)),
+                    (Some(_), Some(_)) => {
+                        self.diag(
+                            "E0316",
+                            format!("`{item}` names both a type and a value"),
+                            *item_span,
+                        );
+                        return None;
+                    }
+                    (None, None) => {
+                        self.diag(
+                            "E0301",
+                            format!("`{prefix}` has no item `{item}`"),
+                            *item_span,
+                        );
+                        return None;
+                    }
+                }
+            }
+        }
+        self.diag("E0301", format!("no module named `{}`", first.0), first.1);
+        None
+    }
+
+    fn collect_all(&mut self, modules: &BTreeMap<String, (LoadedModule, Module)>) {
+        for (_, (loaded, module)) in modules {
+            self.set_module(loaded);
+            self.collect_types(module);
+            self.collect_values(module);
         }
     }
 
@@ -294,14 +612,16 @@ impl<'a> Analyzer<'a> {
                         fields.push((f.name.clone(), ty, f.public));
                     }
                     self.generic_bounds = old_bounds;
+                    let canonical = self.program.qualify(&self.current_module, &s.name);
                     self.program.defs.structs.insert(
-                        s.name.clone(),
+                        canonical,
                         StructDef {
                             kind: s.kind,
                             fields,
                             generics,
                             span: s.name_span,
-                            file: self.source.path.clone(),
+                            file: self.source().path.clone(),
+                            module: self.current_module.clone(),
                         },
                     );
                 }
@@ -351,8 +671,9 @@ impl<'a> Analyzer<'a> {
                     }
                     self.generic_bounds = old_bounds;
                     let tag = e.tag.as_ref().map(|t| self.resolve_ty(t));
+                    let canonical = self.program.qualify(&self.current_module, &e.name);
                     self.program.defs.enums.insert(
-                        e.name.clone(),
+                        canonical,
                         EnumDef {
                             copy: e.copy,
                             variants,
@@ -360,13 +681,15 @@ impl<'a> Analyzer<'a> {
                             from,
                             tag,
                             span: e.name_span,
-                            file: self.source.path.clone(),
+                            file: self.source().path.clone(),
+                            module: self.current_module.clone(),
                         },
                     );
                 }
                 Item::TypeAlias(t) => {
+                    let canonical = self.program.qualify(&self.current_module, &t.name);
                     self.program.defs.aliases.insert(
-                        t.name.clone(),
+                        canonical,
                         (
                             t.ty.clone(),
                             t.generics.iter().map(|g| g.name.clone()).collect(),
@@ -392,11 +715,12 @@ impl<'a> Analyzer<'a> {
         for item in &module.items {
             match item {
                 Item::Struct(s) => {
+                    let canonical = self.program.qualify(&self.current_module, &s.name);
                     let fields: Vec<(String, Type)> = self
                         .program
                         .defs
                         .structs
-                        .get(&s.name)
+                        .get(&canonical)
                         .map(|d| {
                             d.fields
                                 .iter()
@@ -457,6 +781,9 @@ impl<'a> Analyzer<'a> {
         }
         // A value type that contains itself by value is infinite.
         for (name, def) in self.program.defs.structs.clone() {
+            if def.module != self.current_module {
+                continue;
+            }
             for (_, ty, _) in &def.fields {
                 if direct_contains(ty, &name, &self.program.defs, &mut HashSet::new()) {
                     self.diag(
@@ -468,6 +795,9 @@ impl<'a> Analyzer<'a> {
             }
         }
         for (name, def) in self.program.defs.enums.clone() {
+            if def.module != self.current_module {
+                continue;
+            }
             for (_, payload) in &def.variants {
                 if let Some(ty) = payload {
                     if direct_contains(ty, &name, &self.program.defs, &mut HashSet::new()) {
@@ -564,57 +894,74 @@ impl<'a> Analyzer<'a> {
                 }
             }
         }
-        if let Some(_s) = self.program.defs.structs.get(&name) {
-            let args = self.resolve_args(&p.args);
-            return Type::Struct(name, args);
-        }
-        if let Some(_e) = self.program.defs.enums.get(&name) {
-            let args = self.resolve_args(&p.args);
-            return Type::Enum(name, args);
-        }
-        if let Some((ty, params)) = self.program.defs.aliases.get(&name).cloned() {
-            if params.is_empty() {
-                let _old = self.generic_bounds.clone();
-                return self.resolve_ty(&ty);
-            }
-            let old = self.generic_bounds.clone();
-            let args = self.resolve_args(&p.args);
-            let target = crate::types::substitute(&self.resolve_ty(&ty), &params, &args);
-            self.generic_bounds = old;
-            return target;
-        }
-        if p.segments.len() > 1 || self.program.defs.external.contains(&name) {
-            let args = self.resolve_args(&p.args);
-            let base = if p.segments.len() > 1 {
-                p.segments
-                    .iter()
-                    .map(|(s, _)| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(".")
-            } else {
-                name
-            };
-            if args.is_empty() {
-                return Type::External(base);
-            }
-            let args_text = args
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Type::External(format!("{base}[{args_text}]"));
-        }
-        if name == "Option" {
+        if name == "Option" && p.segments.len() == 1 {
             let args = self.resolve_args(&p.args);
             if let Some(t) = args.into_iter().next() {
                 return Type::Optional(Box::new(t));
             }
         }
-        if name == "Result" {
+        if name == "Result" && p.segments.len() == 1 {
             let mut args = self.resolve_args(&p.args).into_iter();
             if let (Some(t), Some(e)) = (args.next(), args.next()) {
                 return Type::Result(Box::new(t), Box::new(e));
             }
+        }
+        let resolved = self
+            .program
+            .resolve_type_path(&self.current_module, p)
+            .or_else(|| {
+                if p.segments.len() == 1 && self.program.defs.external.contains(&name) {
+                    Some(ResolvedName::External(name.clone()))
+                } else {
+                    None
+                }
+            });
+        match resolved {
+            Some(ResolvedName::Local(canonical)) => {
+                if let Some(_) = self.program.defs.structs.get(&canonical) {
+                    return Type::Struct(canonical, self.resolve_args(&p.args));
+                }
+                if let Some(_) = self.program.defs.enums.get(&canonical) {
+                    return Type::Enum(canonical, self.resolve_args(&p.args));
+                }
+                if let Some((ty, params)) = self.program.defs.aliases.get(&canonical).cloned() {
+                    let old = self.generic_bounds.clone();
+                    if params.is_empty() {
+                        let t = self.resolve_ty(&ty);
+                        self.generic_bounds = old;
+                        return t;
+                    }
+                    let args = self.resolve_args(&p.args);
+                    let t = crate::types::substitute(&self.resolve_ty(&ty), &params, &args);
+                    self.generic_bounds = old;
+                    return t;
+                }
+                // An interface name is an opaque type in this MVP.
+                return Type::External(canonical);
+            }
+            Some(ResolvedName::External(base)) => {
+                let base = base.strip_prefix("External:").unwrap_or(&base).to_string();
+                let args = self.resolve_args(&p.args);
+                if matches!(base.as_str(), "Mutex" | "RwLock" | "Chan" | "Once")
+                    && args.iter().any(|t| t.is_view(&self.program.defs))
+                {
+                    self.diag(
+                        "E0801",
+                        format!("{base} requires `Owned` contents, but this argument is a view"),
+                        p.span,
+                    );
+                }
+                if args.is_empty() {
+                    return Type::External(base);
+                }
+                let args_text = args
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Type::External(format!("{base}[{args_text}]"));
+            }
+            None => {}
         }
         self.diag("E0305", format!("undefined type `{}`", p.name()), p.span);
         Type::Error
@@ -657,8 +1004,9 @@ impl<'a> Analyzer<'a> {
                         );
                     }
                     let ty = self.resolve_ty(&c.ty);
+                    let canonical = self.program.qualify(&self.current_module, &c.name);
                     self.program.consts.insert(
-                        c.name.clone(),
+                        canonical,
                         ConstInfo {
                             ty,
                             value: None,
@@ -675,7 +1023,8 @@ impl<'a> Analyzer<'a> {
                         );
                     }
                     let _ = self.resolve_ty(&s.ty);
-                    self.program.statics.insert(s.name.clone(), s.clone());
+                    let canonical = self.program.qualify(&self.current_module, &s.name);
+                    self.program.statics.insert(canonical, s.clone());
                 }
                 Item::Impl(i) => {
                     self.register_impl(i);
@@ -687,7 +1036,11 @@ impl<'a> Analyzer<'a> {
                         self.register_fn(&f2, None, None, true);
                     }
                 }
-                Item::Test(t) => self.program.tests.push(t.clone()),
+                Item::Test(t) => self.program.tests.push(TestInfo {
+                    decl: t.clone(),
+                    module: self.current_module.clone(),
+                    file: self.source().path.clone(),
+                }),
                 Item::When(w) => {
                     // `when` items are resolved by phase 4. The MVP accepts the
                     // first branch without evaluating @target; later branches
@@ -706,7 +1059,9 @@ impl<'a> Analyzer<'a> {
                 _ => {}
             }
         }
-        self.check_main(module);
+        if self.current_module == self.program.root_module {
+            self.check_main(module);
+        }
         self.check_consts(module);
     }
 
@@ -750,7 +1105,8 @@ impl<'a> Analyzer<'a> {
 
         let function = Function {
             decl: f.clone(),
-            file: self.source.path.clone(),
+            file: self.source().path.clone(),
+            module: self.current_module.clone(),
             owner: owner.clone(),
             interface,
             external,
@@ -769,7 +1125,8 @@ impl<'a> Analyzer<'a> {
                 .functions
                 .insert(format!("{}.{}", method_key(&o), f.name), function);
         } else {
-            self.program.functions.insert(f.name.clone(), function);
+            let canonical = self.program.qualify(&self.current_module, &f.name);
+            self.program.functions.insert(canonical, function);
         }
     }
 
@@ -848,10 +1205,11 @@ impl<'a> Analyzer<'a> {
         for item in &module.items {
             match item {
                 Item::Const(c) => {
-                    let ty = self.program.consts[&c.name].ty.clone();
+                    let canonical = self.program.qualify(&self.current_module, &c.name);
+                    let ty = self.program.consts[&canonical].ty.clone();
                     let val = self.const_value(&c.value, Some(&ty));
                     if let Some(v) = val {
-                        if let Some(info) = self.program.consts.get_mut(&c.name) {
+                        if let Some(info) = self.program.consts.get_mut(&canonical) {
                             info.value = Some(v);
                         }
                     }
@@ -896,11 +1254,8 @@ impl<'a> Analyzer<'a> {
             ExprKind::Str(b) => Some(ConstVal::Str(b.clone())),
             ExprKind::Paren(inner) => self.const_value(inner, expected),
             ExprKind::Ident(name) => {
-                if let Some(info) = self.program.consts.get(name) {
-                    info.value.clone()
-                } else {
-                    None
-                }
+                let info = self.program.const_value_in(&self.current_module, name);
+                info.and_then(|i| i.value.clone())
             }
             ExprKind::Unary { op, expr, op_span } => {
                 let v = self.const_value(expr, expected)?;
@@ -1063,14 +1418,14 @@ impl<'a> Analyzer<'a> {
     // --------------------------------------------------------------- bodies
 
     fn check_all_bodies(&mut self) {
-        let functions: Vec<(String, Function)> = self
+        let functions: Vec<Function> = self
             .program
             .functions
-            .iter()
-            .filter(|(name, f)| !name.contains('.') && !f.external && f.decl.body.is_some())
-            .map(|(n, f)| (n.clone(), f.clone()))
+            .values()
+            .filter(|f| f.owner.is_none() && !f.external && f.decl.body.is_some())
+            .cloned()
             .collect();
-        for (_, f) in functions {
+        for f in functions {
             self.check_function(&f);
         }
         let methods: Vec<Function> = self
@@ -1094,8 +1449,15 @@ impl<'a> Analyzer<'a> {
     }
 
     fn check_function(&mut self, f: &Function) {
+        let source_id = self
+            .sources
+            .iter()
+            .position(|s| s.path == f.file)
+            .unwrap_or(self.current_source);
+        self.current_source = source_id;
+        self.current_module = f.module.clone();
         self.check_body_function(
-            &f.decl,
+            f,
             f.signature_ret.clone(),
             f.signature_error.clone(),
             f.decl
@@ -1113,37 +1475,46 @@ impl<'a> Analyzer<'a> {
         );
     }
 
-    fn check_test(&mut self, t: &TestDecl) {
+    fn check_test(&mut self, t: &TestInfo) {
+        let source_id = self
+            .sources
+            .iter()
+            .position(|s| s.path == t.file)
+            .unwrap_or(self.current_source);
+        self.current_source = source_id;
+        self.current_module = t.module.clone();
+        let source = &self.sources.files[source_id];
         let mut checker = Checker::new(
-            self.source,
+            source,
             &self.program,
             &mut self.diagnostics,
             Type::Void,
-            None,
+            Some(Type::External("TestErr".to_string())),
             HashMap::new(),
             None,
             true,
+            &t.module,
         );
         checker.push_scope();
-        let ret = checker.check_block(&t.body);
-        if ret.is_never() {
-            // fine
-        }
+        let _ret = checker.check_block(&t.decl.body);
         checker.pop_scope(true);
         checker.finish();
     }
 
     fn check_body_function(
         &mut self,
-        f: &FnDecl,
+        function: &Function,
         ret: Type,
         error: Option<Type>,
         bounds: HashMap<String, Vec<String>>,
         self_ty: Option<Type>,
         is_test: bool,
     ) {
+        let f = &function.decl;
+        let module = function.module.clone();
+        let source = &self.sources.files[self.current_source];
         let mut checker = Checker::new(
-            self.source,
+            source,
             &self.program,
             &mut self.diagnostics,
             ret.clone(),
@@ -1151,6 +1522,7 @@ impl<'a> Analyzer<'a> {
             bounds,
             self_ty.clone(),
             is_test,
+            &module,
         );
         checker.param_into = f
             .params
@@ -1165,13 +1537,10 @@ impl<'a> Analyzer<'a> {
         };
         checker.push_scope();
         for (i, p) in f.params.iter().enumerate() {
-            let ty = checker
-                .program
-                .methods
-                .get(&self_ty.as_ref().map(method_key).unwrap_or_default())
-                .and_then(|m| m.get(&f.name))
-                .map(|func| func.signature_params.get(i).cloned())
-                .flatten()
+            let ty = function
+                .signature_params
+                .get(i)
+                .cloned()
                 .unwrap_or_else(|| checker.resolve_ty(&p.ty));
             checker.declare_param(&p.name, ty, p.name_span);
         }

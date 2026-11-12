@@ -112,6 +112,7 @@ struct Frame {
     ret: Type,
     error: Option<Type>,
     fallible: bool,
+    module: String,
 }
 
 pub struct Outcome {
@@ -133,12 +134,22 @@ pub fn run(analysis: &Analysis) -> Result<Outcome, String> {
     if !analysis.diagnostics.is_empty() {
         return Err("cannot run a program with diagnostics".to_string());
     }
-    let source = analysis
-        .sources
-        .files
-        .first()
+    let main_file = analysis
+        .program
+        .functions
+        .get("main")
+        .map(|f| f.file.clone());
+    let source = main_file
+        .as_ref()
+        .and_then(|p| analysis.sources.iter().find(|s| &s.path == p))
+        .or_else(|| analysis.sources.files.first())
         .ok_or_else(|| "no source file".to_string())?;
-    let Some(main) = analysis.program.functions.get("main").cloned() else {
+    let main_name = if analysis.program.root_module == "main" {
+        "main".to_string()
+    } else {
+        format!("{}.main", analysis.program.root_module)
+    };
+    let Some(main) = analysis.program.functions.get(&main_name).cloned() else {
         return Err("no `main` function".to_string());
     };
     let mut interp = Interp::new(&analysis.program, source);
@@ -176,34 +187,43 @@ pub fn run(analysis: &Analysis) -> Result<Outcome, String> {
     }
 }
 
-pub fn run_tests(program: &Program, source: &Source) -> Result<(usize, usize), String> {
+pub fn run_tests(
+    program: &Program,
+    sources: &crate::source::Sources,
+) -> Result<(usize, usize), String> {
     let mut passed = 0;
     let mut failed = 0;
     for t in &program.tests {
+        let source = sources
+            .iter()
+            .find(|s| s.path == t.file)
+            .or_else(|| sources.files.first())
+            .ok_or_else(|| "no source file for test".to_string())?;
         let mut interp = Interp::new(program, source);
         // A test body may use `try`; a failure that reaches its end fails the
         // test rather than the compiler.
         let test_fn = Function {
             decl: FnDecl {
-                name: t.name.clone(),
-                name_span: t.span,
+                name: t.decl.name.clone(),
+                name_span: t.decl.span,
                 params: Vec::new(),
-                ret: Ty::Scalar(ScalarTy::Void, t.span),
+                ret: Ty::Scalar(ScalarTy::Void, t.decl.span),
                 error: Some(Ty::Path(PathTy {
-                    segments: vec![("TestErr".to_string(), t.span)],
+                    segments: vec![("TestErr".to_string(), t.decl.span)],
                     args: Vec::new(),
                     args_span: None,
                     assoc: None,
-                    span: t.span,
+                    span: t.decl.span,
                 })),
                 from: Vec::new(),
                 reduce: None,
                 mods: FnMods::default(),
                 generics: Vec::new(),
-                body: Some(t.body.clone()),
-                span: t.span,
+                body: Some(t.decl.body.clone()),
+                span: t.decl.span,
             },
-            file: String::new(),
+            file: t.file.clone(),
+            module: t.module.clone(),
             owner: None,
             interface: None,
             external: false,
@@ -252,6 +272,13 @@ impl<'a> Interp<'a> {
         self.frames.last().and_then(|f| f.vars.get(name).cloned())
     }
 
+    fn current_module(&self) -> String {
+        self.frames
+            .last()
+            .map(|f| f.module.clone())
+            .unwrap_or_else(|| self.program.root_module.clone())
+    }
+
     fn frame_error(&self) -> Option<Type> {
         self.frames.last().and_then(|f| f.error.clone())
     }
@@ -274,15 +301,26 @@ impl<'a> Interp<'a> {
             },
             Ty::Vector(v, _) => Type::Vector(*v),
             Ty::Path(p) => {
-                let n = p.name();
-                if self.program.defs.structs.contains_key(n) {
-                    Type::Struct(n.to_string(), Vec::new())
-                } else if self.program.defs.enums.contains_key(n) {
-                    Type::Enum(n.to_string(), Vec::new())
-                } else if n == "Self" {
-                    Type::External("Self".to_string())
-                } else {
-                    Type::External(n.to_string())
+                let module = self.current_module();
+                match self.program.resolve_type_path(&module, p) {
+                    Some(crate::check::ResolvedName::Local(c)) => {
+                        if self.program.defs.structs.contains_key(&c) {
+                            Type::Struct(c, Vec::new())
+                        } else if self.program.defs.enums.contains_key(&c) {
+                            Type::Enum(c, Vec::new())
+                        } else {
+                            Type::External(c)
+                        }
+                    }
+                    Some(crate::check::ResolvedName::External(base)) => Type::External(base),
+                    None => {
+                        let n = p.name();
+                        if n == "Self" {
+                            Type::External("Self".to_string())
+                        } else {
+                            Type::External(n.to_string())
+                        }
+                    }
                 }
             }
             Ty::Borrow { mutable, inner, .. } => Type::Borrow {
@@ -374,6 +412,7 @@ impl<'a> Interp<'a> {
             ret: f.signature_ret.clone(),
             error: f.signature_error.clone(),
             fallible: f.signature_error.is_some(),
+            module: f.module.clone(),
         });
         let frame = self.frame();
         let fallible = frame.fallible;
@@ -961,7 +1000,7 @@ impl<'a> Interp<'a> {
                 if let Some(cell) = self.lookup(name) {
                     return Ok(cell.borrow().clone());
                 }
-                if let Some(c) = self.program.consts.get(name) {
+                if let Some(c) = self.program.const_value_in(&self.current_module(), name) {
                     if let Some(v) = &c.value {
                         return Ok(const_value(v));
                     }
@@ -1103,6 +1142,18 @@ impl<'a> Interp<'a> {
                 })
             }
             ExprKind::Field { base, name, .. } => {
+                if let ExprKind::Ident(alias) = &base.kind {
+                    if let Some(crate::check::ResolvedName::Local(canonical)) = self
+                        .program
+                        .resolve_qualified_name(&self.current_module(), alias, name)
+                    {
+                        if let Some(c) = self.program.consts.get(&canonical) {
+                            if let Some(v) = &c.value {
+                                return Ok(const_value(v));
+                            }
+                        }
+                    }
+                }
                 let b = self.eval_expr(base, None)?;
                 self.field_value(&b, name)
             }
@@ -1124,7 +1175,12 @@ impl<'a> Interp<'a> {
             ExprKind::TypeApply { base, .. } => self.eval_expr(base, expected),
             ExprKind::Cast { expr: inner, .. } => self.eval_expr(inner, expected),
             ExprKind::StructLit { ty, fields, .. } => {
-                let name = ty.name().to_string();
+                let module = self.current_module();
+                let name = match self.program.resolve_type_path(&module, ty) {
+                    Some(crate::check::ResolvedName::Local(c)) => c,
+                    Some(crate::check::ResolvedName::External(c)) => c,
+                    None => ty.name().to_string(),
+                };
                 let mut out = HashMap::new();
                 for f in fields {
                     let fty = self.program.defs.structs.get(&name).and_then(|d| {
@@ -1161,7 +1217,14 @@ impl<'a> Interp<'a> {
                 ..
             } => {
                 let ty = match path {
-                    Some(p) => p.name().to_string(),
+                    Some(p) => {
+                        let module = self.current_module();
+                        match self.program.resolve_type_path(&module, p) {
+                            Some(crate::check::ResolvedName::Local(c)) => c,
+                            Some(crate::check::ResolvedName::External(c)) => c,
+                            None => p.name().to_string(),
+                        }
+                    }
                     None => match expected {
                         Some(Type::Enum(n, _)) => n.clone(),
                         Some(Type::Optional(_)) => expected.unwrap().to_string(),
@@ -1405,7 +1468,11 @@ impl<'a> Interp<'a> {
     fn eval_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> R<Value> {
         match &callee.kind {
             ExprKind::Ident(name) => {
-                if let Some(f) = self.program.function(name).cloned() {
+                if let Some(f) = self
+                    .program
+                    .function_in(&self.current_module(), name)
+                    .cloned()
+                {
                     let mut vals = Vec::new();
                     for (i, a) in args.iter().enumerate() {
                         let expected = f.signature_params.get(i);
@@ -1431,7 +1498,30 @@ impl<'a> Interp<'a> {
     }
 
     fn eval_method_call(&mut self, base: &Expr, name: &str, args: &[Expr], span: Span) -> R<Value> {
-        // External constructors: `Atomic[T].init(v)`.
+        if let ExprKind::Ident(alias) = &base.kind {
+            if let Some(f) = self
+                .program
+                .function_qualified(&self.current_module(), alias, name)
+                .cloned()
+            {
+                let mut vals = Vec::new();
+                for (i, a) in args.iter().enumerate() {
+                    vals.push(self.eval_expr(a, f.signature_params.get(i))?);
+                }
+                return self.call_function(&f, vals);
+            }
+            if matches!(
+                self.program
+                    .resolve_qualified_name(&self.current_module(), alias, name),
+                Some(crate::check::ResolvedName::External(_))
+            ) {
+                for a in args {
+                    self.eval_expr(a, None)?;
+                }
+                return Ok(Value::Unit);
+            }
+        }
+        // Path calls: `Atomic[T].init(v)`, `T.make(...)` and enum variants.
         if let ExprKind::Path(p) = &base.kind {
             if p.name() == "Atomic" && name == "init" {
                 let v = args
@@ -1440,6 +1530,40 @@ impl<'a> Interp<'a> {
                     .transpose()?
                     .unwrap_or(Value::Unit);
                 return Ok(Value::Atomic(Rc::new(RefCell::new(v))));
+            }
+            let module = self.current_module();
+            let resolved = self.program.resolve_type_path(&module, p);
+            if let Some(crate::check::ResolvedName::Local(canonical)) = resolved {
+                if let Some(def) = self.program.defs.enums.get(&canonical) {
+                    if def.variants.iter().any(|(v, _)| v == name) {
+                        let payload = match args.first() {
+                            Some(a) => Some(Box::new(self.eval_expr(a, None)?)),
+                            None => None,
+                        };
+                        return Ok(Value::Enum {
+                            ty: canonical,
+                            variant: name.to_string(),
+                            payload,
+                        });
+                    }
+                }
+                let ty = if self.program.defs.structs.contains_key(&canonical) {
+                    Type::Struct(canonical.clone(), Vec::new())
+                } else if self.program.defs.enums.contains_key(&canonical) {
+                    Type::Enum(canonical.clone(), Vec::new())
+                } else {
+                    Type::External(canonical.clone())
+                };
+                if let Some(f) = self.program.method(&ty, name).cloned() {
+                    let mut vals = Vec::new();
+                    for (i, a) in args.iter().enumerate() {
+                        vals.push(self.eval_expr(a, f.signature_params.get(i))?);
+                    }
+                    return self.call_function(&f, vals);
+                }
+            }
+            for a in args {
+                self.eval_expr(a, None)?;
             }
             return Ok(Value::Unit);
         }
@@ -1494,7 +1618,7 @@ impl<'a> Interp<'a> {
             return Ok(());
         };
         let function = match &callee.kind {
-            ExprKind::Ident(n) => self.program.function(n).cloned(),
+            ExprKind::Ident(n) => self.program.function_in(&self.current_module(), n).cloned(),
             _ => None,
         };
         let Some(f) = function else {
