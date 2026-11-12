@@ -7,6 +7,7 @@ for it yet; [../ROADMAP.md](../ROADMAP.md) has the order of implementation.
 
 | File | Contents |
 |---|---|
+| [primer.md](primer.md) | **Start here to write Ingot.** The short form for an agent that knows Rust, Zig, Go or Swift: the differences, the idioms, the first errors |
 | [01-core.md](01-core.md) | Lexical rules, modules, types, declarations, expressions, statements, errors, generics, compile-time evaluation |
 | [02-memory.md](02-memory.md) | Ownership, moves, borrows, origins, linear resources, allocators, `unsafe`, the full list of traps and undefined behavior |
 | [03-concurrency.md](03-concurrency.md) | Tasks, `scope`/`spawn`, `par for`, `Send`/`Sync`, channels, `select`, cancellation, the runtime's cost model |
@@ -15,7 +16,7 @@ for it yet; [../ROADMAP.md](../ROADMAP.md) has the order of implementation.
 | [grammar.md](grammar.md) | The complete EBNF |
 | [rationale.md](rationale.md) | Why each major decision went the way it did, and what was rejected |
 | [research.md](research.md) | Sourced facts about the hardware and the platform ABIs, and what is still unsourced |
-| [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms |
+| [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms, the tool protocol |
 | [../conformance/](../conformance/README.md) | Programs with an expected outcome, which every implementation must pass |
 
 Sections are numbered once across files 01 to 05, so "section 13" means the same thing

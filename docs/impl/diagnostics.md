@@ -9,12 +9,14 @@ something is an error. This file fixes the code, the span and the fix.
 One JSON object per line on standard output, for `check`, `build`, `test` and `fix`:
 
 ```json
-{"code":"E1104","name":"move_while_borrowed","message":"`buf` is moved while it is borrowed",
+{"type":"diagnostic","code":"E1104","name":"move_while_borrowed","message":"`buf` is moved while it is borrowed",
  "span":{"file":"io.ingot","start":{"line":41,"col":18},"end":{"line":41,"col":21}},
  "related":[{"role":"borrow","span":{...}},{"role":"later_use","span":{...}}],
  "fixes":[{"message":"...","edits":[{"span":{...},"text":"..."}]}]}
 ```
 
+* The line format shared by all commands, including the `type` field and the shape of
+  positions, is in [tools.md](tools.md).
 * `code` and `name` come from this file. `message` is free text and may change between
   compiler versions. Tools match on `code`.
 * **Positions.** Lines and columns are 1-based. Columns count bytes. Spans are half-open.

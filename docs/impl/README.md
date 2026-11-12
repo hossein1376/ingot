@@ -12,6 +12,7 @@ written so that an agent can follow them without having been part of the design.
 | [diagnostics.md](diagnostics.md) | Every error code and trap: the exact condition, the primary span, related spans, the fix | the specification's wording of *when* an error is reported, never *whether* |
 | [pipeline.md](pipeline.md) | Compiler phases, what each may assume, required behavior that is not about language meaning (ordering, determinism, recovery, lowering, code generation) | nothing in the specification |
 | [checker.md](checker.md) | The ownership checker as algorithms over a control-flow graph | nothing: it must accept and reject exactly what sections 10 to 13 and 18 to 20 say |
+| [tools.md](tools.md) | What every command prints in `--json` mode, the query commands, server mode, and how editor adapters map onto them | nothing in the specification |
 | [../../conformance/](../../conformance/README.md) | Programs with an expected outcome | nothing: a test that disagrees with the specification is a bug in the test |
 
 **The specification is the only source of language rules.** These documents do not
@@ -53,4 +54,5 @@ codes, spans, order, algorithms, representation.
 | Diagnostic catalog | covers every "error" and "trap" the specification names |
 | Pipeline | front end, ownership checker and lowering are specified. Runtime and GPU back ends have notes only |
 | Checker algorithms | moves, linear values, loans, origins, scopes. Kernel checking is a list of rules, not an algorithm |
+| Tool protocol | every command's output is specified. The formatter's layout rules are not |
 | Conformance tests | a first set per area. Coverage is listed in `conformance/README.md` |

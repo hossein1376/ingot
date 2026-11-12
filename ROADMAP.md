@@ -39,7 +39,9 @@ implemented.
    `fs`, `text`.
 6. SIMD types and builtins.
 7. Runtime: scheduler, task stacks, `scope`/`spawn`, `par for`, `sync`, kqueue I/O.
-8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `fmt`.
+8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `query`, `serve`, as
+   [docs/impl/tools.md](docs/impl/tools.md) defines them. `fmt` needs its layout rules
+   written first.
 
 ## 2. Second target: `x86_64-linux-znver4`
 
@@ -60,6 +62,9 @@ implemented.
 3. Vulkan backend for the RTX 4070, on Linux and Windows.
 
 ## 5. Later
+
+A formatter specification, a Tree-sitter grammar derived from `docs/grammar.md`, and a
+Language Server adapter over `ingot serve`.
 
 The deferred list in section 12 of the rationale: a struct-of-arrays container,
 contracts, static borrow types, named origin parameters on structs, SME streaming

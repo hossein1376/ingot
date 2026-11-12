@@ -71,6 +71,9 @@ pub fn main(env: &Env) -> void ! AppErr {
 
 ## Reading the specification
 
+To write Ingot, read [docs/primer.md](docs/primer.md): a few hundred lines that cover
+what differs from the languages a model already knows.
+
 Start with [docs/README.md](docs/README.md). It maps the goals to the design, gives the
 whole design on one page and records the decisions that shaped it.
 

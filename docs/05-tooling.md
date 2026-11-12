@@ -11,7 +11,7 @@ intended author cannot work without them.
 * `ingot check --json` prints one JSON object per line, in a stable order:
 
   ```json
-  {"code":"E1104","name":"move_while_borrowed","message":"`buf` is moved while it is borrowed",
+  {"type":"diagnostic","code":"E1104","name":"move_while_borrowed","message":"`buf` is moved while it is borrowed",
    "span":{"file":"io.ingot","start":{"line":41,"col":18},"end":{"line":41,"col":21}},
    "related":[{"role":"borrow","span":{"file":"io.ingot","start":{"line":38,"col":16},"end":{"line":38,"col":20}}},
               {"role":"later_use","span":{"file":"io.ingot","start":{"line":44,"col":9},"end":{"line":44,"col":14}}}],
@@ -31,7 +31,8 @@ intended author cannot work without them.
 * `fixes` are edits that make this diagnostic go away without changing behavior that
   already compiled. `ingot fix` applies the first fix of each diagnostic, re-checks and
   repeats until nothing changes.
-* Lines and columns are 1-based, columns count bytes, spans are half-open.
+* Lines and columns are 1-based, columns count bytes, spans are half-open. Each position
+  also carries its byte offset in the file.
 * The compiler reports every independent error in a file in one run. It does not report
   errors that are only consequences of an earlier one.
 
@@ -140,7 +141,10 @@ libs = ["vulkan-1"]
   compiles quickly with little optimization, for the edit-and-test loop. Both have
   identical semantics, traps included. There is no build mode that removes checks.
 * Commands: `build`, `run`, `check`, `fix`, `test`, `bench`, `fmt`, `explain`, `api`,
-  `cost`, `audit`, `layout`, `asm`. Every command accepts `--json`.
+  `cost`, `audit`, `layout`, `asm`, `targets`, `query` (definition, references, type,
+  live borrows, symbols), `rename` and `serve` (one long-running process that answers
+  the same commands). Every command that reports something accepts `--json`, and
+  [impl/tools.md](impl/tools.md) defines what each prints.
 
 `ingot api [PATH] --json` prints the public surface of a module, a package or `std`:
 each item's signature exactly as written (including `from`, `into`, `! E`, bounds and

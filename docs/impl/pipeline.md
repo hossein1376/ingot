@@ -295,6 +295,9 @@ A program that uses none of the concurrency entry points must not link the sched
 ## 9. Tools
 
 All tools are front ends to the same pipeline and must agree with it by construction.
+The compiler is a library with a query interface ("the diagnostics of this package",
+"the type at this position", "the loans live at this line"), and the command line and
+`ingot serve` are both thin callers of it. [tools.md](tools.md) defines what they print.
 
 * `ingot fix` uses the fix edits of phase 1 to 9 diagnostics and nothing else.
 * `ingot fmt` works on tokens and comments from phase 2 and the AST from phase 3. It
