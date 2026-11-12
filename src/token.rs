@@ -118,7 +118,7 @@ impl Kw {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Kw> {
+    pub fn from_spelling(s: &str) -> Option<Kw> {
         Some(match s {
             "align" => Kw::Align,
             "as" => Kw::As,

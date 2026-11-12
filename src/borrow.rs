@@ -118,7 +118,7 @@ impl<'a> Borrows<'a> {
                 .last_use
                 .get(n)
                 .map(|(_, s)| *s)
-                .or_else(|| self.scope_end(n).map(|e| Span::empty(e))),
+                .or_else(|| self.scope_end(n).map(Span::empty)),
         }
     }
 
@@ -277,10 +277,10 @@ impl<'a> Borrows<'a> {
         }
         // Loans held by values that end keep no reachable holder.
         for loan in &mut self.loans {
-            if let Holder::Local(n) = &loan.holder {
-                if declared.contains(n) {
-                    loan.active = false;
-                }
+            if let Holder::Local(n) = &loan.holder
+                && declared.contains(n)
+            {
+                loan.active = false;
             }
         }
     }
@@ -461,36 +461,33 @@ impl<'a> Borrows<'a> {
             expr,
             op_span,
         } = &value.kind
+            && let Some(root) = root_ident(expr)
+            && let Some(fact) = self.fact(root)
+            && !fact.is_param
         {
-            if let Some(root) = root_ident(expr) {
-                if let Some(fact) = self.fact(root) {
-                    if !fact.is_param {
-                        let span = if op_span.is_empty() { span } else { *op_span };
-                        self.diag(
-                            "E1203",
-                            format!("`{root}` is a local, so this borrow cannot be returned"),
-                            span,
-                        );
-                    }
-                }
-            }
+            let span = if op_span.is_empty() { span } else { *op_span };
+            self.diag(
+                "E1203",
+                format!("`{root}` is a local, so this borrow cannot be returned"),
+                span,
+            );
         }
-        if matches!(value.kind, ExprKind::Ident(_)) {
-            if let Some(root) = root_ident(value) {
-                for loan in &self.loans {
-                    if !loan.active || loan.holder != Holder::Local(root.to_string()) {
-                        continue;
-                    }
-                    if let Some(r) = loan.path.first() {
-                        if self.fact(r).map(|f| !f.is_param).unwrap_or(false) {
-                            self.diag(
-                                "E1203",
-                                format!("the returned value borrows local `{r}`"),
-                                span,
-                            );
-                            break;
-                        }
-                    }
+        if matches!(value.kind, ExprKind::Ident(_))
+            && let Some(root) = root_ident(value)
+        {
+            for loan in &self.loans {
+                if !loan.active || loan.holder != Holder::Local(root.to_string()) {
+                    continue;
+                }
+                if let Some(r) = loan.path.first()
+                    && self.fact(r).map(|f| !f.is_param).unwrap_or(false)
+                {
+                    self.diag(
+                        "E1203",
+                        format!("the returned value borrows local `{r}`"),
+                        span,
+                    );
+                    break;
                 }
             }
         }
@@ -525,7 +522,7 @@ impl<'a> Borrows<'a> {
             ExprKind::Call { callee, args, .. } => self.call(callee, args, holder),
             ExprKind::Paren(inner) => self.init_expr(inner, holder),
             ExprKind::Ident(name) => {
-                self.access(&[name.clone()], Access::Read, expr.span);
+                self.access(std::slice::from_ref(name), Access::Read, expr.span);
                 if let Some(holder) = holder {
                     // Copying a view copies its origins.
                     let loans: Vec<Loan> = self
@@ -549,7 +546,9 @@ impl<'a> Borrows<'a> {
 
     fn expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Ident(name) => self.access(&[name.clone()], Access::Read, expr.span),
+            ExprKind::Ident(name) => {
+                self.access(std::slice::from_ref(name), Access::Read, expr.span)
+            }
             ExprKind::Field { base, name, .. } => {
                 let mut p = place_path(base);
                 p.push(name.clone());
@@ -709,19 +708,19 @@ impl<'a> Borrows<'a> {
         }
         // Activate receiver and argument borrows now, after every argument has
         // been evaluated (§12, two-phase borrows).
-        if let (Some(f), Some(base)) = (&function, receiver.as_ref()) {
-            if let Some(self_ty) = f.signature_params.first() {
-                let path = place_path(base);
-                let access = match self_ty {
-                    Type::Borrow { mutable: true, .. } | Type::Slice { mutable: true, .. } => {
-                        Some(Access::ExclusiveBorrow)
-                    }
-                    Type::Borrow { .. } | Type::Slice { .. } => Some(Access::SharedBorrow),
-                    _ => None,
-                };
-                if let Some(a) = access {
-                    self.access(&path, a, base.span);
+        if let (Some(f), Some(base)) = (&function, receiver.as_ref())
+            && let Some(self_ty) = f.signature_params.first()
+        {
+            let path = place_path(base);
+            let access = match self_ty {
+                Type::Borrow { mutable: true, .. } | Type::Slice { mutable: true, .. } => {
+                    Some(Access::ExclusiveBorrow)
                 }
+                Type::Borrow { .. } | Type::Slice { .. } => Some(Access::SharedBorrow),
+                _ => None,
+            };
+            if let Some(a) = access {
+                self.access(&path, a, base.span);
             }
         }
         let Some(f) = function else {
@@ -747,23 +746,22 @@ impl<'a> Borrows<'a> {
             let Some(dst_idx) = f.decl.params.iter().position(|q| q.name == *target) else {
                 continue;
             };
-            if let (Some(src), Some(dst)) = (args.get(src_idx), args.get(dst_idx)) {
-                if let Some(src_root) = root_ident(src) {
-                    if let Some(dst_root) = root_ident(dst) {
-                        let path = place_path(src);
-                        let holder = if self.fact(dst_root).map(|f| f.is_param).unwrap_or(false)
-                            && matches!(
-                                self.fact(dst_root).map(|f| &f.ty),
-                                Some(Type::Borrow { inner, .. }) if matches!(inner.as_ref(), Type::External(n) if n == "Scope")
-                            ) {
-                            Holder::Scope(dst_root.to_string())
-                        } else {
-                            Holder::Local(dst_root.to_string())
-                        };
-                        let _ = src_root;
-                        self.borrow(path, BorrowKind::Shared, src.span, Some(holder));
-                    }
-                }
+            if let (Some(src), Some(dst)) = (args.get(src_idx), args.get(dst_idx))
+                && let Some(src_root) = root_ident(src)
+                && let Some(dst_root) = root_ident(dst)
+            {
+                let path = place_path(src);
+                let holder = if self.fact(dst_root).map(|f| f.is_param).unwrap_or(false)
+                    && matches!(
+                        self.fact(dst_root).map(|f| &f.ty),
+                        Some(Type::Borrow { inner, .. }) if matches!(inner.as_ref(), Type::External(n) if n == "Scope")
+                    ) {
+                    Holder::Scope(dst_root.to_string())
+                } else {
+                    Holder::Local(dst_root.to_string())
+                };
+                let _ = src_root;
+                self.borrow(path, BorrowKind::Shared, src.span, Some(holder));
             }
         }
         // Type-parameter flow: a `T` argument stored through a `&mut` parameter
@@ -808,39 +806,38 @@ impl<'a> Borrows<'a> {
             }
         }
         // Result origins.
-        if let Some(holder) = holder {
-            if f.signature_ret.is_view(&self.program.defs) {
-                if let Some(base) = &receiver {
-                    let from_self_plain = f
-                        .decl
-                        .from
-                        .iter()
-                        .any(|o| !o.inner && !o.is_static && o.name == "self");
-                    if from_self_plain {
+        if let Some(holder) = holder
+            && f.signature_ret.is_view(&self.program.defs)
+        {
+            if let Some(base) = &receiver {
+                let from_self_plain = f
+                    .decl
+                    .from
+                    .iter()
+                    .any(|o| !o.inner && !o.is_static && o.name == "self");
+                if from_self_plain {
+                    let kind = if ret_is_exclusive(&f.signature_ret) {
+                        BorrowKind::Exclusive
+                    } else {
+                        BorrowKind::Shared
+                    };
+                    self.borrow(place_path(base), kind, base.span, Some(holder));
+                }
+            } else {
+                for origin in &f.decl.from {
+                    if origin.is_static || origin.inner {
+                        continue;
+                    }
+                    let Some(idx) = f.decl.params.iter().position(|p| p.name == origin.name) else {
+                        continue;
+                    };
+                    if let Some(arg) = args.get(idx) {
                         let kind = if ret_is_exclusive(&f.signature_ret) {
                             BorrowKind::Exclusive
                         } else {
                             BorrowKind::Shared
                         };
-                        self.borrow(place_path(base), kind, base.span, Some(holder));
-                    }
-                } else {
-                    for origin in &f.decl.from {
-                        if origin.is_static || origin.inner {
-                            continue;
-                        }
-                        let Some(idx) = f.decl.params.iter().position(|p| p.name == origin.name)
-                        else {
-                            continue;
-                        };
-                        if let Some(arg) = args.get(idx) {
-                            let kind = if ret_is_exclusive(&f.signature_ret) {
-                                BorrowKind::Exclusive
-                            } else {
-                                BorrowKind::Shared
-                            };
-                            self.borrow(place_path(arg), kind, arg.span, Some(holder.clone()));
-                        }
+                        self.borrow(place_path(arg), kind, arg.span, Some(holder.clone()));
                     }
                 }
             }
@@ -1075,11 +1072,10 @@ fn pattern_names(p: &Pattern) -> Vec<String> {
                     }
                 }
             }
-            Pattern::Variant { payload, .. } => {
-                if let Some(p) = payload {
-                    walk(p, out);
-                }
-            }
+            Pattern::Variant {
+                payload: Some(p), ..
+            } => walk(p, out),
+            Pattern::Variant { payload: None, .. } => {}
             _ => {}
         }
     }
@@ -1226,11 +1222,10 @@ fn collect_uses_expr(e: &Expr, out: &mut HashMap<String, (usize, Span)>) {
                 collect_uses_expr(&f.value, out);
             }
         }
-        ExprKind::EnumLit { payload, .. } => {
-            if let Some(p) = payload {
-                collect_uses_expr(p, out);
-            }
-        }
+        ExprKind::EnumLit {
+            payload: Some(p), ..
+        } => collect_uses_expr(p, out),
+        ExprKind::EnumLit { payload: None, .. } => {}
         ExprKind::ArrayLit { elems, .. } | ExprKind::Tuple { elems, .. } => {
             for x in elems {
                 collect_uses_expr(x, out);

@@ -523,36 +523,34 @@ impl<'a> Parser<'a> {
     fn bound(&mut self) -> PathTy {
         // `Fn(A) -> R` is represented as a path named Fn with the component types
         // as arguments; the checker treats the built-in bounds specially.
-        if let TokenKind::TypeIdent(name) = self.kind().clone() {
-            if matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce")
-                && self.peek_at(1).kind.is_punct(LParen)
-            {
-                if let TokenKind::TypeIdent(name) = self.bump().kind {
-                    let start = self.span().start;
-                    self.expect(LParen);
-                    let mut args = Vec::new();
-                    while !self.at(RParen) && !self.at_eof() {
-                        args.push(GenericArg::Ty(self.ty()));
-                        if !self.eat(Comma) {
-                            break;
-                        }
-                    }
-                    let close = self.expect(RParen);
-                    if self.eat(Arrow) {
-                        args.push(GenericArg::Ty(self.ty()));
-                        if self.eat(Bang) {
-                            args.push(GenericArg::Ty(self.ty()));
-                        }
-                    }
-                    return PathTy {
-                        segments: vec![(name, close)],
-                        args,
-                        args_span: Some(close),
-                        assoc: None,
-                        span: Span::new(start, close.end),
-                    };
+        if let TokenKind::TypeIdent(name) = self.kind().clone()
+            && matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce")
+            && self.peek_at(1).kind.is_punct(LParen)
+            && let TokenKind::TypeIdent(name) = self.bump().kind
+        {
+            let start = self.span().start;
+            self.expect(LParen);
+            let mut args = Vec::new();
+            while !self.at(RParen) && !self.at_eof() {
+                args.push(GenericArg::Ty(self.ty()));
+                if !self.eat(Comma) {
+                    break;
                 }
             }
+            let close = self.expect(RParen);
+            if self.eat(Arrow) {
+                args.push(GenericArg::Ty(self.ty()));
+                if self.eat(Bang) {
+                    args.push(GenericArg::Ty(self.ty()));
+                }
+            }
+            return PathTy {
+                segments: vec![(name, close)],
+                args,
+                args_span: Some(close),
+                assoc: None,
+                span: Span::new(start, close.end),
+            };
         }
         self.path_ty()
     }
@@ -1627,7 +1625,7 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut arms = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
-            arms.push(self.arm(true));
+            arms.push(self.arm());
         }
         let close = self.expect(RBrace);
         Stmt::Match(MatchStmt {
@@ -1637,7 +1635,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn arm(&mut self, statement: bool) -> Arm {
+    fn arm(&mut self) -> Arm {
         let start = self.span().start;
         let is_else = self.eat_kw(Kw::Else);
         let mut patterns = Vec::new();
@@ -1657,10 +1655,6 @@ impl<'a> Parser<'a> {
         self.expect(FatArrow);
         let body = if self.at(LBrace) {
             ArmBody::Block(self.block())
-        } else if statement {
-            let expr = self.expr();
-            self.eat(Comma);
-            ArmBody::Expr(expr)
         } else {
             let expr = self.expr();
             self.eat(Comma);
@@ -2300,18 +2294,18 @@ impl<'a> Parser<'a> {
         };
         if let Some(op) = op {
             let op_span = self.bump().span;
-            if op == UnOp::Neg {
-                if let TokenKind::Int(value) = self.kind().clone() {
-                    let tok = self.bump();
-                    return Expr::new(
-                        ExprKind::Int {
-                            value,
-                            negative: true,
-                            text: format!("-{value}"),
-                        },
-                        Span::new(start, tok.span.end),
-                    );
-                }
+            if op == UnOp::Neg
+                && let TokenKind::Int(value) = self.kind().clone()
+            {
+                let tok = self.bump();
+                return Expr::new(
+                    ExprKind::Int {
+                        value,
+                        negative: true,
+                        text: format!("-{value}"),
+                    },
+                    Span::new(start, tok.span.end),
+                );
             }
             let expr = self.prefix();
             let span = Span::new(start, expr.span.end);
@@ -3280,11 +3274,10 @@ fn check_pattern(p: &Pattern, source: &Source, out: &mut Vec<Diagnostic>) {
             check_pattern(lo, source, out);
             check_pattern(hi, source, out);
         }
-        Pattern::Variant { payload, .. } => {
-            if let Some(p) = payload {
-                check_pattern(p, source, out);
-            }
-        }
+        Pattern::Variant {
+            payload: Some(p), ..
+        } => check_pattern(p, source, out),
+        Pattern::Variant { payload: None, .. } => {}
         Pattern::Tuple { elems, .. } => {
             for e in elems {
                 check_pattern(e, source, out);
@@ -3352,11 +3345,10 @@ fn check_expr(expr: &Expr, source: &Source, out: &mut Vec<Diagnostic>) {
                 check_expr(&f.value, source, out);
             }
         }
-        ExprKind::EnumLit { payload, .. } => {
-            if let Some(p) = payload {
-                check_expr(p, source, out);
-            }
-        }
+        ExprKind::EnumLit {
+            payload: Some(p), ..
+        } => check_expr(p, source, out),
+        ExprKind::EnumLit { payload: None, .. } => {}
         ExprKind::ArrayLit { len, elems, .. } => {
             check_expr(len, source, out);
             for e in elems {
@@ -3482,14 +3474,14 @@ fn check_mixing(
 }
 
 fn check_bitwise_child(child: &Expr, source: &Source, out: &mut Vec<Diagnostic>) {
-    if let ExprKind::Binary { op, .. } = &child.kind {
-        if op.is_bitwise() || op.is_shift() {
-            out.push(Diagnostic::new(
-                "E0204",
-                "bitwise and shift operators must be parenthesized when mixed with other operators",
-                source,
-                child.span,
-            ));
-        }
+    if let ExprKind::Binary { op, .. } = &child.kind
+        && (op.is_bitwise() || op.is_shift())
+    {
+        out.push(Diagnostic::new(
+            "E0204",
+            "bitwise and shift operators must be parenthesized when mixed with other operators",
+            source,
+            child.span,
+        ));
     }
 }

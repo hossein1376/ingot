@@ -468,21 +468,24 @@ impl<'a> Analyzer<'a> {
                 continue;
             };
             let bound = import.bound_name().to_string();
-            let ctx = self.program.modules.get_mut(module_name).unwrap();
-            if ctx.imports.contains_key(&bound) {
-                let first = ctx.imports.get(&bound).cloned();
-                let d = self.diag(
+            let mut duplicate = false;
+            {
+                let ctx = self.program.modules.get_mut(module_name).unwrap();
+                match ctx.imports.entry(bound.clone()) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(binding);
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => duplicate = true,
+                }
+            }
+            if duplicate {
+                self.diag(
                     "E0302",
                     format!("`{bound}` is imported more than once"),
                     import
                         .alias_span
                         .unwrap_or_else(|| import.segments.last().unwrap().1),
                 );
-                if first.is_some() {
-                    d.relate("previous", import.segments.last().unwrap().1);
-                }
-            } else {
-                ctx.imports.insert(bound, binding);
             }
         }
     }
@@ -510,7 +513,7 @@ impl<'a> Analyzer<'a> {
             .map(|(s, _)| s.as_str())
             .collect::<Vec<_>>()
             .join(".");
-        if self.program.modules.contains_key(&full) && segments.len() > 0 {
+        if self.program.modules.contains_key(&full) && !segments.is_empty() {
             // A path that names both a module and an item is ambiguous (§E0316).
             let bound = import.bound_name().to_string();
             let _ = bound;
@@ -553,7 +556,7 @@ impl<'a> Analyzer<'a> {
     }
 
     fn collect_all(&mut self, modules: &BTreeMap<String, (LoadedModule, Module)>) {
-        for (_, (loaded, module)) in modules {
+        for (loaded, module) in modules.values() {
             self.set_module(loaded);
             self.collect_types(module);
             self.collect_values(module);
@@ -650,21 +653,21 @@ impl<'a> Analyzer<'a> {
                             );
                         }
                         let payload = v.payload.as_ref().map(|t| self.resolve_ty(t));
-                        if v.from {
-                            if let Some(p) = &payload {
-                                let key = p.to_string();
-                                if let Some(prev) = from.get(&key) {
-                                    let prev_name = prev.clone();
-                                    self.diag(
-                                        "E0504",
-                                        format!(
-                                            "a variant from `{key}` already exists (`{prev_name}`)"
-                                        ),
-                                        v.name_span,
-                                    );
-                                } else {
-                                    from.insert(key, v.name.clone());
-                                }
+                        if v.from
+                            && let Some(p) = &payload
+                        {
+                            let key = p.to_string();
+                            if let Some(prev) = from.get(&key) {
+                                let prev_name = prev.clone();
+                                self.diag(
+                                    "E0504",
+                                    format!(
+                                        "a variant from `{key}` already exists (`{prev_name}`)"
+                                    ),
+                                    v.name_span,
+                                );
+                            } else {
+                                from.insert(key, v.name.clone());
                             }
                         }
                         variants.push((v.name.clone(), payload));
@@ -739,9 +742,7 @@ impl<'a> Analyzer<'a> {
                             }
                         }
                     }
-                    let needs_linear = fields
-                        .iter()
-                        .any(|(_, t)| t.is_linear(&self.program.defs, &self.generic_bounds));
+                    let needs_linear = fields.iter().any(|(_, t)| t.is_linear(&self.program.defs));
                     if needs_linear && s.kind != StructKind::Linear {
                         let d = self.diag(
                             "E0502",
@@ -760,18 +761,16 @@ impl<'a> Analyzer<'a> {
                         );
                     }
                 }
-                Item::Enum(e) => {
-                    if e.copy {
-                        for v in &e.variants {
-                            if let Some(t) = &v.payload {
-                                let ty = self.resolve_ty(t);
-                                if !ty.is_copy(&self.program.defs, &self.generic_bounds) {
-                                    self.diag(
-                                        "E0501",
-                                        format!("payload of type `{ty}` is not `Copy`"),
-                                        v.name_span,
-                                    );
-                                }
+                Item::Enum(e) if e.copy => {
+                    for v in &e.variants {
+                        if let Some(t) = &v.payload {
+                            let ty = self.resolve_ty(t);
+                            if !ty.is_copy(&self.program.defs, &self.generic_bounds) {
+                                self.diag(
+                                    "E0501",
+                                    format!("payload of type `{ty}` is not `Copy`"),
+                                    v.name_span,
+                                );
                             }
                         }
                     }
@@ -799,14 +798,14 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             for (_, payload) in &def.variants {
-                if let Some(ty) = payload {
-                    if direct_contains(ty, &name, &self.program.defs, &mut HashSet::new()) {
-                        self.diag(
-                            "E0516",
-                            format!("`{name}` contains itself by value"),
-                            def.span,
-                        );
-                    }
+                if let Some(ty) = payload
+                    && direct_contains(ty, &name, &self.program.defs, &mut HashSet::new())
+                {
+                    self.diag(
+                        "E0516",
+                        format!("`{name}` contains itself by value"),
+                        def.span,
+                    );
                 }
             }
         }
@@ -888,10 +887,10 @@ impl<'a> Analyzer<'a> {
                 let _ = bounds;
                 return Type::Param(name);
             }
-            if name == "Self" {
-                if let Some(t) = &self.self_ty {
-                    return t.clone();
-                }
+            if name == "Self"
+                && let Some(t) = &self.self_ty
+            {
+                return t.clone();
             }
         }
         if name == "Option" && p.segments.len() == 1 {
@@ -918,10 +917,10 @@ impl<'a> Analyzer<'a> {
             });
         match resolved {
             Some(ResolvedName::Local(canonical)) => {
-                if let Some(_) = self.program.defs.structs.get(&canonical) {
+                if self.program.defs.structs.contains_key(&canonical) {
                     return Type::Struct(canonical, self.resolve_args(&p.args));
                 }
-                if let Some(_) = self.program.defs.enums.get(&canonical) {
+                if self.program.defs.enums.contains_key(&canonical) {
                     return Type::Enum(canonical, self.resolve_args(&p.args));
                 }
                 if let Some((ty, params)) = self.program.defs.aliases.get(&canonical).cloned() {
@@ -1208,10 +1207,10 @@ impl<'a> Analyzer<'a> {
                     let canonical = self.program.qualify(&self.current_module, &c.name);
                     let ty = self.program.consts[&canonical].ty.clone();
                     let val = self.const_value(&c.value, Some(&ty));
-                    if let Some(v) = val {
-                        if let Some(info) = self.program.consts.get_mut(&canonical) {
-                            info.value = Some(v);
-                        }
+                    if let Some(v) = val
+                        && let Some(info) = self.program.consts.get_mut(&canonical)
+                    {
+                        info.value = Some(v);
                     }
                 }
                 Item::Static(s) => {
@@ -1242,10 +1241,10 @@ impl<'a> Analyzer<'a> {
                 if *negative {
                     n = -n;
                 }
-                if let Some(ty) = expected {
-                    if let Some(v) = fit_int(n, ty) {
-                        return Some(ConstVal::Int(v));
-                    }
+                if let Some(ty) = expected
+                    && let Some(v) = fit_int(n, ty)
+                {
+                    return Some(ConstVal::Int(v));
                 }
                 Some(ConstVal::Int(n))
             }
@@ -1293,10 +1292,9 @@ impl<'a> Analyzer<'a> {
                 match (a, b) {
                     (ConstVal::Int(a), ConstVal::Int(b)) => {
                         let n = match op {
-                            BinOp::Add | BinOp::AddWrap | BinOp::AddSat => a
-                                .checked_add(b)
-                                .map(|v| if *op == BinOp::AddSat { v } else { v })
-                                .unwrap_or(a.wrapping_add(b)),
+                            BinOp::Add | BinOp::AddWrap | BinOp::AddSat => {
+                                a.checked_add(b).unwrap_or_else(|| a.wrapping_add(b))
+                            }
                             BinOp::Sub | BinOp::SubWrap | BinOp::SubSat => a.wrapping_sub(b),
                             BinOp::Mul | BinOp::MulWrap | BinOp::MulSat => a.wrapping_mul(b),
                             BinOp::Div => {

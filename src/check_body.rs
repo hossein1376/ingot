@@ -358,17 +358,15 @@ impl<'a> Checker<'a> {
             if self.generic_bounds.contains_key(&name) {
                 return Type::Param(name);
             }
-            if name == "Self" {
-                if let Some(t) = &self.self_ty {
+            if name == "Self"
+                && let Some(t) = &self.self_ty {
                     return t.clone();
                 }
-            }
         }
-        if name == "Option" && p.segments.len() == 1 {
-            if let Some(t) = self.resolve_args(&p.args).into_iter().next() {
+        if name == "Option" && p.segments.len() == 1
+            && let Some(t) = self.resolve_args(&p.args).into_iter().next() {
                 return Type::Optional(Box::new(t));
             }
-        }
         if name == "Result" && p.segments.len() == 1 {
             let mut it = self.resolve_args(&p.args).into_iter();
             if let (Some(t), Some(e)) = (it.next(), it.next()) {
@@ -660,9 +658,7 @@ impl<'a> Checker<'a> {
                 }
                 let old = self.in_defer;
                 self.in_defer = true;
-                if let Some(s) = self.diag_exit_in_defer(body, *span) {
-                    let _ = s;
-                }
+                self.diag_exit_in_defer(body, *span);
                 self.check_block(body);
                 self.in_defer = old;
                 Type::Void
@@ -939,6 +935,7 @@ impl<'a> Checker<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_for(
         &mut self,
         par: bool,
@@ -1093,8 +1090,8 @@ impl<'a> Checker<'a> {
             }
             let actual = self.check_expr(e, Some(&ret));
             self.check_return_origin(e, &ret);
-            if let Type::Result(inner, err) = &actual {
-                if &ret == inner.as_ref() || ret == *inner.as_ref() {
+            if let Type::Result(inner, err) = &actual
+                && (&ret == inner.as_ref() || ret == *inner.as_ref()) {
                     let d = self.diag(
                         "E0710",
                         "return a result with `try` or return its error explicitly",
@@ -1110,7 +1107,6 @@ impl<'a> Checker<'a> {
                     let _ = err;
                     return;
                 }
-            }
             self.expect_type(actual, &ret, e.span);
         } else if !ret.is_void() {
             self.diag("E0421", "this function returns a value", span);
@@ -1126,9 +1122,9 @@ impl<'a> Checker<'a> {
         let actual = self.check_expr(value, Some(&error_ty));
         if !types_equal(&actual, &error_ty) {
             // A `from` variant may wrap the operand.
-            if let Type::Enum(name, _) = &error_ty {
-                if let Some(def) = self.program.defs.enums.get(name) {
-                    if let Some(variant) = def.from.get(&actual.to_string()) {
+            if let Type::Enum(name, _) = &error_ty
+                && let Some(def) = self.program.defs.enums.get(name)
+                    && let Some(variant) = def.from.get(&actual.to_string()) {
                         let variant = variant.clone();
                         let d = self.diag(
                             "E0706",
@@ -1148,8 +1144,6 @@ impl<'a> Checker<'a> {
                         );
                         return;
                     }
-                }
-            }
             self.expect_type(actual, &error_ty, value.span);
         }
     }
@@ -1729,15 +1723,12 @@ impl<'a> Checker<'a> {
                 name,
                 name_span,
             } => {
-                if let ExprKind::Ident(alias) = &base.kind {
-                    if let Some(crate::check::ResolvedName::Local(canonical)) =
+                if let ExprKind::Ident(alias) = &base.kind
+                    && let Some(crate::check::ResolvedName::Local(canonical)) =
                         self.program.resolve_qualified_name(&self.module, alias, name)
-                    {
-                        if let Some(info) = self.program.consts.get(&canonical) {
+                        && let Some(info) = self.program.consts.get(&canonical) {
                             return info.ty.clone();
                         }
-                    }
-                }
                 let base_ty = self.check_expr(base, None);
                 if base_ty.is_error() {
                     return Type::Error;
@@ -1995,16 +1986,17 @@ impl<'a> Checker<'a> {
                 if expected.is_none() {
                     if then_ty.is_never() {
                         else_ty
-                    } else if else_ty.is_never() || then_ty.is_error() {
-                        then_ty
-                    } else if types_equal(&then_ty, &else_ty) {
+                    } else if else_ty.is_never()
+                        || then_ty.is_error()
+                        || types_equal(&then_ty, &else_ty)
+                    {
                         then_ty
                     } else {
                         self.expect_type(else_ty, &then_ty, otherwise.span);
                         Type::Error
                     }
                 } else {
-                    expected.unwrap().clone()
+                    expected.cloned().unwrap_or(Type::Error)
                 }
             }
             ExprKind::Match {
@@ -2542,19 +2534,18 @@ impl<'a> Checker<'a> {
                         || (!d.fields.is_empty() && d.fields.iter().all(|(_, _, public)| *public))
                 })
                 .unwrap_or(true),
-            Type::Enum(name, _) => self.program.defs.enums.get(name).is_some(),
+            Type::Enum(name, _) => self.program.defs.enums.contains_key(name),
             _ => true,
         }
     }
 
     fn check_member_visibility(&mut self, ty: &Type, name: &str, span: Span) {
-        if let Type::Struct(struct_name, _) = ty {
-            if let Some(def) = self.program.defs.structs.get(struct_name) {
-                if def.module != self.module {
-                    if let Some((_, _, public)) =
+        if let Type::Struct(struct_name, _) = ty
+            && let Some(def) = self.program.defs.structs.get(struct_name)
+                && def.module != self.module
+                    && let Some((_, _, public)) =
                         def.fields.iter().find(|(f, _, _)| f == name)
-                    {
-                        if !*public {
+                        && !*public {
                             self.diag(
                                 "E0307",
                                 format!("field `{name}` of `{struct_name}` is private"),
@@ -2562,10 +2553,6 @@ impl<'a> Checker<'a> {
                             )
                             .relate_in("declared", &def.file, def.span);
                         }
-                    }
-                }
-            }
-        }
     }
 
     fn check_struct_lit(&mut self, structural: &Type, fields: &[FieldInit], braces: Span) -> Type {
@@ -3014,11 +3001,10 @@ impl<'a> Checker<'a> {
                 Type::i64()
             }
             "lanes" => {
-                if let Some(t) = targ {
-                    if let Type::Vector(_v) = t {
+                if let Some(t) = targ
+                    && let Type::Vector(_v) = t {
                         return Type::Int(ScalarTy::I64);
                     }
-                }
                 self.diag("E0410", "`@lanes` needs a vector type", span);
                 Type::i64()
             }
@@ -3171,9 +3157,9 @@ impl<'a> Checker<'a> {
     }
 
     fn check_dispatch_call(&mut self, call: &Expr) {
-        if let ExprKind::Call { callee, args, .. } = &call.kind {
-            if let ExprKind::Ident(n) = &callee.kind {
-                if let Some(f) = self.program.function_in(&self.module, n).cloned() {
+        if let ExprKind::Call { callee, args, .. } = &call.kind
+            && let ExprKind::Ident(n) = &callee.kind
+                && let Some(f) = self.program.function_in(&self.module, n).cloned() {
                     for (i, a) in args.iter().enumerate() {
                         let expected = f.signature_params.get(i + 1);
                         let actual = self.check_expr(a, expected);
@@ -3183,8 +3169,6 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 }
-            }
-        }
         self.check_expr(call, None);
     }
 
@@ -3246,9 +3230,9 @@ impl<'a> Checker<'a> {
                 .find_local(scope_name)
                 .map(|(_, l)| (l.is_param, l.ty.clone()))
                 .unwrap_or((false, Type::Error));
-            if scope_param.0 {
-                if let Type::Borrow { inner, .. } = &scope_param.1 {
-                    if matches!(inner.as_ref(), Type::External(n) if n == "Scope") {
+            if scope_param.0
+                && let Type::Borrow { inner, .. } = &scope_param.1
+                    && matches!(inner.as_ref(), Type::External(n) if n == "Scope") {
                         for a in args {
                             let ty = self.check_expr(a, None);
                             if !ty.is_view(&self.program.defs) {
@@ -3274,8 +3258,6 @@ impl<'a> Checker<'a> {
                             );
                         }
                     }
-                }
-            }
         }
         let _ = span;
     }
@@ -3494,8 +3476,8 @@ impl<'a> Checker<'a> {
         {
             return actual;
         }
-        if let Type::Result(inner, _) = &actual {
-            if types_equal(inner, expected) {
+        if let Type::Result(inner, _) = &actual
+            && types_equal(inner, expected) {
                 let d = self.diag(
                     "E0701",
                     "a result value cannot be used as its success type; handle it with `try` or `catch`",
@@ -3510,7 +3492,6 @@ impl<'a> Checker<'a> {
                 );
                 return inner.as_ref().clone();
             }
-        }
         let conversion = format!(" as {expected}");
         let can_convert = lossless(&actual, expected);
         let d = self.diag(
@@ -3546,11 +3527,10 @@ fn find_outer_mutation(
                 }
             }
             Stmt::Assign { place, span, .. } => {
-                if let Some(root) = expr_root_ident(place) {
-                    if outer.contains(root) && !declared.contains(root) {
+                if let Some(root) = expr_root_ident(place)
+                    && outer.contains(root) && !declared.contains(root) {
                         out.push(*span);
                     }
-                }
             }
             Stmt::Expr { expr, .. } => find_outer_mutation_expr(expr, outer, declared, out),
             Stmt::Block(b) => find_outer_mutation(&b.stmts, outer, declared, out),
@@ -3589,11 +3569,10 @@ fn find_outer_mutation_expr(
             expr,
             op_span,
         } => {
-            if let Some(root) = expr_root_ident(expr) {
-                if outer.contains(root) && !declared.contains(root) {
+            if let Some(root) = expr_root_ident(expr)
+                && outer.contains(root) && !declared.contains(root) {
                     out.push(*op_span);
                 }
-            }
         }
         ExprKind::Call { args, .. } => {
             for a in args {
@@ -3623,11 +3602,10 @@ fn pattern_binding_names(p: &Pattern) -> Vec<String> {
                     }
                 }
             }
-            Pattern::Variant { payload, .. } => {
-                if let Some(p) = payload {
-                    walk(p, out);
-                }
-            }
+            Pattern::Variant {
+                payload: Some(p), ..
+            } => walk(p, out),
+            Pattern::Variant { payload: None, .. } => {}
             _ => {}
         }
     }

@@ -430,9 +430,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 let frac_start = self.pos;
                 while let Some(b) = self.peek(0) {
-                    if b.is_ascii_digit() {
-                        self.pos += 1;
-                    } else if b == b'_' {
+                    if b.is_ascii_digit() || b == b'_' {
                         self.pos += 1;
                     } else {
                         break;
@@ -517,14 +515,14 @@ impl<'a> Lexer<'a> {
                 format!("`@{name}` is not a builtin"),
                 Span::new(name_start, name_end),
             );
-            if let Some((candidate, distance)) = closest(name, BUILTINS) {
-                if distance <= 2 {
-                    let fix = Edit {
-                        span: Span::new(name_start, name_end),
-                        text: candidate.to_string(),
-                    };
-                    diag.fix(format!("replace with `@{candidate}`"), fix);
-                }
+            if let Some((candidate, distance)) = closest(name, BUILTINS)
+                && distance <= 2
+            {
+                let fix = Edit {
+                    span: Span::new(name_start, name_end),
+                    text: candidate.to_string(),
+                };
+                diag.fix(format!("replace with `@{candidate}`"), fix);
             }
             self.tokens
                 .push(Token::new(TokenKind::Builtin(name.to_string()), span));
@@ -569,7 +567,7 @@ impl<'a> Lexer<'a> {
                     span,
                 );
             }
-            if let Some(kw) = Kw::from_str(text) {
+            if let Some(kw) = Kw::from_spelling(text) {
                 self.tokens.push(Token::new(TokenKind::Keyword(kw), span));
             } else {
                 self.tokens

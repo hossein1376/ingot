@@ -1,4 +1,9 @@
 //! Syntax tree. Every node keeps the source span needed for diagnostics and fixes.
+//!
+//! AST enums own their children by value. Box every large variant only to satisfy
+//! `large_enum_variant` would make every visitor noisier; trees are built once and
+//! traversed, not stored in large arrays.
+#![allow(clippy::large_enum_variant)]
 
 use crate::source::Span;
 use crate::token::{ScalarTy, VectorTy};

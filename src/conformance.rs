@@ -95,7 +95,6 @@ pub fn read_case(path: &Path) -> std::io::Result<Case> {
         }
         if let Some(idx) = line.find("//~") {
             let code = line[idx + 3..]
-                .trim()
                 .split_whitespace()
                 .next()
                 .unwrap_or("")

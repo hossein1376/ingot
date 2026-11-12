@@ -615,9 +615,13 @@ impl<'a> Own<'a> {
             | ExprKind::Closure { .. } => {}
             ExprKind::Builtin { name, args, .. } => {
                 for a in args {
-                    let m = if name == "replace" && std::ptr::eq(a, &args[0]) {
-                        Use::Borrow
-                    } else if matches!(name.as_str(), "swap" | "replace") {
+                    let m = if name == "replace" {
+                        if std::ptr::eq(a, &args[0]) {
+                            Use::Borrow
+                        } else {
+                            Use::Move
+                        }
+                    } else if name == "swap" {
                         Use::Borrow
                     } else {
                         Use::Move
@@ -634,7 +638,7 @@ impl<'a> Own<'a> {
         let base_ty = root
             .and_then(|n| self.fact(n).map(|f| f.ty.clone()))
             .unwrap_or(Type::Error);
-        let (field_ty, through_borrow) = field_type(&base_ty, name, &self.program);
+        let (field_ty, through_borrow) = field_type(&base_ty, name, self.program);
         if mode == Use::Move {
             if through_borrow && !self.is_copy(&field_ty) {
                 self.diag(
@@ -648,19 +652,17 @@ impl<'a> Own<'a> {
                 self.check_expr(base, Use::Borrow);
                 return;
             }
-            if !self.is_copy(&field_ty) {
-                if let Some(root) = root {
-                    if let Some(fact) = self.fact(root).cloned() {
-                        if fact.linear {
-                            self.diag(
-                                "E1006",
-                                "a field of a linear struct cannot be moved outside its module",
-                                span,
-                            );
-                            return;
-                        }
-                    }
-                }
+            if !self.is_copy(&field_ty)
+                && let Some(root) = root
+                && let Some(fact) = self.fact(root).cloned()
+                && fact.linear
+            {
+                self.diag(
+                    "E1006",
+                    "a field of a linear struct cannot be moved outside its module",
+                    span,
+                );
+                return;
             }
         }
         self.check_expr(base, Use::Borrow);
@@ -811,11 +813,10 @@ fn pattern_bindings(p: &Pattern) -> Vec<(String, Span)> {
                     }
                 }
             }
-            Pattern::Variant { payload, .. } => {
-                if let Some(p) = payload {
-                    walk(p, out);
-                }
-            }
+            Pattern::Variant {
+                payload: Some(p), ..
+            } => walk(p, out),
+            Pattern::Variant { payload: None, .. } => {}
             _ => {}
         }
     }
@@ -907,11 +908,8 @@ fn block_uses(block: &Block, name: &str) -> bool {
                     self.expr(value);
                 }
                 Stmt::Expr { expr, .. } => self.expr(expr),
-                Stmt::Return { value, .. } => {
-                    if let Some(v) = value {
-                        self.expr(v);
-                    }
-                }
+                Stmt::Return { value: Some(v), .. } => self.expr(v),
+                Stmt::Return { value: None, .. } => {}
                 Stmt::Fail { value, .. } => self.expr(value),
                 Stmt::Defer { body, .. } | Stmt::Block(body) => self.block(body),
                 Stmt::If(x) => {

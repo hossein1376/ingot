@@ -127,22 +127,19 @@ fn walk_statements(stmts: &[Stmt], facts: &mut Facts, function: &str, out: &mut 
                     _ => None,
                 };
                 let constant = expr_const_i128(value).is_some();
-                if let Some(kind) = op_kind {
-                    if !constant || !matches!(op, AssignOp::Add | AssignOp::Sub | AssignOp::Mul) {
-                        out.push(CostItem {
-                            kind,
-                            function: function.to_string(),
-                            span: *span,
-                        });
-                    }
+                if let Some(kind) = op_kind
+                    && (!constant || !matches!(op, AssignOp::Add | AssignOp::Sub | AssignOp::Mul))
+                {
+                    out.push(CostItem {
+                        kind,
+                        function: function.to_string(),
+                        span: *span,
+                    });
                 }
             }
             Stmt::Expr { expr, .. } => walk_expr(expr, facts, function, out),
-            Stmt::Return { value, .. } => {
-                if let Some(v) = value {
-                    walk_expr(v, facts, function, out);
-                }
-            }
+            Stmt::Return { value: Some(v), .. } => walk_expr(v, facts, function, out),
+            Stmt::Return { value: None, .. } => {}
             Stmt::Fail { value, .. } => walk_expr(value, facts, function, out),
             Stmt::Defer { body, .. } | Stmt::Block(body) => {
                 let saved = facts.clone();
@@ -187,10 +184,10 @@ fn walk_statements(stmts: &[Stmt], facts: &mut Facts, function: &str, out: &mut 
                     walk_expr(e, facts, function, out);
                 }
                 let saved = facts.clone();
-                if let (Some((_false_end, end)), Some((var, _))) = (range_end, vars.first()) {
-                    if let Some(base) = len_base(end) {
-                        facts.counter = Some((var.clone(), base));
-                    }
+                if let (Some((_false_end, end)), Some((var, _))) = (range_end, vars.first())
+                    && let Some(base) = len_base(end)
+                {
+                    facts.counter = Some((var.clone(), base));
                 }
                 if let Some((_idx, _)) = index {
                     // `for i, x in xs`: i is a valid index into xs.
@@ -268,15 +265,12 @@ fn walk_statements(stmts: &[Stmt], facts: &mut Facts, function: &str, out: &mut 
                 },
             ..
         } = stmt
+            && name == "assert"
+            && let Some(cond) = args.first()
+            && let Some((base, n)) = len_assertion(cond)
         {
-            if name == "assert" {
-                if let Some(cond) = args.first() {
-                    if let Some((base, n)) = len_assertion(cond) {
-                        let e = facts.len_at_least.entry(base).or_insert(0);
-                        *e = (*e).max(n);
-                    }
-                }
-            }
+            let e = facts.len_at_least.entry(base).or_insert(0);
+            *e = (*e).max(n);
         }
     }
 }
@@ -288,14 +282,14 @@ fn walk_statement(stmt: &Stmt, facts: &mut Facts, function: &str, out: &mut Vec<
 fn walk_expr(e: &Expr, facts: &Facts, function: &str, out: &mut Vec<CostItem>) {
     match &e.kind {
         ExprKind::Index { base, index, .. } => {
-            if let Some(root) = root_ident(base) {
-                if !index_proven(facts, root, index) {
-                    out.push(CostItem {
-                        kind: CostKind::Bounds,
-                        function: function.to_string(),
-                        span: e.span,
-                    });
-                }
+            if let Some(root) = root_ident(base)
+                && !index_proven(facts, root, index)
+            {
+                out.push(CostItem {
+                    kind: CostKind::Bounds,
+                    function: function.to_string(),
+                    span: e.span,
+                });
             }
             walk_expr(index, facts, function, out);
         }
@@ -384,11 +378,10 @@ fn walk_expr(e: &Expr, facts: &Facts, function: &str, out: &mut Vec<CostItem>) {
                 walk_expr(&f.value, facts, function, out);
             }
         }
-        ExprKind::EnumLit { payload, .. } => {
-            if let Some(p) = payload {
-                walk_expr(p, facts, function, out);
-            }
-        }
+        ExprKind::EnumLit {
+            payload: Some(p), ..
+        } => walk_expr(p, facts, function, out),
+        ExprKind::EnumLit { payload: None, .. } => {}
         ExprKind::ArrayLit { elems, .. } | ExprKind::Tuple { elems, .. } => {
             for e in elems {
                 walk_expr(e, facts, function, out);
@@ -469,10 +462,10 @@ fn index_proven(facts: &Facts, base: &str, index: &Expr) -> bool {
                 .map(|lb| n < *lb)
                 .unwrap_or(false);
     }
-    if let ExprKind::Ident(n) = &index.kind {
-        if let Some((_, b)) = &facts.counter {
-            return b == base || b == "?" || n == b;
-        }
+    if let ExprKind::Ident(n) = &index.kind
+        && let Some((_, b)) = &facts.counter
+    {
+        return b == base || b == "?" || n == b;
     }
     false
 }

@@ -188,18 +188,19 @@ impl Type {
     }
 
     /// Linear (not `Discard`): must be consumed exactly once on every path.
-    pub fn is_linear(&self, defs: &TypeDefs, bounds: &HashMap<String, Vec<String>>) -> bool {
+    pub fn is_linear(&self, defs: &TypeDefs) -> bool {
         match self {
             Type::Error | Type::Void | Type::Never | Type::Bool => false,
             Type::Int(_) | Type::Float(_) | Type::Vector(_) => false,
-            Type::Array(_, e) | Type::Optional(e) => e.is_linear(defs, bounds),
-            Type::Tuple(es) => es.iter().any(|t| t.is_linear(defs, bounds)),
+            Type::Array(_, e) | Type::Optional(e) => e.is_linear(defs),
+            Type::Tuple(es) => es.iter().any(|t| t.is_linear(defs)),
             Type::Struct(name, args) => {
                 if let Some(def) = defs.structs.get(name) {
                     def.kind == StructKind::Linear
-                        || def.fields.iter().any(|(_, ty, _)| {
-                            substitute(ty, &def.generics, args).is_linear(defs, bounds)
-                        })
+                        || def
+                            .fields
+                            .iter()
+                            .any(|(_, ty, _)| substitute(ty, &def.generics, args).is_linear(defs))
                 } else {
                     false
                 }
@@ -210,7 +211,7 @@ impl Type {
                 .map(|def| {
                     def.variants.iter().any(|(_, p)| {
                         p.as_ref()
-                            .map(|t| substitute(t, &def.generics, args).is_linear(defs, bounds))
+                            .map(|t| substitute(t, &def.generics, args).is_linear(defs))
                             .unwrap_or(false)
                     })
                 })
@@ -236,7 +237,7 @@ impl Type {
                 .get(name)
                 .map(|bs| bs.iter().any(|b| b == "Discard"))
                 .unwrap_or(false),
-            _ => self.is_linear(defs, bounds),
+            _ => self.is_linear(defs),
         }
     }
 

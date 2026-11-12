@@ -92,10 +92,10 @@ fn run(args: Vec<String>) -> Result<u8, String> {
                 .position(|a| a == "--fn")
                 .and_then(|i| args.get(i + 1));
             for item in ingotc::cost::cost_items(&analysis.program) {
-                if let Some(name) = fn_filter {
-                    if !item.function.ends_with(name) {
-                        continue;
-                    }
+                if let Some(name) = fn_filter
+                    && !item.function.ends_with(name)
+                {
+                    continue;
                 }
                 println!("{}", item.to_json(&analysis.sources));
             }

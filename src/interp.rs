@@ -423,16 +423,9 @@ impl<'a> Interp<'a> {
         };
         self.frames.pop();
         let flow = result?;
-        let ret = f.signature_ret.clone();
         let out = match flow {
             Flow::Return(Some(v)) => v,
-            Flow::Return(None) | Flow::Normal => {
-                if ret.is_void() {
-                    Value::Unit
-                } else {
-                    Value::Unit
-                }
-            }
+            Flow::Return(None) | Flow::Normal => Value::Unit,
             Flow::Fail(e) => {
                 if fallible {
                     return Ok(Value::Result {
@@ -748,10 +741,10 @@ impl<'a> Interp<'a> {
                 }
             }
             Pattern::Variant { payload, .. } => {
-                if let Some(p) = payload {
-                    if let Some(v) = variant_payload(value) {
-                        self.bind_pattern(p, &v);
-                    }
+                if let Some(p) = payload
+                    && let Some(v) = variant_payload(value)
+                {
+                    self.bind_pattern(p, &v);
                 }
             }
             _ => {}
@@ -918,7 +911,7 @@ impl<'a> Interp<'a> {
             let hi = self.eval_expr(end, None)?;
             let step = match step {
                 Some(e) => match self.eval_expr(e, None)? {
-                    Value::Int { value, .. } => value.max(1) as i128,
+                    Value::Int { value, .. } => value.max(1),
                     _ => 1,
                 },
                 None => 1,
@@ -1000,10 +993,10 @@ impl<'a> Interp<'a> {
                 if let Some(cell) = self.lookup(name) {
                     return Ok(cell.borrow().clone());
                 }
-                if let Some(c) = self.program.const_value_in(&self.current_module(), name) {
-                    if let Some(v) = &c.value {
-                        return Ok(const_value(v));
-                    }
+                if let Some(c) = self.program.const_value_in(&self.current_module(), name)
+                    && let Some(v) = &c.value
+                {
+                    return Ok(const_value(v));
                 }
                 if name == "exec" {
                     return Ok(Value::External("exec".to_string()));
@@ -1142,17 +1135,14 @@ impl<'a> Interp<'a> {
                 })
             }
             ExprKind::Field { base, name, .. } => {
-                if let ExprKind::Ident(alias) = &base.kind {
-                    if let Some(crate::check::ResolvedName::Local(canonical)) = self
+                if let ExprKind::Ident(alias) = &base.kind
+                    && let Some(crate::check::ResolvedName::Local(canonical)) = self
                         .program
                         .resolve_qualified_name(&self.current_module(), alias, name)
-                    {
-                        if let Some(c) = self.program.consts.get(&canonical) {
-                            if let Some(v) = &c.value {
-                                return Ok(const_value(v));
-                            }
-                        }
-                    }
+                    && let Some(c) = self.program.consts.get(&canonical)
+                    && let Some(v) = &c.value
+                {
+                    return Ok(const_value(v));
                 }
                 let b = self.eval_expr(base, None)?;
                 self.field_value(&b, name)
@@ -1445,20 +1435,20 @@ impl<'a> Interp<'a> {
         if let Value::Result { err: Some(e), .. } = &err {
             return Ok((**e).clone());
         }
-        if let Type::Enum(name, _) = &expected {
-            if let Some(def) = self.program.defs.enums.get(name) {
-                let key = value_declared_type(&err).unwrap_or_default();
-                if let Some(variant) = def.from.get(&key) {
-                    return Err(EvalErr::Flow(Flow::Fail(Value::Enum {
-                        ty: name.clone(),
-                        variant: variant.clone(),
-                        payload: Some(Box::new(err)),
-                    })));
-                }
-                // The error may already be the right enum type.
-                if value_declared_type(&err).as_deref() == Some(name) {
-                    return Ok(err);
-                }
+        if let Type::Enum(name, _) = &expected
+            && let Some(def) = self.program.defs.enums.get(name)
+        {
+            let key = value_declared_type(&err).unwrap_or_default();
+            if let Some(variant) = def.from.get(&key) {
+                return Err(EvalErr::Flow(Flow::Fail(Value::Enum {
+                    ty: name.clone(),
+                    variant: variant.clone(),
+                    payload: Some(Box::new(err)),
+                })));
+            }
+            // The error may already be the right enum type.
+            if value_declared_type(&err).as_deref() == Some(name) {
+                return Ok(err);
             }
         }
         let _ = span;
@@ -1534,18 +1524,18 @@ impl<'a> Interp<'a> {
             let module = self.current_module();
             let resolved = self.program.resolve_type_path(&module, p);
             if let Some(crate::check::ResolvedName::Local(canonical)) = resolved {
-                if let Some(def) = self.program.defs.enums.get(&canonical) {
-                    if def.variants.iter().any(|(v, _)| v == name) {
-                        let payload = match args.first() {
-                            Some(a) => Some(Box::new(self.eval_expr(a, None)?)),
-                            None => None,
-                        };
-                        return Ok(Value::Enum {
-                            ty: canonical,
-                            variant: name.to_string(),
-                            payload,
-                        });
-                    }
+                if let Some(def) = self.program.defs.enums.get(&canonical)
+                    && def.variants.iter().any(|(v, _)| v == name)
+                {
+                    let payload = match args.first() {
+                        Some(a) => Some(Box::new(self.eval_expr(a, None)?)),
+                        None => None,
+                    };
+                    return Ok(Value::Enum {
+                        ty: canonical,
+                        variant: name.to_string(),
+                        payload,
+                    });
                 }
                 let ty = if self.program.defs.structs.contains_key(&canonical) {
                     Type::Struct(canonical.clone(), Vec::new())
@@ -1826,7 +1816,7 @@ impl<'a> Interp<'a> {
                     .get(1)
                     .map(|a| self.eval_expr(a, Some(&Type::i64())))
                     .transpose()?
-                    .map(|v| int_of(&v) as i128)
+                    .map(|v| int_of(&v))
                     .unwrap_or(0);
                 let v = args
                     .get(2)
@@ -2293,7 +2283,7 @@ fn int_range(ty: ScalarTy) -> (i128, i128) {
 }
 
 fn wrap_int(n: i128, ty: ScalarTy) -> i128 {
-    let bits = ty.int_bits().unwrap_or(64) as u32;
+    let bits = ty.int_bits().unwrap_or(64);
     let mask = (1i128 << bits) - 1;
     let mut v = n & mask;
     if ty.is_signed() && v >= (1i128 << (bits - 1)) {
@@ -2688,11 +2678,23 @@ fn float_unary(v: Value, f: fn(f64) -> f64) -> R<Value> {
 
 fn bits_value(t: Type, x: Value) -> R<Value> {
     match (&t, x) {
-        (Type::Int(dst), Value::Float { value, ty }) if ty == ScalarTy::F32 => {
+        (
+            Type::Int(dst),
+            Value::Float {
+                value,
+                ty: ScalarTy::F32,
+            },
+        ) => {
             let bits = (value as f32).to_bits();
             Ok(int_value(bits as i128, *dst))
         }
-        (Type::Int(dst), Value::Float { value, ty }) if ty == ScalarTy::F64 => {
+        (
+            Type::Int(dst),
+            Value::Float {
+                value,
+                ty: ScalarTy::F64,
+            },
+        ) => {
             let bits = value.to_bits();
             Ok(int_value(bits as i128, *dst))
         }
