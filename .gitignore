@@ -1,3 +1,5 @@
 /ingot
 /build/
 *.s.tmp
+/target
+.DS_Store

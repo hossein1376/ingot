@@ -1,7 +1,9 @@
 # Roadmap
 
-The specification in [docs/](docs/README.md) is the definition of the language. Nothing
-below is built yet.
+The specification in [docs/](docs/README.md) is the definition of the language. The
+bootstrap front end and evaluator in `src/` cover the first three steps of item 1 for
+the cases in [conformance/](conformance/README.md); code generation, modules and the
+standard library are still open.
 
 ## 0. Before writing the compiler
 
