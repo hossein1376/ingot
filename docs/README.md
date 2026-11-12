@@ -88,7 +88,9 @@ each is in [rationale.md](rationale.md).
 4. **Stackful tasks.** They need a small runtime (scheduler, stacks), linked only into
    concurrent programs.
 5. **Backend.** Optimized builds emit LLVM IR on all three targets.
-6. **Operating systems.** macOS on the M4 Pro; Linux and Windows on the 7800X3D.
+6. **Bootstrap language.** The first compiler is written in Rust, in the subset that
+   ports directly to Ingot, until the compiler can be written in Ingot itself.
+7. **Operating systems.** macOS on the M4 Pro; Linux and Windows on the 7800X3D.
 
 Deciding these does not make them safe. Section 13 of the rationale lists where the
 design is most likely to be wrong and how to test each point with a small prototype

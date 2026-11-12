@@ -126,3 +126,12 @@ source or a measurement on the machine before the value is frozen.
 
 * 12 GB of memory, Vulkan compute support under both systems, and `shaderFloat64`
   availability.
+
+**Tools**
+
+* Which object formats and architectures post-link optimizers (BOLT, Propeller) support
+  today. The design assumes ELF only.
+* Cranelift as a `--fast` backend: its support for Mach-O, ELF and COFF output on the
+  two CPUs, and for 256- and 512-bit vectors.
+* Whether Zen 4 exposes branch records to `perf` on Linux, and what sampling macOS
+  allows on the M4 without special entitlements.

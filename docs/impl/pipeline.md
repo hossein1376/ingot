@@ -258,6 +258,9 @@ These hold for any back end. With LLVM they translate as noted.
 * **Traps** call one cold, non-returning runtime function with the trap code and a
   pointer to a static record holding the position and any operands. Check failures
   branch to an out-of-line block, so the hot path is a compare and a not-taken branch.
+* **Cold paths need no profile.** Trap blocks are marked cold. The error arm of a `try`,
+  and a `catch` or `orelse` handler that leaves the function, are laid out as unlikely
+  by default. A handler that only supplies a value gets no hint.
 * **Borrows.** An exclusive borrow parameter may be marked non-aliasing for the
   optimizer. A shared borrow of a type without interior mutability may be marked
   read-only. A shared borrow of a type with interior mutability must not be.
@@ -311,7 +314,34 @@ The compiler is a library with a query interface ("the diagnostics of this packa
   declarations, `@forget`, `@debug`, `unsafe impl`, and statics with interior
   mutability.
 
-## 10. Known gaps in this document
+## 10. Profiling (planned, not specified)
+
+Nothing here is to be built before the first target runs real programs. It is recorded
+so that earlier work does not rule it out.
+
+* **One mechanism, two consumers.** `ingot build --profile` inserts counters. Running
+  the program writes a profile file. `ingot profile --json` reports it to the author:
+  hot functions and loops, and how often each surviving check and each allocation site
+  ran. The same file can be given back to the optimizer.
+* **The author comes first.** A change the author makes from the report is visible in
+  the source and holds for every later build. A profile fed only to the optimizer is
+  invisible and goes stale.
+* **Instrumentation, not sampling.** Compiler-inserted counters are exact and work the
+  same on all three operating systems. Hardware sampling does not.
+* **Requirements, whenever this is built:**
+  1. a profile is an explicit build input, named in `ingot.toml` and hashed, so that
+     section 2 (determinism) still holds;
+  2. a profile must not change the meaning of a program, the removals of section 6, or
+     the rows of `ingot cost` that are the same in both pipelines. It may change
+     inlining, block layout and branch weights only;
+  3. a profile that no longer matches the source is ignored function by function, with
+     a line in the build summary, never an error.
+* **Post-link layout optimization is deferred.** The whole program is already compiled
+  together, the existing tools are believed to handle only one of the three object
+  formats, and the usual gain is on binaries far larger than these. Revisit if a
+  measured program loses time in the processor's front end.
+
+## 11. Known gaps in this document
 
 * The runtime's design (scheduler, stacks, I/O per operating system) is not specified
   beyond §23 and section 8 above.

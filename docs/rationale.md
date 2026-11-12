@@ -245,7 +245,8 @@ CPU feature detection. Any CPU or operating system beyond the three targets.
 **Deferred, not rejected:** a built-in struct-of-arrays container; `requires`/`ensures`
 contracts on signatures; `f16`, `i128`; a borrow type that is known to be static and so
 is not a view; named origin parameters on structs; streaming-mode (SME) regions; GPU
-textures and multi-pass pipelines; a `packed struct` with bit fields.
+textures and multi-pass pipelines; a `packed struct` with bit fields; profiling with a
+report for the author, then profile-guided optimization; post-link layout optimization.
 
 ## 13. Where this design is most likely to be wrong
 
@@ -284,7 +285,38 @@ the compiler is built.
   in the language depends on LLVM, so the choice can be revisited.
 * Kernels need their own small IR with three emitters: masked vector code, Metal
   Shading Language and SPIR-V.
-* The compiler is bootstrapped in Go, and the language is designed so that the compiler
-  can eventually be written in Ingot.
+* **The compiler is bootstrapped in Rust**, and the language is designed so that the
+  compiler can eventually be written in Ingot. The reasons:
+  * Rust rejects a `match` that forgets a case. A compiler is a few dozen node kinds
+    handled across many phases, and a forgotten case is its most common bug. Go, the
+    other serious candidate, has no sum types and lets that bug compile.
+  * Ingot has ownership, borrows, enums with payloads, arenas and error values, and no
+    garbage collector. A Rust compiler built on arenas and indices maps onto Ingot
+    nearly structure for structure, so self-hosting is a port. A compiler that leans
+    on a garbage collector and interfaces would need its memory management and data
+    model redesigned first.
+  * LLVM has maintained Rust bindings, and Cranelift, a code generator written in
+    Rust, is a candidate for the `--fast` backend. Its support for the three object
+    formats and for wide vectors has not been checked.
+  * Zig is closest to Ingot's memory model but changes incompatibly between releases,
+    and generated Zig is often written for an older one. `zig cc` remains a good
+    cross-linker. C++ has the best LLVM interface and none of the safety. OCaml is
+    excellent for compilers, but models are less fluent in it.
+  * The costs: slower builds than Go, and two similar languages in one repository, so
+    Rust syntax will sometimes leak into Ingot source and be rejected.
+  * **Bootstrap rules.** Write the compiler in the subset of Rust that Ingot can
+    express: arenas and indices or handles for trees and graphs, no reference
+    counting, no trait objects where an enum will do, no macros beyond derives, no
+    `async`, and as few dependencies as possible. That is what keeps the later port
+    mechanical.
 * Hosted CI runners are not these CPUs. Tests run on the two machines themselves, or
   under an emulator that implements SME and AVX-512.
+* Profile-guided optimization is planned, but with the author as the first reader of
+  the profile and the optimizer as the second. Much of what a profile tells a C++
+  compiler is already known statically here: trap paths are cold, there is no dynamic
+  dispatch unless written, generics are monomorphized and `inline` is explicit. So the
+  larger win is expected from showing the author where a check or an allocation is
+  hot, which leads to a change in the source. The expected gains are a judgment, not a
+  measurement. The constraints are in section 10 of
+  [impl/pipeline.md](impl/pipeline.md).
+* Post-link optimization is deferred: see the same section.

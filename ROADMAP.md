@@ -26,7 +26,7 @@ Follow [docs/impl/](docs/impl/README.md). Each step is done when the conformance
 for its area pass, and each new rule or error code gets a test before it is
 implemented.
 
-1. Front end, in Go: lexer, parser, modules, name resolution, JSON diagnostics with fix
+1. Front end, in Rust: lexer, parser, modules, name resolution, JSON diagnostics with fix
    edits.
 2. Types and checking: structs, enums with payloads, `match`, `?T`, `T ! E`, tuples,
    interfaces and `impl`, generics with bounds, trapping arithmetic and the conversion
@@ -62,6 +62,11 @@ implemented.
 3. Vulkan backend for the RTX 4070, on Linux and Windows.
 
 ## 5. Later
+
+Once the first target runs real programs: `ingot build --profile` and an
+`ingot profile` report for the author, then profile-guided optimization, under the
+constraints in section 10 of [docs/impl/pipeline.md](docs/impl/pipeline.md).
+Post-link layout optimization only if a measured program shows the need.
 
 A formatter specification, a Tree-sitter grammar derived from `docs/grammar.md`, and a
 Language Server adapter over `ingot serve`.
