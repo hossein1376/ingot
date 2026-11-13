@@ -94,7 +94,7 @@ arm          = ( pattern { "|" pattern } [ "if" expr ] | "else" ) "=>" ( block |
 pattern      = "_" | IDENT | literal | literal ( ".." | "..=" ) literal
              | [ path_type ] "." IDENT [ "(" pattern ")" ]
              | "(" pattern "," pattern { "," pattern } ")"
-             | path_type ".{" [ fpat { "," fpat } [ "," ] ] "}" ;
+             | path_type ".{" [ fpat { "," fpat } [ "," ] ] [ ".." ] "}" ;
 fpat         = IDENT [ ":" pattern ] ;
 
 (* ---- expressions ---- *)

@@ -79,7 +79,7 @@ warnings.
 | `bool` | 1 | `true` or `false`, never an integer |
 | `void` | 0, 1 | the type with one value. Used for functions that return nothing |
 | `never` | 0, 1 | the type with no values: the type of `return`, `fail`, `break`, `@panic(...)` |
-| `[N]T` | N·size(T) | array. `N` is a constant expression |
+| `[N]T` | N·size(T) | array. `N` is a constant expression. Field `.len: i64`, the constant `N` |
 | `(A, B, ...)` | struct layout | tuple of two or more. Fields are `.0`, `.1`, ... |
 | `struct` | section 25 | fields in declaration order |
 | `enum` | section 25 | a tag and at most one payload per variant |
@@ -101,10 +101,13 @@ structure. Section 10 defines them. They are `Copy`, `Discard`, `Send` and `Sync
 type is additionally either a **view type** (it contains a borrow) or **self-contained**.
 The bound `Owned` names the self-contained types.
 
-**No implicit conversions.** A value only flows between identical types. The only
-exceptions are untyped numeric literals, which take the type their context expects, and
-the literal defaults: an integer literal with no context is `i64` and a float literal is
-`f64`.
+**No implicit conversions.** A value only flows between identical types. There are two
+exceptions. Untyped numeric literals take the type their context expects; an integer
+literal may take a float type when its value is exactly representable in it (`1` is
+`1.0`), and otherwise it is error E0405. The literal defaults: an integer literal with no
+context is `i64` and a float literal is `f64`. And a `&T` or `&mut T` becomes a `&dyn I`
+or `&mut dyn I` where the context expects that type and `T` implements `I`
+(section 4.4).
 
 **Expected-type shorthand.** Where the expected type is stated by a declaration (a typed
 `let`, a parameter, a field, a return type, the other side of an assignment or `==`),
@@ -152,8 +155,11 @@ linear struct File { fd: i32 }                  // must be consumed exactly once
   declaration tells the truth.
 * Literal: `Vec3.{ x: 1.0, y: 2.0, z: 3.0 }`. Every field is named and every field is
   given. There are no default field values.
-* Destructuring: `let Vec3.{ x, y, z } = v;`. Destructuring a struct with private fields
-  is only possible inside its module. This is how a linear struct is finally taken apart.
+* Destructuring: `let Vec3.{ x, y, z } = v;`. A struct pattern may end in `..` to
+  leave the remaining fields out: `let Vec3.{ x, .. } = v;`. A field left out of a pattern
+  that moves the value is dropped, so its type must be `Discard`; leaving out a linear
+  field is error E1003. Destructuring a struct with private fields is only possible
+  inside its module. This is how a linear struct is finally taken apart.
 * **Construction respects privacy.** Outside a struct's module, a value of it can be
   made from nothing only if every field is `pub`. This covers a literal, `@zero` and
   `@bits` alike, and a struct with no fields counts as having a private one. A type
@@ -228,7 +234,10 @@ impl Length for Vec3 {
   If two interfaces supply the name, the call is written `I.name(value, args)`.
 * Calls through a generic parameter are resolved at compile time. Dynamic dispatch
   happens only through `&dyn I` and `&mut dyn I`, and only for interfaces whose methods
-  do not mention `Self` by value and have no generic parameters.
+  do not mention `Self` by value and have no generic parameters. A `&T` (`&mut T`)
+  becomes a `&dyn I` (`&mut dyn I`) where the expected type is one and `T` implements
+  `I`: as an argument, a return value, a field, or a binding with that type written.
+  This is the only implicit conversion between non-literal values.
 * **The built-in interfaces** are declared by the language, as if this were written in
   every module (they need no import, section 8):
 
