@@ -1,0 +1,16 @@
+//! Network capabilities. The implementation lives in `std.sys`.
+
+/// The network, obtained from `env.net`.
+pub struct Net {
+    private: bool,
+}
+
+/// A TCP connection.
+pub linear struct Tcp {
+    private: bool,
+}
+
+/// A UDP socket.
+pub struct Udp {
+    private: bool,
+}

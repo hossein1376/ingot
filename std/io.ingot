@@ -1,0 +1,21 @@
+//! Byte streams and their error type.
+
+/// An I/O operation failed.
+pub enum IoErr {
+    closed,
+    would_block,
+    interrupted,
+    broken_pipe,
+    other: i32,
+}
+
+/// A source of bytes.
+pub interface Reader {
+    fn read(self: &mut Self, out: []mut u8) -> i64 ! IoErr;
+}
+
+/// A sink for bytes.
+pub interface Writer {
+    fn write(self: &mut Self, bytes: []u8) -> void ! IoErr;
+    fn flush(self: &mut Self) -> void ! IoErr;
+}

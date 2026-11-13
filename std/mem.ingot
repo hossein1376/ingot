@@ -1,0 +1,82 @@
+//! Allocation and memory primitives.
+//!
+//! The allocator interface is the one from section 14.1. Concrete allocators
+//! are values; no function allocates unless it was given one.
+
+/// Allocation can fail. It is an error value, never a trap.
+pub enum AllocErr {
+    out_of_memory,
+    too_large,
+}
+
+/// The allocator interface every container and arena is written against.
+pub interface Allocator: Copy {
+    fn alloc(self: Self, size: i64, align: i64) -> *mut u8 ! AllocErr;
+    unsafe fn free(self: Self, ptr: *mut u8, size: i64, align: i64);
+    unsafe fn resize(
+        self: Self,
+        ptr: *mut u8,
+        old: i64,
+        new: i64,
+        align: i64,
+    ) -> bool;
+}
+
+/// The general heap, obtained from `env.heap`.
+pub struct Heap {
+    private: bool,
+}
+
+/// Address-space reservation, obtained from `env.vm`.
+pub struct Vm {
+    private: bool,
+}
+
+/// A bump allocator over a reserved address range.
+pub linear struct Arena {
+    private: bool,
+}
+
+impl Arena {
+    /// Releases the reservation. The checker refuses this while a value
+    /// allocated from the arena is still live.
+    pub fn deinit(self: Arena) {
+        let Arena.{ private: _ } = self;
+    }
+}
+
+/// A bump allocator over caller-provided memory.
+pub struct FixedBuf {
+    private: bool,
+}
+
+/// Copies the shorter length. Returns the number of bytes copied.
+pub fn copy(dst: []mut u8, src: []u8) -> i64 {
+    let n = if dst.len < src.len { dst.len } else { src.len };
+    var i: i64 = 0;
+    while i < n {
+        dst[i] = src[i];
+        i += 1;
+    }
+    return n;
+}
+
+/// Fills the slice with one byte.
+pub fn fill(dst: []mut u8, value: u8) {
+    for i in 0..dst.len {
+        dst[i] = value;
+    }
+}
+
+/// Compares two byte slices.
+pub fn eq(a: []u8, b: []u8) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    for i in 0..a.len {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    return true;
+}

@@ -1,0 +1,46 @@
+//! Formatting primitives. `@format` is the checked front end; these functions
+//! are the integer encoders it and user code lower to.
+
+/// Writes the decimal form of `value` into `out`. Returns the number of bytes
+/// written, or -1 when `out` is too small.
+pub fn format_u64(out: []mut u8, value: u64) -> i64 {
+    var digits: [20]u8 = @zero;
+    var n: i64 = 0;
+    var v = value;
+    if v == 0 {
+        digits[0] = '0';
+        n = 1;
+    }
+    while v > 0 {
+        let digit: u8 = @narrow(u8, v % 10);
+        digits[n] = '0' + digit;
+        n += 1;
+        v /= 10;
+    }
+    if out.len < n {
+        return -1;
+    }
+    var i: i64 = 0;
+    while i < n {
+        out[i] = digits[n - 1 - i];
+        i += 1;
+    }
+    return n;
+}
+
+/// Writes the decimal form of `value`, with a leading `-` when negative.
+pub fn format_i64(out: []mut u8, value: i64) -> i64 {
+    if value < 0 {
+        if out.len == 0 {
+            return -1;
+        }
+        out[0] = '-';
+        let magnitude: u64 = 0 -% @bits(u64, value);
+        let n = format_u64(out[1..out.len], magnitude);
+        if n < 0 {
+            return -1;
+        }
+        return n + 1;
+    }
+    return format_u64(out, @bits(u64, value));
+}

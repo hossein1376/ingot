@@ -1,0 +1,17 @@
+//! The unsafe operating-system layer.
+//!
+//! Each target has its own module behind this one: `std.sys.macos` first,
+//! then `std.sys.linux` and `std.sys.windows`. Code above this module uses
+//! the common types and never names a platform directly.
+
+/// A failed system call, as the platform reported it.
+pub enum Errno {
+    interrupted,
+    would_block,
+    not_found,
+    permission,
+    invalid,
+    too_many_files,
+    no_memory,
+    other: i32,
+}

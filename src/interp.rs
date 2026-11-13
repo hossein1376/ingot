@@ -153,7 +153,12 @@ pub fn run(analysis: &Analysis) -> Result<Outcome, String> {
         return Err("no `main` function".to_string());
     };
     let mut interp = Interp::new(&analysis.program, source);
-    let env = Rc::new(RefCell::new(Value::External("Env".to_string())));
+    let mut env_fields = HashMap::new();
+    env_fields.insert("args".to_string(), Value::Array(Vec::new()));
+    let env = Rc::new(RefCell::new(Value::Struct {
+        ty: "std.Env".to_string(),
+        fields: env_fields,
+    }));
     let args = if main.decl.params.len() == 1 {
         vec![Value::Ref(Place {
             root: env,
@@ -1120,6 +1125,50 @@ impl<'a> Interp<'a> {
                 let place = self.eval_place(base)?;
                 let lo = int_of(&self.eval_expr(lo, Some(&Type::i64()))?);
                 let hi = int_of(&self.eval_expr(hi, Some(&Type::i64()))?);
+                let viewed = read_place(&place);
+                if place.path.is_empty()
+                    && let Value::Slice {
+                        root,
+                        start,
+                        len,
+                        mutable,
+                    } = viewed
+                {
+                    if lo < 0 || hi < lo || hi > len as i128 {
+                        return Err(EvalErr::trap(
+                            "T02",
+                            format!("slice {lo}..{hi} out of bounds for length {len}"),
+                            *bracket,
+                        ));
+                    }
+                    return Ok(Value::Slice {
+                        root,
+                        start: start + lo as usize,
+                        len: (hi - lo) as usize,
+                        mutable,
+                    });
+                }
+                if place.path.is_empty()
+                    && let Value::Str(bytes) = viewed
+                {
+                    if lo < 0 || hi < lo || hi > bytes.len() as i128 {
+                        return Err(EvalErr::trap(
+                            "T02",
+                            format!("slice {lo}..{hi} out of bounds for length {}", bytes.len()),
+                            *bracket,
+                        ));
+                    }
+                    let items: Vec<Value> = bytes
+                        .iter()
+                        .map(|b| int_value(*b as i128, ScalarTy::U8))
+                        .collect();
+                    return Ok(Value::Slice {
+                        root: Rc::new(RefCell::new(Value::Array(items))),
+                        start: lo as usize,
+                        len: (hi - lo) as usize,
+                        mutable: false,
+                    });
+                }
                 let len = place_len(&place);
                 if lo < 0 || hi < lo || hi > len as i128 {
                     return Err(EvalErr::trap(
@@ -2470,6 +2519,8 @@ fn place_len(p: &Place) -> usize {
     match read_place(p) {
         Value::Array(items) => items.len(),
         Value::Tuple(items) => items.len(),
+        Value::Slice { len, .. } => len,
+        Value::Str(bytes) => bytes.len(),
         _ => 0,
     }
 }
@@ -2510,6 +2561,16 @@ fn index_value(v: &Value, i: i128, span: Span) -> R<Value> {
                 ));
             }
             Ok(lanes[i as usize].clone())
+        }
+        Value::Str(bytes) => {
+            if i < 0 || i as usize >= bytes.len() {
+                return Err(EvalErr::trap(
+                    "T01",
+                    format!("index {i} out of bounds for length {}", bytes.len()),
+                    span,
+                ));
+            }
+            Ok(int_value(bytes[i as usize] as i128, ScalarTy::U8))
         }
         _ => Ok(Value::Unit),
     }

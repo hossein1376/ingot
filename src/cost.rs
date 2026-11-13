@@ -693,6 +693,10 @@ pub fn remove_proven_checks(cfg: &mut Cfg) {
 pub fn cost_items(program: &Program) -> Vec<CostItem> {
     let mut out = Vec::new();
     for (function, cfg) in &program.cfgs {
+        // `ingot cost FILE` reports the program, not its dependencies.
+        if program.package_name != "std" && (function.starts_with("std.") || function == "std") {
+            continue;
+        }
         for block in &cfg.blocks {
             for stmt in &block.stmts {
                 let CfgStmt::Check { check } = stmt else {

@@ -161,6 +161,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `copy` is a contextual modifier before `struct` and `enum`; the
+    /// standard library also needs it as the name of `mem.copy`.
+    fn fn_name(&mut self) -> (String, Span) {
+        if self.at_kw(Kw::Copy) {
+            let span = self.bump().span;
+            return ("copy".to_string(), span);
+        }
+        self.expect_ident()
+    }
+
+    /// `align` is a contextual keyword after a type; it is still a useful
+    /// parameter name in allocator signatures.
+    fn param_name(&mut self) -> (String, Span) {
+        if self.at_kw(Kw::Align) {
+            let span = self.bump().span;
+            return ("align".to_string(), span);
+        }
+        self.expect_ident()
+    }
+
     fn expect_type_ident(&mut self) -> (String, Span) {
         match self.kind().clone() {
             TokenKind::TypeIdent(name) => {
@@ -265,6 +285,11 @@ impl<'a> Parser<'a> {
             if let TokenKind::TypeIdent(_) = self.kind() {
                 let (name, span) = self.expect_type_ident();
                 segments.push((name, span));
+                break;
+            }
+            if self.at_kw(Kw::Copy) {
+                let span = self.bump().span;
+                segments.push(("copy".to_string(), span));
                 break;
             }
             let (name, span) = self.expect_ident();
@@ -447,7 +472,7 @@ impl<'a> Parser<'a> {
 
     fn fn_decl(&mut self, mods: Modifiers, start: usize) -> FnDecl {
         self.bump(); // fn
-        let (name, name_span) = self.expect_ident();
+        let (name, name_span) = self.fn_name();
         let generics = self.generics();
         let params = self.params();
         let (ret, error, from, reduce) = self.result();
@@ -560,7 +585,7 @@ impl<'a> Parser<'a> {
         self.expect(LParen);
         while !self.at(RParen) && !self.at_eof() {
             let start = self.span().start;
-            let (name, name_span) = self.expect_ident();
+            let (name, name_span) = self.param_name();
             self.expect(Colon);
             let ty = self.ty();
             let mut into = None;
@@ -756,6 +781,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn member_modifiers(&mut self) -> Modifiers {
+        let mut mods = Modifiers::default();
+        loop {
+            if self.eat_kw(Kw::Pub) {
+                mods.public = true;
+            } else if self.eat_kw(Kw::Inline) {
+                mods.inline = true;
+            } else if self.eat_kw(Kw::Noinline) {
+                mods.noinline = true;
+            } else if self.eat_kw(Kw::Unsafe) {
+                mods.unsafe_ = true;
+            } else if self.eat_kw(Kw::Export) {
+                mods.export = true;
+            } else if self.eat_kw(Kw::Kernel) {
+                mods.kernel = true;
+            } else if self.eat_kw(Kw::Waitable) {
+                mods.waitable = true;
+            } else {
+                break;
+            }
+        }
+        mods
+    }
+
     fn interface_decl(&mut self, start: usize) -> InterfaceDecl {
         self.bump();
         let (name, name_span) = self.expect_type_ident();
@@ -772,6 +821,7 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut members = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let mods = self.member_modifiers();
             if self.eat_kw(Kw::Type) {
                 let (n, sp) = self.expect_type_ident();
                 let end = self.expect(Semicolon).end;
@@ -783,7 +833,6 @@ impl<'a> Parser<'a> {
                     span: Span::new(sp.start, end),
                 }));
             } else if self.at_kw(Kw::Fn) {
-                let mods = Modifiers::default();
                 members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
             } else {
                 self.unexpected();
@@ -825,10 +874,7 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut members = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
-            let mut mods = Modifiers::default();
-            if self.eat_kw(Kw::Pub) {
-                mods.public = true;
-            }
+            let mods = self.member_modifiers();
             match self.kind().clone() {
                 TokenKind::Keyword(Kw::Fn) => {
                     members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
@@ -2382,6 +2428,18 @@ impl<'a> Parser<'a> {
                                 span,
                             );
                         }
+                        TokenKind::Keyword(Kw::Copy) => {
+                            let sp = self.bump().span;
+                            let span = expr.span.join(sp);
+                            expr = Expr::new(
+                                ExprKind::Field {
+                                    base: Box::new(expr),
+                                    name: "copy".to_string(),
+                                    name_span: sp,
+                                },
+                                span,
+                            );
+                        }
                         TokenKind::Int(n) => {
                             let sp = self.bump().span;
                             let span = expr.span.join(sp);
@@ -2570,6 +2628,10 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::False) => {
                 let span = self.bump().span;
                 Expr::new(ExprKind::Bool(false), span)
+            }
+            TokenKind::Keyword(Kw::Copy) => {
+                let span = self.bump().span;
+                Expr::new(ExprKind::Ident("copy".to_string()), span)
             }
             TokenKind::Ident(name) => {
                 if matches!(self.peek_at(1).kind, TokenKind::Punct(Dot))

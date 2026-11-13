@@ -9,9 +9,10 @@ an out-of-range index or an integer overflow are deterministic traps. Parallelis
 part of the language.
 
 > **Status: bootstrap compiler.** The front end in `src/` implements lexing,
-> parsing, name resolution, type checking and a first ownership pass, and a
-> tree-walking evaluator runs the conformance suite. Code generation is the next
-> milestone; [ROADMAP.md](ROADMAP.md) tracks it.
+> parsing, name resolution, type checking, CFG ownership checking and phase-10
+> check removal, and a tree-walking evaluator runs the conformance suite. The
+> standard library has started in [std/](std/README.md). Code generation is the
+> next milestone; [ROADMAP.md](ROADMAP.md) tracks it.
 >
 > ```sh
 > cargo run -- check conformance/names/undefined_name.ingot

@@ -1,0 +1,15 @@
+//! File system capabilities. The implementation lives in `std.sys`.
+
+import std.io;
+
+pub type IoErr = io.IoErr;
+
+/// The file system, obtained from `env.fs`.
+pub struct Fs {
+    private: bool,
+}
+
+/// An open file. Closing is the only way to consume it.
+pub linear struct File {
+    fd: i32,
+}

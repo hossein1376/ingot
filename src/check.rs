@@ -1,9 +1,9 @@
 //! Phases 4 to 7: imports, name resolution, signatures, and body type checking.
 //!
-//! A package is loaded as a tree of modules. Names are resolved per module:
-//! local items, then imports. `std` names are opaque external types for now;
-//! calls through them are permissive and the evaluator understands the few used
-//! by the conformance programs.
+//! A package is loaded as a tree of modules, together with the `std` source
+//! package when one is installed. Names are resolved per module: local items,
+//! then imports. `std` and `arch` names that the library does not declare yet
+//! stay opaque external types, so calls through them remain permissive.
 
 use crate::ast::*;
 use crate::cfg::Cfg;
@@ -191,6 +191,14 @@ impl Program {
         if segments.len() == 1 {
             return self.resolve_type_name(module, &segments[0]);
         }
+        for i in (1..segments.len()).rev() {
+            let prefix = segments[..i].join(".");
+            if let Some(ctx) = self.modules.get(&prefix)
+                && let Some(canonical) = ctx.types.get(segments.last()?)
+            {
+                return Some(ResolvedName::Local(canonical.clone()));
+            }
+        }
         if matches!(segments[0].as_str(), "std" | "arch") {
             return Some(ResolvedName::External(segments.join(".")));
         }
@@ -306,7 +314,8 @@ pub fn analyze_sources(sources: Sources) -> Analysis {
     })
 }
 
-pub fn analyze_loaded(package: LoadedPackage) -> Analysis {
+pub fn analyze_loaded(mut package: LoadedPackage) -> Analysis {
+    let _ = crate::loader::attach_std(&mut package);
     let mut diagnostics = package.diagnostics.clone();
     let mut modules_ast: BTreeMap<String, (LoadedModule, Module)> = BTreeMap::new();
     for loaded in &package.modules {
@@ -445,6 +454,12 @@ impl<'a> Analyzer<'a> {
                         ctx.values
                             .insert(s.name.clone(), self.program.qualify(name, &s.name));
                     }
+                    Item::Extern(e) => {
+                        for f in &e.functions {
+                            ctx.values
+                                .insert(f.name.clone(), self.program.qualify(name, &f.name));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -508,20 +523,13 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let first = segments[0].clone();
-        if matches!(first.0.as_str(), "std" | "arch") {
-            let bound = import.bound_name().to_string();
-            self.program.defs.external.insert(bound.clone());
-            return Some(ImportBinding::External(bound));
-        }
         let full = segments
             .iter()
             .map(|(s, _)| s.as_str())
             .collect::<Vec<_>>()
             .join(".");
-        if self.program.modules.contains_key(&full) && !segments.is_empty() {
+        if self.program.modules.contains_key(&full) {
             // A path that names both a module and an item is ambiguous (§E0316).
-            let bound = import.bound_name().to_string();
-            let _ = bound;
             return Some(ImportBinding::Module(full));
         }
         for i in (1..segments.len()).rev() {
@@ -546,6 +554,11 @@ impl<'a> Analyzer<'a> {
                         return None;
                     }
                     (None, None) => {
+                        if i == 1 && matches!(first.0.as_str(), "std" | "arch") {
+                            let bound = import.bound_name().to_string();
+                            self.program.defs.external.insert(bound.clone());
+                            return Some(ImportBinding::External(bound));
+                        }
                         self.diag(
                             "E0301",
                             format!("`{prefix}` has no item `{item}`"),
@@ -556,15 +569,87 @@ impl<'a> Analyzer<'a> {
                 }
             }
         }
+        if matches!(first.0.as_str(), "std" | "arch") {
+            let bound = import.bound_name().to_string();
+            self.program.defs.external.insert(bound.clone());
+            return Some(ImportBinding::External(bound));
+        }
         self.diag("E0301", format!("no module named `{}`", first.0), first.1);
         None
     }
 
     fn collect_all(&mut self, modules: &BTreeMap<String, (LoadedModule, Module)>) {
+        // Phase 6 starts with every type name, then fills the definitions, then
+        // resolves value signatures. A field or signature in one module can
+        // therefore name a type declared in any other module.
+        for (loaded, module) in modules.values() {
+            self.set_module(loaded);
+            self.predeclare_types(module);
+        }
         for (loaded, module) in modules.values() {
             self.set_module(loaded);
             self.collect_types(module);
+        }
+        for (loaded, module) in modules.values() {
+            self.set_module(loaded);
+            self.check_declaration_properties(module);
+        }
+        for (loaded, module) in modules.values() {
+            self.set_module(loaded);
             self.collect_values(module);
+        }
+    }
+
+    fn predeclare_types(&mut self, module: &Module) {
+        for item in &module.items {
+            match item {
+                Item::Struct(s) => {
+                    let canonical = self.program.qualify(&self.current_module, &s.name);
+                    let file = self.source().path.clone();
+                    let module = self.current_module.clone();
+                    self.program
+                        .defs
+                        .structs
+                        .entry(canonical)
+                        .or_insert(StructDef {
+                            kind: s.kind,
+                            fields: Vec::new(),
+                            generics: s.generics.iter().map(|g| g.name.clone()).collect(),
+                            span: s.name_span,
+                            file,
+                            module,
+                        });
+                }
+                Item::Enum(e) => {
+                    let canonical = self.program.qualify(&self.current_module, &e.name);
+                    let file = self.source().path.clone();
+                    let module = self.current_module.clone();
+                    self.program.defs.enums.entry(canonical).or_insert(EnumDef {
+                        copy: e.copy,
+                        variants: Vec::new(),
+                        generics: e.generics.iter().map(|g| g.name.clone()).collect(),
+                        from: HashMap::new(),
+                        tag: None,
+                        span: e.name_span,
+                        file,
+                        module,
+                    });
+                }
+                Item::TypeAlias(t) => {
+                    let canonical = self.program.qualify(&self.current_module, &t.name);
+                    self.program
+                        .defs
+                        .aliases
+                        .entry(canonical)
+                        .or_insert_with(|| {
+                            (
+                                t.ty.clone(),
+                                t.generics.iter().map(|g| g.name.clone()).collect(),
+                            )
+                        });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -715,8 +800,6 @@ impl<'a> Analyzer<'a> {
 
         // Aliases may refer to other aliases; resolve through the written type
         // on demand in `resolve_ty`.
-
-        self.check_declaration_properties(module);
     }
 
     fn check_declaration_properties(&mut self, module: &Module) {
@@ -1188,7 +1271,8 @@ impl<'a> Analyzer<'a> {
             let ok_param = matches!(
                 &ty,
                 Type::Borrow { mutable: false, inner }
-                    if matches!(inner.as_ref(), Type::External(n) if n == "Env")
+                    if matches!(inner.as_ref(), Type::External(n) if n == "Env" || n == "std.Env")
+                        || matches!(inner.as_ref(), Type::Struct(n, _) if n == "Env" || n == "std.Env")
             );
             if !ok_param {
                 ok = false;

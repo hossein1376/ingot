@@ -5,12 +5,78 @@
 //! under it is a module. `main.ingot` at the package root is module `main`; other
 //! paths become dotted module names (`net/http.ingot` is `net.http`). A single
 //! file checked on its own is module `main` of package `t`, exactly as the
-//! conformance README defines.
+//! conformance README defines. `attach_std` adds the standard library package to
+//! the same source set before analysis.
 
 use crate::diagnostic::Diagnostic;
 use crate::source::{Source, Sources, Span};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// Load the standard library next to a user package.
+///
+/// The library is a package named `std`. Its root module is exposed as `std`;
+/// every other module keeps its name under the `std` prefix (`mem` becomes
+/// `std.mem`). A compiler without an installed library still works, with the
+/// `std` names left opaque for the checker.
+pub fn attach_std(package: &mut LoadedPackage) -> std::io::Result<()> {
+    if package.package_name == "std"
+        || package
+            .modules
+            .iter()
+            .any(|m| m.name == "std" || m.name.starts_with("std."))
+    {
+        return Ok(());
+    }
+    let Some(root) = std_root() else {
+        return Ok(());
+    };
+    let mut std = load_dir(&root)?;
+    let base = package.sources.files.len();
+    for source in &mut std.sources.files {
+        source.path = format!("std/{}", source.path);
+    }
+    for source in std.sources.files.drain(..) {
+        package.sources.add(source);
+    }
+    for mut module in std.modules.drain(..) {
+        module.source_id += base;
+        module.name = if module.name == "std" {
+            "std".to_string()
+        } else {
+            format!("std.{}", module.name)
+        };
+        module.root = false;
+        package.modules.push(module);
+    }
+    package
+        .modules
+        .sort_by(|a, b| a.name.cmp(&b.name).then(a.source_id.cmp(&b.source_id)));
+    Ok(())
+}
+
+fn std_root() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("INGOT_STD") {
+        let path = PathBuf::from(path);
+        if path.join("ingot.toml").exists() {
+            return Some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for candidate in [dir.join("std"), dir.join("../std"), dir.join("../../std")] {
+            if candidate.join("ingot.toml").exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    let development = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
+    development
+        .join("ingot.toml")
+        .exists()
+        .then_some(development)
+}
 
 #[derive(Clone, Debug)]
 pub struct Manifest {

@@ -1,0 +1,16 @@
+//! Clocks and durations.
+
+/// Wall and monotonic time, obtained from `env.clock`.
+pub struct Clock {
+    private: bool,
+}
+
+/// A signed interval in nanoseconds.
+pub copy struct Duration {
+    pub ns: i64,
+}
+
+/// A point on a monotonic clock, in nanoseconds.
+pub copy struct Instant {
+    pub ns: i64,
+}

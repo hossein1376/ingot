@@ -1915,6 +1915,76 @@ impl<'a> Checker<'a> {
                     );
                     return Type::Error;
                 };
+                if let Type::Optional(inner) = &enum_ty {
+                    match (variant.as_str(), payload) {
+                        ("none", None) => {}
+                        ("none", Some(p)) => {
+                            self.diag(
+                                "E0410",
+                                "variant `none` has no payload",
+                                *variant_span,
+                            );
+                            self.check_expr(p, None);
+                        }
+                        ("some", Some(p)) => {
+                            let t = (**inner).clone();
+                            let actual = self.check_expr(p, Some(&t));
+                            self.expect_type(actual, &t, p.span);
+                        }
+                        ("some", None) => {
+                            self.diag(
+                                "E0410",
+                                "variant `some` needs a payload",
+                                *variant_span,
+                            );
+                        }
+                        (_, _) => {
+                            self.diag(
+                                "E0314",
+                                format!("an optional has no variant `{variant}`"),
+                                *variant_span,
+                            );
+                        }
+                    }
+                    return enum_ty;
+                }
+                if let Type::Result(ok_ty, err_ty) = &enum_ty {
+                    match (variant.as_str(), payload) {
+                        ("ok", Some(p)) => {
+                            let t = (**ok_ty).clone();
+                            let actual = self.check_expr(p, Some(&t));
+                            self.expect_type(actual, &t, p.span);
+                        }
+                        ("err", Some(p)) => {
+                            let t = (**err_ty).clone();
+                            let actual = self.check_expr(p, Some(&t));
+                            self.expect_type(actual, &t, p.span);
+                        }
+                        ("ok" | "err", None) => {
+                            self.diag(
+                                "E0410",
+                                format!("variant `{variant}` needs a payload"),
+                                *variant_span,
+                            );
+                        }
+                        (_, Some(p)) => {
+                            self.diag(
+                                "E0314",
+                                format!("a result has no variant `{variant}`"),
+                                *variant_span,
+                            );
+                            self.check_expr(p, None);
+                        }
+                        (_, None) => {
+                            self.diag(
+                                "E0314",
+                                format!("a result has no variant `{variant}`"),
+                                *variant_span,
+                            );
+                        }
+                    }
+                    return enum_ty;
+                }
                 let Type::Enum(name, _) = &enum_ty else {
                     if !enum_ty.is_error() {
                         self.diag(

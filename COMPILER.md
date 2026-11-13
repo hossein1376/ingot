@@ -16,7 +16,7 @@ cargo run -- conformance       # the whole suite
 
 | Phase | State |
 |---|---|
-| 1 Load | Package directory trees, module names from file paths, `ingot.toml` name/targets. Dependency graphs and content hashes are not loaded |
+| 1 Load | Package directory trees, module names from file paths, `ingot.toml` name/targets, and the `std` source package attached from `std/`. Dependency graphs and content hashes are not loaded |
 | 2 Lex | Complete E01xx set, including maximal munch and builtin spelling |
 | 3 Parse | Grammar through expressions, patterns, items, `when`, kernels and `spawn`/`dispatch`; E02xx recovery |
 | 4 `when` | Parsed; the first branch is used because target selection is not wired |
@@ -51,10 +51,10 @@ performance model.
 
 ## Deliberate limits
 
-* `import std.*` and `arch.*` names are opaque external types, so calls through
-  them check permissively and evaluate only where the evaluator has a built-in.
-  There is no `std` source tree yet, and dependencies listed in `[deps]` are not
-  loaded.
+* `std/` is a real package tree with `Env`, `mem`, `io`, `fs`, `net`, `time`,
+  `text`, `fmt`, `sys` and `sys.macos`. Modules that do not exist yet
+  (`std.sync`, `std.task`, `std.simd`, `std.exec`) and `arch.*` stay opaque
+  external names. Dependencies listed in `[deps]` are not loaded.
 * `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes
   and target selection are not diagnosed yet.
 * The CFG checker splits linear aggregates per field and checks origin stores at
@@ -72,8 +72,9 @@ performance model.
 
 ## Next steps
 
-1. Move the `@assert` and loop facts used by `ingot cost` onto the CFG and finish
-   phase 10, then tighten the remaining origin and partial-move cases.
-2. A real `std` package tree, starting with `sys`, `mem`, `list` and `fmt`.
-3. Code generation for `aarch64-macos-m4` through LLVM, starting with arithmetic,
-   calls, arrays and slices.
+1. Expand the standard library: allocator implementations, `list`/`str`/`map`
+   containers, then `fs`, `io` and `fmt` over `sys.macos`.
+2. Code generation for `aarch64-macos-m4` through LLVM, starting with arithmetic,
+   calls, arrays and slices. The raw-pointer builtins the containers need are part
+   of this step.
+3. Finish the remaining phase-10 and origin cases once code generation is present.
