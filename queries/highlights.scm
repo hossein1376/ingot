@@ -40,8 +40,8 @@
 (field_init (identifier) @property)
 (postfix_expression "." (identifier) @property)
 
-; Builtins (@assert, @load, ...)
-(builtin) @function
+; Builtins (@assert, @load, ...): gold constant-like accent; falls back through the chain
+(builtin) @function @constant @constant.builtin
 
 ; Keywords
 [
