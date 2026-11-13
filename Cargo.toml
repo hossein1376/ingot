@@ -1,17 +1,6 @@
-[package]
-name = "ingotc"
-version = "0.1.0"
-edition = "2024"
-description = "MVP compiler and interpreter for the Ingot language"
-license = "MIT OR Apache-2.0"
-
-[lib]
-name = "ingotc"
-path = "src/lib.rs"
-
-[[bin]]
-name = "ingot"
-path = "src/main.rs"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
 
 [profile.release]
 lto = "thin"

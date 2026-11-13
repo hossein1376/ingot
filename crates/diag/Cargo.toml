@@ -1,0 +1,10 @@
+[package]
+name = "ingot-diag"
+version = "0.1.0"
+edition = "2024"
+description = "Spans, sources and diagnostics for the Ingot compiler"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_diag"
+path = "src/lib.rs"

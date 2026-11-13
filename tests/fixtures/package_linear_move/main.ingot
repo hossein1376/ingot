@@ -1,7 +1,0 @@
-import demo.lib;
-
-fn f() {
-    let b = lib.make();
-    let t = b.token;
-    t.release();
-}

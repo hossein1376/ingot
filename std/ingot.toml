@@ -1,2 +1,0 @@
-name = "std"
-targets = ["aarch64-macos-m4", "x86_64-linux-znver4", "x86_64-windows-znver4"]

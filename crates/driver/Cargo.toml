@@ -1,0 +1,18 @@
+[package]
+name = "ingot-driver"
+version = "0.1.0"
+edition = "2024"
+description = "The ingot command-line driver: loading, pipeline, fix engine and conformance runner"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_driver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ingot"
+path = "src/main.rs"
+
+[dependencies]
+ingot-diag = { path = "../diag" }
+ingot-syntax = { path = "../syntax" }

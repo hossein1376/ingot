@@ -1,2 +1,0 @@
-name = "demo"
-targets = ["aarch64-macos-m4"]

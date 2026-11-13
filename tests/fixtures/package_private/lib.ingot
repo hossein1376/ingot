@@ -1,5 +1,0 @@
-pub struct Secret { hidden: i64 }
-
-pub fn make(v: i64) -> Secret {
-    return Secret.{ hidden: v };
-}
