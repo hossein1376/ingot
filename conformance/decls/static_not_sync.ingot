@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 4.5, 20
+
+static greeting: *u8 = c"hello"; //~ E0511

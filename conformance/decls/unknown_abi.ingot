@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 29
+
+extern "cdecl" { //~ E1603
+    fn length(s: *u8) -> i64;
+}

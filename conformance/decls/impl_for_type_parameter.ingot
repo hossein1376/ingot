@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4
+
+interface Tagged {
+    fn tag(self: &Self) -> i64 { return 0; }
+}
+
+impl[T] Tagged for T {} //~ E0508

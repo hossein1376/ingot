@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 33.1
+
+import std.Env;
+
+fn main(env: &Env) { } //~ E0514

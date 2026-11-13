@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 4.4
+
+struct Square { side: i64 }
+
+interface Tagged {
+    fn tag(self: &Self) -> i64 { return 0; }
+}
+
+impl Tagged for Square {}
+impl Tagged for Square {} //~ E0507
