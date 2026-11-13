@@ -7,6 +7,10 @@
 use crate::source::{Source, Span};
 use std::fmt::Write as _;
 
+/// The only target this MVP implements. `--target` and `--all-targets` are not
+/// accepted yet, so every diagnostic occurs on this target.
+pub const DEFAULT_TARGET: &str = "aarch64-macos-m4";
+
 #[derive(Clone, Debug)]
 pub struct Edit {
     pub span: Span,
@@ -138,7 +142,9 @@ impl Diagnostic {
             }
             out.push_str("]}");
         }
-        out.push_str("]}");
+        out.push_str("],\"targets\":[\"");
+        out.push_str(DEFAULT_TARGET);
+        out.push_str("\"]}");
         out
     }
 
@@ -186,7 +192,7 @@ impl Diagnostic {
     }
 }
 
-fn write_span(out: &mut String, sources: &crate::source::Sources, file: &str, span: Span) {
+pub fn write_span(out: &mut String, sources: &crate::source::Sources, file: &str, span: Span) {
     let (start, end) = sources
         .iter()
         .find(|s| s.path == file)
@@ -199,8 +205,8 @@ fn write_span(out: &mut String, sources: &crate::source::Sources, file: &str, sp
     json_string(out, file);
     let _ = write!(
         out,
-        ",\"start\":{{\"line\":{},\"col\":{}}},\"end\":{{\"line\":{},\"col\":{}}}}}",
-        start.line, start.col, end.line, end.col
+        ",\"start\":{{\"line\":{},\"col\":{},\"offset\":{}}},\"end\":{{\"line\":{},\"col\":{},\"offset\":{}}}}}",
+        start.line, start.col, span.start, end.line, end.col, span.end
     );
 }
 

@@ -2497,7 +2497,7 @@ impl<'a> Parser<'a> {
                         .fix(
                             "insert `.` before `{`",
                             Edit {
-                                span: Span::empty(brace.start),
+                                span: Span::new(expr.span.end, brace.start),
                                 text: ".".to_string(),
                             },
                         );
@@ -3525,12 +3525,26 @@ fn check_mixing(
             } else {
                 child.span
             };
-            out.push(Diagnostic::new(
+            let mut d = Diagnostic::new(
                 "E0204",
                 "bitwise and shift operators must be parenthesized when mixed with other operators",
                 source,
                 span,
-            ));
+            );
+            d.fix_edits(
+                "parenthesize the mixed sub-expression",
+                vec![
+                    Edit {
+                        span: Span::empty(span.start),
+                        text: "(".to_string(),
+                    },
+                    Edit {
+                        span: Span::empty(span.end),
+                        text: ")".to_string(),
+                    },
+                ],
+            );
+            out.push(d);
         }
     }
 }
@@ -3539,11 +3553,25 @@ fn check_bitwise_child(child: &Expr, source: &Source, out: &mut Vec<Diagnostic>)
     if let ExprKind::Binary { op, .. } = &child.kind
         && (op.is_bitwise() || op.is_shift())
     {
-        out.push(Diagnostic::new(
+        let mut d = Diagnostic::new(
             "E0204",
             "bitwise and shift operators must be parenthesized when mixed with other operators",
             source,
             child.span,
-        ));
+        );
+        d.fix_edits(
+            "parenthesize the mixed sub-expression",
+            vec![
+                Edit {
+                    span: Span::empty(child.span.start),
+                    text: "(".to_string(),
+                },
+                Edit {
+                    span: Span::empty(child.span.end),
+                    text: ")".to_string(),
+                },
+            ],
+        );
+        out.push(d);
     }
 }

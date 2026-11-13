@@ -135,7 +135,13 @@ fn load_file(path: &Path) -> std::io::Result<LoadedPackage> {
         dir = d.parent();
     }
     let text = std::fs::read_to_string(path)?;
-    let display = path.to_string_lossy().replace('\\', "/");
+    // A single file is its own package root, so its path is relative to the
+    // directory that contains it (tools.md §1: paths are relative to the
+    // package root).
+    let display = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"));
     let source = Source::with_absolute(display, path.to_path_buf(), text);
     let mut sources = Sources::default();
     sources.add(source);

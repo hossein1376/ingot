@@ -43,6 +43,8 @@ pub struct Checker<'a> {
     in_dispatch: bool,
     kernel_index: Option<String>,
     param_into: HashMap<String, Option<String>>,
+    /// Written type span of each parameter, for `into` fixes.
+    param_ty_span: HashMap<String, Span>,
     from: Vec<Origin>,
     module: String,
     /// Semantic type of every checked expression, keyed by its start offset.
@@ -81,6 +83,7 @@ impl<'a> Checker<'a> {
             in_dispatch: false,
             kernel_index: None,
             param_into: HashMap::new(),
+            param_ty_span: HashMap::new(),
             from: Vec::new(),
             module: module.to_string(),
             expr_types: HashMap::new(),
@@ -553,7 +556,7 @@ impl<'a> Checker<'a> {
                 }
                 let bind_ty = expected.clone().unwrap_or_else(|| actual.clone());
                 if let Some(exp) = &expected {
-                    self.expect_type(actual, exp, init.span);
+                    self.expect_type(actual, exp, init);
                 }
                 let bindings = self.bind_pattern(pattern, &bind_ty);
                 if self.pattern_is_refutable(pattern) {
@@ -598,7 +601,7 @@ impl<'a> Checker<'a> {
                     };
                     let actual = self.check_expr(value, expected.as_ref());
                     if let Some(exp) = &expected {
-                        self.expect_type(actual.clone(), exp, value.span);
+                        self.expect_type(actual.clone(), exp, value);
                     }
                     self.check_into_store(place, value, &actual, *span);
                 } else {
@@ -615,11 +618,26 @@ impl<'a> Checker<'a> {
                     _ => {}
                 }
                 if ty.is_result() {
-                    self.diag(
+                    let can_propagate = match &ty {
+                        Type::Result(_, err) => {
+                            self.error.as_ref().is_some_and(|e| types_equal(e, err))
+                        }
+                        _ => false,
+                    };
+                    let d = self.diag(
                         "E0701",
                         "a result value cannot be ignored; use `try`, `catch`, or `match`",
                         expr.span,
                     );
+                    if can_propagate {
+                        d.fix(
+                            "insert `try `",
+                            Edit {
+                                span: Span::empty(expr.span.start),
+                                text: "try ".to_string(),
+                            },
+                        );
+                    }
                 } else if !ty.is_void() && !ty.is_never() && !ty.is_error() {
                     let discardable = ty.is_copy(&self.program.defs, &self.generic_bounds)
                         || !ty.is_linear_value(&self.program.defs, &self.generic_bounds);
@@ -984,7 +1002,7 @@ impl<'a> Checker<'a> {
         let iter_ty = self.check_expr(iter, None);
         let item_ty = if let Some((_inclusive, end)) = range_end {
             let end_ty = self.check_expr(end, Some(&iter_ty));
-            self.expect_type(end_ty, &iter_ty, end.span);
+            self.expect_type(end_ty, &iter_ty, end);
             if !iter_ty.is_integer() {
                 self.diag("E0609", "range bounds must be integers", iter.span);
             }
@@ -1037,7 +1055,7 @@ impl<'a> Checker<'a> {
         }
         if let Some(g) = grain {
             let ty = self.check_expr(g, None);
-            self.expect_type(ty, &Type::i64(), g.span);
+            self.expect_type(ty, &Type::i64(), g);
         }
         self.loop_depth += 1;
         if let Some(l) = label {
@@ -1138,7 +1156,7 @@ impl<'a> Checker<'a> {
                     let _ = err;
                     return;
                 }
-            self.expect_type(actual, &ret, e.span);
+            self.expect_type(actual, &ret, e);
         } else if !ret.is_void() {
             self.diag("E0421", "this function returns a value", span);
         }
@@ -1175,7 +1193,7 @@ impl<'a> Checker<'a> {
                         );
                         return;
                     }
-            self.expect_type(actual, &error_ty, value.span);
+            self.expect_type(actual, &error_ty, value);
         }
     }
 
@@ -1461,7 +1479,7 @@ impl<'a> Checker<'a> {
                             if result.is_void() {
                                 result = ty;
                             } else {
-                                self.expect_type(ty, &result, e.span);
+                                self.expect_type(ty, &result, e);
                             }
                         }
                     }
@@ -1689,7 +1707,7 @@ impl<'a> Checker<'a> {
                 }
                 let base_ty = self.check_expr(base, None);
                 let idx_ty = self.check_expr(index, Some(&Type::i64()));
-                self.expect_type(idx_ty, &Type::i64(), index.span);
+                self.expect_type(idx_ty, &Type::i64(), index);
                 match &base_ty {
                     Type::Array(_, elem) => (**elem).clone(),
                     Type::Slice { elem, .. } => (**elem).clone(),
@@ -1726,7 +1744,7 @@ impl<'a> Checker<'a> {
                 let base_ty = self.check_expr(base, None);
                 for b in [lo, hi] {
                     let t = self.check_expr(b, Some(&Type::i64()));
-                    self.expect_type(t, &Type::i64(), b.span);
+                    self.expect_type(t, &Type::i64(), b);
                 }
                 match &base_ty {
                     Type::Slice { mutable, elem } => Type::Slice {
@@ -1929,7 +1947,7 @@ impl<'a> Checker<'a> {
                         ("some", Some(p)) => {
                             let t = (**inner).clone();
                             let actual = self.check_expr(p, Some(&t));
-                            self.expect_type(actual, &t, p.span);
+                            self.expect_type(actual, &t, p);
                         }
                         ("some", None) => {
                             self.diag(
@@ -1953,12 +1971,12 @@ impl<'a> Checker<'a> {
                         ("ok", Some(p)) => {
                             let t = (**ok_ty).clone();
                             let actual = self.check_expr(p, Some(&t));
-                            self.expect_type(actual, &t, p.span);
+                            self.expect_type(actual, &t, p);
                         }
                         ("err", Some(p)) => {
                             let t = (**err_ty).clone();
                             let actual = self.check_expr(p, Some(&t));
-                            self.expect_type(actual, &t, p.span);
+                            self.expect_type(actual, &t, p);
                         }
                         ("ok" | "err", None) => {
                             self.diag(
@@ -2009,7 +2027,7 @@ impl<'a> Checker<'a> {
                 match (payload, payload_ty) {
                     (Some(p), Some(t)) => {
                         let actual = self.check_expr(p, Some(&t));
-                        self.expect_type(actual, &t, p.span);
+                        self.expect_type(actual, &t, p);
                     }
                     (None, Some(_)) => {
                         self.diag(
@@ -2040,7 +2058,7 @@ impl<'a> Checker<'a> {
                 let elem_ty = self.resolve_ty(elem);
                 for e in elems {
                     let actual = self.check_expr(e, Some(&elem_ty));
-                    self.expect_type(actual, &elem_ty, e.span);
+                    self.expect_type(actual, &elem_ty, e);
                 }
                 if n >= 0 && elems.len() as i64 != n {
                     self.diag(
@@ -2099,7 +2117,7 @@ impl<'a> Checker<'a> {
                     {
                         then_ty
                     } else {
-                        self.expect_type(else_ty, &then_ty, otherwise.span);
+                        self.expect_type(else_ty, &then_ty, otherwise);
                         Type::Error
                     }
                 } else {
@@ -2235,7 +2253,7 @@ impl<'a> Checker<'a> {
         match handler {
             Handler::Expr(e) => {
                 let ty = self.check_expr(e, Some(ok_ty));
-                self.expect_type(ty, ok_ty, e.span);
+                self.expect_type(ty, ok_ty, e);
             }
             Handler::Block(b) => {
                 self.push_scope();
@@ -2261,18 +2279,28 @@ impl<'a> Checker<'a> {
             return ty;
         }
         if ty.is_integer() {
+            let parens = needs_parens_before_binary(expr);
             let d = self.diag(
                 "E0403",
                 format!("condition must be `bool`, found `{ty}`"),
                 expr.span,
             );
-            d.fix(
-                "compare with zero",
-                Edit {
-                    span: Span::empty(expr.span.end),
-                    text: " != 0".to_string(),
+            let mut edits = Vec::new();
+            if parens {
+                edits.push(Edit {
+                    span: Span::empty(expr.span.start),
+                    text: "(".to_string(),
+                });
+            }
+            edits.push(Edit {
+                span: Span::empty(expr.span.end),
+                text: if parens {
+                    ") != 0".to_string()
+                } else {
+                    " != 0".to_string()
                 },
-            );
+            });
+            d.fix_edits("compare with zero", edits);
         } else {
             self.diag(
                 "E0403",
@@ -2307,7 +2335,7 @@ impl<'a> Checker<'a> {
                     };
                     for b in [lo, hi] {
                         let t = self.check_expr(b, Some(&Type::i64()));
-                        self.expect_type(t, &Type::i64(), b.span);
+                        self.expect_type(t, &Type::i64(), b);
                     }
                     let elem = match base_ty {
                         Type::Array(_, elem) => Some(elem),
@@ -2720,7 +2748,7 @@ impl<'a> Checker<'a> {
             }
             if let Some(fty) = self.program.defs.field(structural, &f.name) {
                 let actual = self.check_expr(&f.value, Some(&fty));
-                self.expect_type(actual, &fty, f.value.span);
+                self.expect_type(actual, &fty, &f.value);
             } else {
                 self.diag(
                     "E0503",
@@ -2887,7 +2915,7 @@ impl<'a> Checker<'a> {
                 }
                 for a in args {
                     let actual = self.check_expr(a, Some(&t));
-                    self.expect_type(actual, &t, a.span);
+                    self.expect_type(actual, &t, a);
                 }
             }
             None => {
@@ -2929,7 +2957,7 @@ impl<'a> Checker<'a> {
                 }
                 for (a, p) in args.iter().zip(params) {
                     let actual = self.check_expr(a, Some(p));
-                    self.expect_type(actual, p, a.span);
+                    self.expect_type(actual, p, a);
                 }
                 let _ = call_span;
                 if let Some(e) = error {
@@ -2994,7 +3022,7 @@ impl<'a> Checker<'a> {
         }
         for (a, p) in args.iter().zip(params.iter()) {
             let actual = self.check_expr(a, Some(p));
-            self.expect_type(actual, p, a.span);
+            self.expect_type(actual, p, a);
         }
         for a in args.iter().skip(params.len()) {
             self.check_expr(a, None);
@@ -3126,7 +3154,7 @@ impl<'a> Checker<'a> {
                 };
                 if let Some(a) = args.first() {
                     let at = self.check_expr(a, Some(&elem));
-                    self.expect_type(at, &elem, a.span);
+                    self.expect_type(at, &elem, a);
                 }
                 t
             }
@@ -3140,7 +3168,7 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(i) = args.get(1) {
                     let it = self.check_expr(i, Some(&Type::i64()));
-                    self.expect_type(it, &Type::i64(), i.span);
+                    self.expect_type(it, &Type::i64(), i);
                 }
                 t
             }
@@ -3187,7 +3215,7 @@ impl<'a> Checker<'a> {
                     .unwrap_or(Type::Error);
                 if let Some(b) = args.get(2) {
                     let bt = self.check_expr(b, Some(&t));
-                    self.expect_type(bt, &t, b.span);
+                    self.expect_type(bt, &t, b);
                 }
                 t
             }
@@ -3196,7 +3224,7 @@ impl<'a> Checker<'a> {
                     let ty = self.check_expr(v, expected);
                     if let Some(i) = args.get(1) {
                         let it = self.check_expr(i, Some(&Type::i64()));
-                        self.expect_type(it, &Type::i64(), i.span);
+                        self.expect_type(it, &Type::i64(), i);
                     }
                     return ty;
                 }
@@ -3213,7 +3241,7 @@ impl<'a> Checker<'a> {
                     .unwrap_or(Type::Error);
                 for a in args.iter().skip(1) {
                     let at = self.check_expr(a, Some(&ty));
-                    self.expect_type(at, &ty, a.span);
+                    self.expect_type(at, &ty, a);
                 }
                 ty
             }
@@ -3271,7 +3299,7 @@ impl<'a> Checker<'a> {
                         let expected = f.signature_params.get(i + 1);
                         let actual = self.check_expr(a, expected);
                         if let Some(e) = expected {
-                            self.expect_type(actual, e, a.span);
+                            self.expect_type(actual, e, a);
                         }
                     }
                     return;
@@ -3306,13 +3334,27 @@ impl<'a> Checker<'a> {
         if self.param_into.get(source).and_then(|x| x.as_ref()) == Some(&target.to_string()) {
             return;
         }
-        self.diag(
+        let fix_span = self.param_ty_span.get(source).copied();
+        let can_fix = self
+            .param_into
+            .get(source)
+            .is_some_and(|into| into.is_none());
+        let d = self.diag(
             "E1204",
             format!(
                 "the borrow in `{source}` is stored through `{target}`, but `{source}` is not declared `into {target}`"
             ),
             span,
         );
+        if let (true, Some(span)) = (can_fix, fix_span) {
+            d.fix(
+                format!("add `into {target}` to `{source}`"),
+                Edit {
+                    span: Span::empty(span.end),
+                    text: format!(" into {target}"),
+                },
+            );
+        }
     }
 
     fn check_spawn(&mut self, call: &Expr, scope: &Expr, span: Span) {
@@ -3356,13 +3398,27 @@ impl<'a> Checker<'a> {
                             {
                                 continue;
                             }
-                            self.diag(
+                            let fix_span = self.param_ty_span.get(source).copied();
+                            let can_fix = self
+                                .param_into
+                                .get(source)
+                                .is_some_and(|into| into.is_none());
+                            let d = self.diag(
                                 "E1204",
                                 format!(
                                     "`{source}` is given to a task in scope `{scope_name}` without `into {scope_name}`"
                                 ),
                                 a.span,
                             );
+                            if let (true, Some(span)) = (can_fix, fix_span) {
+                                d.fix(
+                                    format!("add `into {scope_name}` to `{source}`"),
+                                    Edit {
+                                        span: Span::empty(span.end),
+                                        text: format!(" into {scope_name}"),
+                                    },
+                                );
+                            }
                         }
                     }
         }
@@ -3462,7 +3518,7 @@ impl<'a> Checker<'a> {
             ExprKind::Index { base, index, .. } => {
                 let base_ty = self.check_place(base, mutable);
                 let idx_ty = self.check_expr(index, Some(&Type::i64()));
-                self.expect_type(idx_ty, &Type::i64(), index.span);
+                self.expect_type(idx_ty, &Type::i64(), index);
                 match base_ty {
                     Type::Array(_, elem) | Type::Slice { elem, .. } => (*elem).clone(),
                     Type::Vector(v) => Type::Int(v.elem),
@@ -3552,7 +3608,7 @@ impl<'a> Checker<'a> {
             ExprKind::Index { base, index, .. } => {
                 let base_ty = self.check_place(base, true);
                 let idx_ty = self.check_expr(index, Some(&Type::i64()));
-                self.expect_type(idx_ty, &Type::i64(), index.span);
+                self.expect_type(idx_ty, &Type::i64(), index);
                 match base_ty {
                     Type::Array(_, elem) | Type::Slice { elem, .. } => Some((*elem).clone()),
                     _ => Some(Type::Error),
@@ -3585,7 +3641,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn expect_type(&mut self, actual: Type, expected: &Type, span: Span) -> Type {
+    fn expect_type(&mut self, actual: Type, expected: &Type, expr: &Expr) -> Type {
+        let span = expr.span;
         if expected.is_error()
             || actual.is_error()
             || actual.is_never()
@@ -3597,23 +3654,25 @@ impl<'a> Checker<'a> {
         {
             return actual;
         }
-        if let Type::Result(inner, _) = &actual
+        if let Type::Result(inner, err) = &actual
             && types_equal(inner, expected) {
+                let can_propagate = self.error.as_ref().is_some_and(|e| types_equal(e, err));
                 let d = self.diag(
                     "E0701",
                     "a result value cannot be used as its success type; handle it with `try` or `catch`",
                     span,
                 );
-                d.fix(
-                    "insert `try `",
-                    Edit {
-                        span: Span::empty(span.start),
-                        text: "try ".to_string(),
-                    },
-                );
+                if can_propagate {
+                    d.fix(
+                        "insert `try `",
+                        Edit {
+                            span: Span::empty(span.start),
+                            text: "try ".to_string(),
+                        },
+                    );
+                }
                 return inner.as_ref().clone();
             }
-        let conversion = format!(" as {expected}");
         let can_convert = lossless(&actual, expected);
         let d = self.diag(
             "E0401",
@@ -3621,13 +3680,23 @@ impl<'a> Checker<'a> {
             span,
         );
         if can_convert {
-            d.fix(
-                format!("convert with `{conversion}`"),
-                Edit {
-                    span: Span::empty(span.end),
-                    text: conversion,
+            let parens = needs_parens_before_binary(expr);
+            let mut edits = Vec::new();
+            if parens {
+                edits.push(Edit {
+                    span: Span::empty(span.start),
+                    text: "(".to_string(),
+                });
+            }
+            edits.push(Edit {
+                span: Span::empty(span.end),
+                text: if parens {
+                    format!(") as {expected}")
+                } else {
+                    format!(" as {expected}")
                 },
-            );
+            });
+            d.fix_edits(format!("convert with ` as {expected}`"), edits);
         }
         let _ = d;
         expected.clone()
@@ -3892,6 +3961,22 @@ fn assign_binop(op: AssignOp) -> Option<BinOp> {
 
 fn interface_eq_type(_ty: &Type) -> Option<String> {
     None
+}
+
+/// `as` and comparisons bind tighter than every binary operator below them
+/// (spec §5.1), so those expressions need parentheses when an edit appends
+/// ` as T` or ` != 0`.
+fn needs_parens_before_binary(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Binary { .. }
+            | ExprKind::Range { .. }
+            | ExprKind::Catch { .. }
+            | ExprKind::Orelse { .. }
+            | ExprKind::If { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Closure { .. }
+    )
 }
 
 fn lossless(from: &Type, to: &Type) -> bool {

@@ -13,6 +13,7 @@ pub mod check;
 pub mod conformance;
 pub mod cost;
 pub mod diagnostic;
+pub mod fix;
 pub mod interp;
 pub mod lexer;
 pub mod loader;

@@ -731,25 +731,20 @@ pub fn cost_items(program: &Program) -> Vec<CostItem> {
 
 impl CostItem {
     pub fn to_json(&self, sources: &crate::source::Sources) -> String {
-        let (file, line, col) = sources
+        let file = sources
             .iter()
             .find(|s| s.path == self.file)
             .or_else(|| sources.files.first())
-            .map(|s| {
-                let p = s.position(self.span.start);
-                (s.path.clone(), p.line, p.col)
-            })
-            .unwrap_or((String::new(), 1, 1));
-        format!(
-            "{{\"type\":\"cost\",\"kind\":\"{}\",\"fn\":\"{}\",\"span\":{{\"file\":\"{}\",\"start\":{{\"line\":{},\"col\":{}}},\"end\":{{\"line\":{},\"col\":{}}}}}}}",
+            .map(|s| s.path.clone())
+            .unwrap_or_default();
+        let mut out = format!(
+            "{{\"type\":\"cost\",\"kind\":\"{}\",\"fn\":\"{}\",\"span\":",
             self.kind.name(),
             json_escape(&self.function),
-            json_escape(&file),
-            line,
-            col,
-            line,
-            col
-        )
+        );
+        crate::diagnostic::write_span(&mut out, sources, &file, self.span);
+        out.push('}');
+        out
     }
 }
 

@@ -125,6 +125,12 @@ impl Sources {
             .find(|s| s.absolute == path || s.path == path.to_string_lossy())
     }
 
+    /// Replace a source's text, keeping its displayed and absolute paths.
+    pub fn set_text(&mut self, index: usize, text: String) {
+        let old = &self.files[index];
+        self.files[index] = Source::with_absolute(old.path.clone(), old.absolute.clone(), text);
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
         self.files.iter()
     }

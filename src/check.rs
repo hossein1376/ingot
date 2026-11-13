@@ -1174,18 +1174,40 @@ impl<'a> Analyzer<'a> {
         if let Some(o) = &owner {
             self.self_ty = Some(o.clone());
         }
-        let params = f.params.iter().map(|p| self.resolve_ty(&p.ty)).collect();
+        let params: Vec<Type> = f.params.iter().map(|p| self.resolve_ty(&p.ty)).collect();
         let ret = self.resolve_ty(&f.ret);
         let error = f.error.as_ref().map(|e| self.resolve_ty(e));
         // §13.1: a returned view needs a `from` clause.
         if ret.is_view(&self.program.defs) && f.from.is_empty() && !external {
-            self.diag(
+            let fix = if f.reduce.is_none() {
+                let after_type = f
+                    .error
+                    .as_ref()
+                    .map(|e| e.span().end)
+                    .unwrap_or_else(|| f.ret.span().end);
+                required_from(f, &params, &self.program.defs).map(|names| {
+                    let list = names.join(", ");
+                    (
+                        format!("add `from {list}`"),
+                        Edit {
+                            span: Span::empty(after_type),
+                            text: format!(" from {list}"),
+                        },
+                    )
+                })
+            } else {
+                None
+            };
+            let d = self.diag(
                 "E1201",
                 format!(
                     "return type `{ret}` contains a borrow and the signature has no `from` clause"
                 ),
                 f.ret.span(),
             );
+            if let Some((message, edit)) = fix {
+                d.fix(message, edit);
+            }
         }
         self.generic_bounds = old_bounds;
         self.self_ty = old_self;
@@ -1622,6 +1644,11 @@ impl<'a> Analyzer<'a> {
             .iter()
             .map(|p| (p.name.clone(), p.into.as_ref().map(|(t, _)| t.clone())))
             .collect();
+        checker.param_ty_span = f
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), p.ty.span()))
+            .collect();
         checker.from = f.from.clone();
         checker.kernel_index = if f.mods.kernel {
             f.params.first().map(|p| p.name.clone())
@@ -1760,6 +1787,104 @@ fn fit_int(n: i128, ty: &Type) -> Option<i128> {
         }
         Type::Float(_) => Some(n),
         _ => None,
+    }
+}
+
+/// The `from` sources a returned view needs, when they can be read off the
+/// body without guessing: every return must be rooted at a slice parameter.
+fn required_from(f: &FnDecl, params: &[Type], defs: &TypeDefs) -> Option<Vec<String>> {
+    let body = f.body.as_ref()?;
+    let mut returns = Vec::new();
+    collect_returns_block(body, &mut returns);
+    if returns.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for e in returns {
+        let root = expr_root_ident(e)?;
+        let index = f.params.iter().position(|p| p.name == root)?;
+        let ty = params.get(index)?;
+        if !ty.is_view(defs) || !matches!(ty, Type::Slice { .. }) {
+            return None;
+        }
+        if !names.iter().any(|n| n == root) {
+            names.push(root.to_string());
+        }
+    }
+    names.sort();
+    Some(names)
+}
+
+fn collect_returns_block<'a>(block: &'a Block, out: &mut Vec<&'a Expr>) {
+    for stmt in &block.stmts {
+        collect_returns_stmt(stmt, out);
+    }
+}
+
+fn collect_returns_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
+    match stmt {
+        Stmt::Return {
+            value: Some(value), ..
+        } => out.push(value),
+        Stmt::If(x) => {
+            collect_returns_block(&x.then, out);
+            if let Some(otherwise) = &x.otherwise {
+                collect_returns_stmt(otherwise, out);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::Loop { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::Defer { body, .. }
+        | Stmt::Scope { body, .. }
+        | Stmt::Unsafe { body, .. }
+        | Stmt::Block(body) => collect_returns_block(body, out),
+        Stmt::Match(m) => {
+            for arm in &m.arms {
+                match &arm.body {
+                    ArmBody::Block(b) => collect_returns_block(b, out),
+                    ArmBody::Expr(e) => collect_returns_expr(e, out),
+                }
+            }
+        }
+        Stmt::Expr { expr, .. } => collect_returns_expr(expr, out),
+        Stmt::When {
+            then, otherwise, ..
+        } => {
+            collect_returns_block(then, out);
+            for s in otherwise {
+                collect_returns_stmt(s, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_returns_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match &expr.kind {
+        ExprKind::If {
+            then, otherwise, ..
+        } => {
+            collect_returns_expr(then, out);
+            collect_returns_expr(otherwise, out);
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                match &arm.body {
+                    ArmBody::Block(b) => collect_returns_block(b, out),
+                    ArmBody::Expr(e) => collect_returns_expr(e, out),
+                }
+            }
+        }
+        ExprKind::Unsafe { body, .. } => collect_returns_expr(body, out),
+        ExprKind::Catch { handler, .. } | ExprKind::Orelse { handler, .. } => match handler {
+            Handler::Block(b) => collect_returns_block(b, out),
+            Handler::Expr(e) => collect_returns_expr(e, out),
+        },
+        // A closure has its own return type; its `return` does not belong to
+        // the enclosing function.
+        ExprKind::Closure { .. } => {}
+        _ => {}
     }
 }
 

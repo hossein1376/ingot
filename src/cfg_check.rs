@@ -64,7 +64,15 @@ pub fn check(
         d.relate("defer", *defer_span);
         diagnostics.push(d);
     }
-    analyze_moves(program, source, cfg, facts, bounds, &mut diagnostics);
+    analyze_moves(
+        program,
+        source,
+        cfg,
+        facts,
+        bounds,
+        function,
+        &mut diagnostics,
+    );
     let origins = analyze_origins(program, source, cfg, function, &mut diagnostics);
     analyze_loans(program, source, cfg, &origins, &mut diagnostics);
     Checked { diagnostics }
@@ -184,6 +192,7 @@ fn analyze_moves(
     cfg: &Cfg,
     _facts: &[LocalFact],
     bounds: &HashMap<String, Vec<String>>,
+    function: &crate::check::Function,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let _ = bounds;
@@ -243,8 +252,147 @@ fn analyze_moves(
         for exit in exits {
             d.relate("scope_end", exit);
         }
+        if let Some((message, edit)) =
+            linear_fix(program, function, source, cfg, local, &cfg.locals[local])
+        {
+            d.fix(message, edit);
+        }
         diagnostics.push(d);
     }
+}
+
+/// The catalog's fix for E1003: a generic `T` gains the `Discard` bound, and a
+/// concrete type is consumed by its one nullary consuming function.
+fn linear_fix(
+    program: &Program,
+    function: &crate::check::Function,
+    source: &Source,
+    cfg: &Cfg,
+    local_id: LocalId,
+    local: &crate::cfg::CfgLocal,
+) -> Option<(String, Edit)> {
+    if let Type::Param(param) = &local.ty {
+        let generic = function.decl.generics.iter().find(|g| &g.name == param)?;
+        if generic.bounds.iter().any(|b| b.name() == "Discard") {
+            return None;
+        }
+        let (span, text) = match generic.bounds.last() {
+            Some(last) => (Span::empty(last.span.end), ", Discard".to_string()),
+            None => (Span::empty(generic.name_span.end), ": Discard".to_string()),
+        };
+        return Some(("add the bound `Discard`".to_string(), Edit { span, text }));
+    }
+    if local.is_param {
+        return None;
+    }
+    // A deferred consume is wrong when some path already consumes the value:
+    // the fix would move it twice. The catalog's condition is only met when
+    // the leak is the sole use.
+    if local_explicitly_moved(cfg, local_id) {
+        return None;
+    }
+    let name = local.name.as_deref()?;
+    let methods = program.methods.get(&crate::check::method_key(&local.ty))?;
+    let mut consuming: Vec<&crate::check::Function> = methods
+        .values()
+        .filter(|m| {
+            m.decl.params.len() == 1
+                && m.decl.params[0].name == "self"
+                && !matches!(m.decl.params[0].ty, Ty::Borrow { .. })
+        })
+        .collect();
+    consuming.sort_by(|a, b| a.decl.name.cmp(&b.decl.name));
+    if consuming.len() != 1 {
+        return None;
+    }
+    let method = &consuming[0].decl.name;
+    let (insert, indent) = after_line(source, local.span)?;
+    let text = format!("\n{indent}defer {{ {name}.{method}(); }}");
+    Some((
+        format!("insert `defer {{ {name}.{method}(); }}`"),
+        Edit {
+            span: Span::empty(insert),
+            text,
+        },
+    ))
+}
+
+fn local_explicitly_moved(cfg: &Cfg, local: LocalId) -> bool {
+    fn operand_moves(operand: &Operand, local: LocalId) -> bool {
+        match operand {
+            Operand::Place(place) => place.local == local && place.proj.is_empty(),
+            Operand::Const(_) | Operand::Unit => false,
+        }
+    }
+    for block in &cfg.blocks {
+        for stmt in &block.stmts {
+            match stmt {
+                CfgStmt::Use {
+                    place,
+                    mode: UseMode::Move,
+                    ..
+                }
+                | CfgStmt::ConsumeUnion { place, .. }
+                    if place.local == local =>
+                {
+                    return true;
+                }
+                CfgStmt::Assign {
+                    value:
+                        Rvalue::Use {
+                            place,
+                            mode: UseMode::Move,
+                        },
+                    ..
+                } if place.local == local => return true,
+                CfgStmt::Assign {
+                    value: Rvalue::Aggregate { fields, .. },
+                    ..
+                } if fields.iter().any(|o| operand_moves(o, local)) => return true,
+                _ => {}
+            }
+        }
+        match &block.term {
+            Term::Call { args, .. } | Term::Spawn { args, .. } => {
+                if args.iter().any(|o| operand_moves(o, local)) {
+                    return true;
+                }
+            }
+            Term::Return {
+                value: Some(value), ..
+            } if operand_moves(value, local) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The offset just before the newline of the line that contains `span`, and
+/// that line's indentation. Returns `None` when the line is not a finished
+/// `;` statement, where an inserted statement would land inside it.
+fn after_line(source: &Source, span: Span) -> Option<(usize, String)> {
+    let text = &source.text;
+    let line_start = text[..span.start.min(text.len())]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let line_end = text[span.end.min(text.len())..]
+        .find('\n')
+        .map(|i| span.end.min(text.len()) + i)
+        .unwrap_or(text.len());
+    let line = &text[line_start..line_end];
+    let code = match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    };
+    if !code.trim_end().ends_with(';') {
+        return None;
+    }
+    let indent: String = line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    Some((line_end, indent))
 }
 
 #[allow(clippy::too_many_arguments)]
