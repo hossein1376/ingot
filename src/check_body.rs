@@ -135,7 +135,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_ownership(&mut self, function: &crate::check::Function) {
+    fn check_ownership(&mut self, function: &crate::check::Function) -> Option<crate::cfg::Cfg> {
         let f = &function.decl;
         let facts: Vec<LocalFact> = self.facts.values().cloned().collect();
         let cfg = crate::cfg::lower(
@@ -164,6 +164,9 @@ impl<'a> Checker<'a> {
             function,
         );
         self.diagnostics.extend(checked.diagnostics);
+        let mut cfg = cfg;
+        crate::cost::remove_proven_checks(&mut cfg);
+        Some(cfg)
     }
 
     fn declare_param(&mut self, name: &str, ty: Type, span: Span) {

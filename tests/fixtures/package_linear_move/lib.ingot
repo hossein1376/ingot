@@ -1,0 +1,17 @@
+pub linear struct Token { pub id: i32 }
+
+impl Token {
+    pub fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+
+    pub fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+pub linear struct Bundle { pub token: Token, pub extra: i64 }
+
+pub fn make() -> Bundle {
+    return Bundle.{ token: Token.make(1), extra: 0 };
+}

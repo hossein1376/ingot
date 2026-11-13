@@ -17,6 +17,7 @@ pub type LoanId = usize;
 
 #[derive(Clone, Debug)]
 pub struct Cfg {
+    pub module: String,
     pub locals: Vec<CfgLocal>,
     pub blocks: Vec<Block>,
     pub entry: BlockId,
@@ -25,6 +26,25 @@ pub struct Cfg {
     pub defer_conflicts: Vec<(Span, Span)>,
     /// Spans of statements copied out of deferred blocks.
     pub deferred_statements: HashSet<Span>,
+    /// `@assert(base.len >= n)` facts, applied after a statement index.
+    pub len_facts: Vec<LenFact>,
+    /// Counted loop facts, applied at the body block.
+    pub loop_facts: Vec<LoopFact>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LenFact {
+    pub block: BlockId,
+    pub after: usize,
+    pub base: LocalId,
+    pub at_least: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoopFact {
+    pub body: BlockId,
+    pub counter: LocalId,
+    pub base: Option<LocalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,8 +98,7 @@ pub enum CfgStmt {
         span: Span,
     },
     Check {
-        kind: CheckKind,
-        span: Span,
+        check: CheckStmt,
     },
     CancelScope {
         local: LocalId,
@@ -90,6 +109,21 @@ pub enum CfgStmt {
         place: Place,
         span: Span,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct CheckStmt {
+    pub kind: CheckKind,
+    pub span: Span,
+    pub lhs: Option<Operand>,
+    pub rhs: Option<Operand>,
+    pub bounds: Option<BoundsCheck>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundsCheck {
+    pub base: Place,
+    pub index: Operand,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,12 +321,15 @@ pub fn lower(
         module: function.module.clone(),
         expr_types,
         cfg: Cfg {
+            module: function.module.clone(),
             locals: Vec::new(),
             blocks: Vec::new(),
             entry: 0,
             loans: Vec::new(),
             defer_conflicts: Vec::new(),
             deferred_statements: HashSet::new(),
+            len_facts: Vec::new(),
+            loop_facts: Vec::new(),
         },
         current: None,
         current_scope: 0,
@@ -652,6 +689,23 @@ impl<'a> Lower<'a> {
                     self.make_rvalue(rhs)
                 } else {
                     let rhs = self.consume_operand(rhs, UseMode::Move);
+                    let kind = match op {
+                        AssignOp::Add | AssignOp::Sub | AssignOp::Mul => Some(CheckKind::Overflow),
+                        AssignOp::Div | AssignOp::Rem => Some(CheckKind::Division),
+                        AssignOp::Shl | AssignOp::Shr => Some(CheckKind::Shift),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        self.emit(CfgStmt::Check {
+                            check: CheckStmt {
+                                kind,
+                                span: *span,
+                                lhs: Some(Operand::Place(dest.clone())),
+                                rhs: Some(rhs.clone()),
+                                bounds: None,
+                            },
+                        });
+                    }
                     Rvalue::Binary {
                         op: assign_binop(*op),
                         lhs: Operand::Place(dest.clone()),
@@ -1042,6 +1096,15 @@ impl<'a> Lower<'a> {
                         }),
                         span,
                     );
+                    if let Some(base) = len_root_expr(end)
+                        && let Some(base) = self.local_by_name.get(&base).copied()
+                    {
+                        self.cfg.loop_facts.push(LoopFact {
+                            body: body_b,
+                            counter: id,
+                            base: Some(base),
+                        });
+                    }
                 }
             }
             self.lower_stmts(&body.stmts);
@@ -1268,40 +1331,30 @@ impl<'a> Lower<'a> {
     ) {
         let op = self.lower_expr(scrutinee);
         let place = self.operand_place(op, UseMode::Copy);
-        let dispatch = self.current.unwrap_or_else(|| self.new_block());
         let join = self.new_block();
-        let mut arm_blocks = Vec::new();
-        for _ in arms {
-            arm_blocks.push(self.new_block());
-        }
-        let mut cases = Vec::new();
-        let mut default = join;
-        for (arm, arm_b) in arms.iter().zip(&arm_blocks) {
+        let trap = self.new_block();
+        self.set_current(trap);
+        self.terminate(Term::Trap { span });
+
+        let test_blocks: Vec<BlockId> = (0..arms.len()).map(|_| self.new_block()).collect();
+        let arm_blocks: Vec<BlockId> = (0..arms.len()).map(|_| self.new_block()).collect();
+        let entry = test_blocks.first().copied().unwrap_or(trap);
+        self.set_current(entry);
+        for (i, arm) in arms.iter().enumerate() {
+            if i > 0 {
+                self.set_current(test_blocks[i]);
+            }
+            let next = test_blocks.get(i + 1).copied().unwrap_or(trap);
             if arm.is_else {
-                default = *arm_b;
-            }
-            for p in &arm.patterns {
-                match p {
-                    Pattern::Variant { name, .. } => cases.push((name.clone(), *arm_b)),
-                    Pattern::Wild(_) | Pattern::Bind { .. } => default = *arm_b,
-                    _ => default = *arm_b,
-                }
+                self.terminate(Term::Goto(arm_blocks[i]));
+            } else {
+                self.emit_pattern_tests(&arm.patterns, &place, arm_blocks[i], next, span);
             }
         }
-        if default == join && !cases.is_empty() {
-            // The type checker has already proved exhaustiveness; route the
-            // impossible default through an arm that consumes the payload.
-            default = cases[0].1;
-        }
-        self.set_current(dispatch);
-        self.terminate(Term::Switch {
-            value: place.clone(),
-            cases,
-            default,
-            span,
-        });
-        for (arm, arm_b) in arms.iter().zip(arm_blocks) {
-            self.set_current(arm_b);
+
+        for (i, arm) in arms.iter().enumerate() {
+            let next = test_blocks.get(i + 1).copied().unwrap_or(trap);
+            self.set_current(arm_blocks[i]);
             self.push_scope();
             for p in &arm.patterns {
                 self.bind_from_place(p, &place, UseMode::Move);
@@ -1313,12 +1366,12 @@ impl<'a> Lower<'a> {
                 });
             }
             if let Some(g) = &arm.guard {
-                let cond = self.lower_expr(g);
                 let body_b = self.new_block();
+                let cond = self.lower_expr(g);
                 self.terminate(Term::Branch {
                     cond,
                     then_b: body_b,
-                    else_b: join,
+                    else_b: next,
                     span: g.span,
                 });
                 self.set_current(body_b);
@@ -1345,6 +1398,171 @@ impl<'a> Lower<'a> {
             self.pop_scope();
         }
         self.set_current(join);
+    }
+
+    fn emit_pattern_tests(
+        &mut self,
+        patterns: &[Pattern],
+        place: &Place,
+        arm: BlockId,
+        failure: BlockId,
+        span: Span,
+    ) {
+        if patterns.is_empty() {
+            self.terminate(Term::Goto(failure));
+            return;
+        }
+        for (i, pattern) in patterns.iter().enumerate() {
+            let last = i + 1 == patterns.len();
+            let fail = if last { failure } else { self.new_block() };
+            if self.emit_pattern_test(pattern, place, arm, fail, span) {
+                return;
+            }
+            if !last {
+                self.set_current(fail);
+            }
+        }
+    }
+
+    /// Returns true when the pattern is irrefutable.
+    fn emit_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        place: &Place,
+        arm: BlockId,
+        failure: BlockId,
+        span: Span,
+    ) -> bool {
+        match pattern {
+            Pattern::Wild(_) | Pattern::Bind { .. } => {
+                self.terminate(Term::Goto(arm));
+                true
+            }
+            Pattern::Variant { name, .. } => {
+                self.terminate(Term::Switch {
+                    value: place.clone(),
+                    cases: vec![(name.clone(), arm)],
+                    default: failure,
+                    span,
+                });
+                false
+            }
+            Pattern::Literal(Expr {
+                kind: ExprKind::Bool(b),
+                ..
+            }) => {
+                let (then_b, else_b) = if *b { (arm, failure) } else { (failure, arm) };
+                self.terminate(Term::Branch {
+                    cond: Operand::Place(place.clone()),
+                    then_b,
+                    else_b,
+                    span,
+                });
+                false
+            }
+            Pattern::Literal(Expr {
+                kind: ExprKind::Int {
+                    value, negative, ..
+                },
+                ..
+            }) => {
+                let n = if *negative {
+                    -(*value as i128)
+                } else {
+                    *value as i128
+                };
+                let cond = self.add_temp(Type::Bool, span);
+                self.emit(CfgStmt::Assign {
+                    place: Place {
+                        local: cond,
+                        proj: Vec::new(),
+                    },
+                    value: Rvalue::Binary {
+                        op: BinOp::Eq,
+                        lhs: Operand::Place(place.clone()),
+                        rhs: Operand::Const(ConstVal::Int(n)),
+                    },
+                    span,
+                });
+                self.terminate(Term::Branch {
+                    cond: Operand::Place(Place {
+                        local: cond,
+                        proj: Vec::new(),
+                    }),
+                    then_b: arm,
+                    else_b: failure,
+                    span,
+                });
+                false
+            }
+            Pattern::Range {
+                lo, hi, inclusive, ..
+            } => {
+                let (Some(lo), Some(hi)) = (pattern_const(lo), pattern_const(hi)) else {
+                    self.terminate(Term::Goto(failure));
+                    return false;
+                };
+                let lower = self.add_temp(Type::Bool, span);
+                self.emit(CfgStmt::Assign {
+                    place: Place {
+                        local: lower,
+                        proj: Vec::new(),
+                    },
+                    value: Rvalue::Binary {
+                        op: BinOp::Ge,
+                        lhs: Operand::Place(place.clone()),
+                        rhs: Operand::Const(ConstVal::Int(lo)),
+                    },
+                    span,
+                });
+                let upper = self.add_temp(Type::Bool, span);
+                self.emit(CfgStmt::Assign {
+                    place: Place {
+                        local: upper,
+                        proj: Vec::new(),
+                    },
+                    value: Rvalue::Binary {
+                        op: if *inclusive { BinOp::Le } else { BinOp::Lt },
+                        lhs: Operand::Place(place.clone()),
+                        rhs: Operand::Const(ConstVal::Int(hi)),
+                    },
+                    span,
+                });
+                let both = self.add_temp(Type::Bool, span);
+                self.emit(CfgStmt::Assign {
+                    place: Place {
+                        local: both,
+                        proj: Vec::new(),
+                    },
+                    value: Rvalue::Binary {
+                        op: BinOp::And,
+                        lhs: Operand::Place(Place {
+                            local: lower,
+                            proj: Vec::new(),
+                        }),
+                        rhs: Operand::Place(Place {
+                            local: upper,
+                            proj: Vec::new(),
+                        }),
+                    },
+                    span,
+                });
+                self.terminate(Term::Branch {
+                    cond: Operand::Place(Place {
+                        local: both,
+                        proj: Vec::new(),
+                    }),
+                    then_b: arm,
+                    else_b: failure,
+                    span,
+                });
+                false
+            }
+            _ => {
+                self.terminate(Term::Goto(arm));
+                true
+            }
+        }
     }
 
     // ------------------------------------------------------------ expressions
@@ -1441,15 +1659,7 @@ impl<'a> Lower<'a> {
                 place.proj.push(Proj::Field(index.to_string()));
                 Operand::Place(place)
             }
-            ExprKind::Index { base, index, .. } => {
-                let mut place = self.lower_place(base);
-                let _ = self.lower_expr(index);
-                if matches!(self.place_type(&place), Type::Slice { .. }) {
-                    place.proj.push(Proj::Deref);
-                }
-                place.proj.push(Proj::Index);
-                Operand::Place(place)
-            }
+            ExprKind::Index { .. } => Operand::Place(self.lower_place(e)),
             ExprKind::Slice { base, lo, hi, .. } => {
                 let mut place = self.lower_place(base);
                 let _ = self.lower_expr(lo);
@@ -1573,8 +1783,13 @@ impl<'a> Lower<'a> {
                 };
                 if let Some(kind) = check {
                     self.emit(CfgStmt::Check {
-                        kind,
-                        span: *op_span,
+                        check: CheckStmt {
+                            kind,
+                            span: *op_span,
+                            lhs: Some(l.clone()),
+                            rhs: Some(r.clone()),
+                            bounds: None,
+                        },
                     });
                 }
                 self.emit(CfgStmt::Assign {
@@ -1857,7 +2072,19 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Index { base, index, .. } => {
                 let mut place = self.lower_place(base);
-                let _ = self.lower_expr(index);
+                let idx = self.lower_expr(index);
+                self.emit(CfgStmt::Check {
+                    check: CheckStmt {
+                        kind: CheckKind::Bounds,
+                        span: e.span,
+                        lhs: None,
+                        rhs: None,
+                        bounds: Some(BoundsCheck {
+                            base: place.clone(),
+                            index: idx,
+                        }),
+                    },
+                });
                 if matches!(self.place_type(&place), Type::Slice { .. }) {
                     place.proj.push(Proj::Deref);
                 }
@@ -2296,6 +2523,17 @@ impl<'a> Lower<'a> {
             "assert" => {
                 if let Some(cond) = args.first() {
                     let _ = self.lower_expr(cond);
+                    if let Some((base, at_least)) = self.len_assertion(cond)
+                        && let Some(block) = self.current
+                    {
+                        let after = self.cfg.blocks[block].stmts.len();
+                        self.cfg.len_facts.push(LenFact {
+                            block,
+                            after,
+                            base,
+                            at_least,
+                        });
+                    }
                 }
                 Operand::Unit
             }
@@ -2816,6 +3054,43 @@ impl<'a> Lower<'a> {
         }
     }
 
+    fn len_assertion(&self, cond: &Expr) -> Option<(LocalId, i64)> {
+        let ExprKind::Binary { op, lhs, rhs, .. } = &cond.kind else {
+            return None;
+        };
+        let (len_expr, n_expr, gt) = match op {
+            BinOp::Ge => (lhs.as_ref(), rhs.as_ref(), false),
+            BinOp::Gt => (lhs.as_ref(), rhs.as_ref(), true),
+            BinOp::Le => (rhs.as_ref(), lhs.as_ref(), false),
+            BinOp::Lt => (rhs.as_ref(), lhs.as_ref(), true),
+            _ => return None,
+        };
+        let ExprKind::Field { base, name, .. } = &len_expr.kind else {
+            return None;
+        };
+        if name != "len" {
+            return None;
+        }
+        let ExprKind::Ident(root) = &base.kind else {
+            return None;
+        };
+        let base = *self.local_by_name.get(root)?;
+        let ExprKind::Int {
+            value, negative, ..
+        } = &n_expr.kind
+        else {
+            return None;
+        };
+        let mut n = *value as i64;
+        if *negative {
+            n = -n;
+        }
+        if gt {
+            n += 1;
+        }
+        Some((base, n))
+    }
+
     fn function_error_type(&self) -> Type {
         self.function.signature_error.clone().unwrap_or(Type::Error)
     }
@@ -3053,9 +3328,9 @@ fn stmt_span(stmt: &CfgStmt) -> Option<Span> {
         | CfgStmt::StorageStart { span, .. }
         | CfgStmt::StorageEnd { span, .. }
         | CfgStmt::Use { span, .. }
-        | CfgStmt::Check { span, .. }
         | CfgStmt::CancelScope { span, .. }
         | CfgStmt::ConsumeUnion { span, .. } => Some(*span),
+        CfgStmt::Check { check } => Some(check.span),
     }
 }
 
@@ -3129,6 +3404,35 @@ fn block_uses_name(block: &crate::ast::Block, name: &str) -> bool {
         }
     }
     block.stmts.iter().any(|s| stmt(s, name))
+}
+
+fn len_root_expr(e: &Expr) -> Option<String> {
+    let ExprKind::Field { base, name, .. } = &e.kind else {
+        return None;
+    };
+    if name != "len" {
+        return None;
+    }
+    let ExprKind::Ident(root) = &base.kind else {
+        return None;
+    };
+    Some(root.clone())
+}
+
+fn pattern_const(p: &Pattern) -> Option<i128> {
+    match p {
+        Pattern::Literal(Expr {
+            kind: ExprKind::Int {
+                value, negative, ..
+            },
+            ..
+        }) => Some(if *negative {
+            -(*value as i128)
+        } else {
+            *value as i128
+        }),
+        _ => None,
+    }
 }
 
 fn assign_binop(op: AssignOp) -> BinOp {

@@ -1,9 +1,10 @@
 # Roadmap
 
 The specification in [docs/](docs/README.md) is the definition of the language. The
-bootstrap front end, CFG ownership checker and evaluator in `src/` cover item 1 steps 1
-to 3 for the cases in [conformance/](conformance/README.md), including package and module
-loading. Code generation and the standard library are still open.
+bootstrap front end, CFG ownership checker, CFG phase-10 pruning and evaluator in `src/`
+cover item 1 steps 1 to 3 for the cases in [conformance/](conformance/README.md),
+including package and module loading. Code generation and the standard library are still
+open.
 
 ## 0. Before writing the compiler
 

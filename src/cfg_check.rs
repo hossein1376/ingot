@@ -8,7 +8,7 @@ use crate::cfg::{
     BlockId, BorrowKind, Cfg, CfgStmt, LoanId, LocalId, Operand, Place, Proj, Rvalue, Term, UseMode,
 };
 use crate::check::{LocalFact, Program};
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Edit};
 use crate::source::{Source, Span};
 use crate::types::Type;
 use std::collections::{HashMap, HashSet};
@@ -120,6 +120,20 @@ impl MoveSet {
         self.map.insert(path.clone(), MState::Init);
     }
 
+    fn status(&self, path: &PathKey) -> MState {
+        let mut maybe = false;
+        for (k, v) in &self.map {
+            if prefix_of(k, path) {
+                match v {
+                    MState::Moved => return MState::Moved,
+                    MState::Maybe => maybe = true,
+                    MState::Init => {}
+                }
+            }
+        }
+        if maybe { MState::Maybe } else { MState::Init }
+    }
+
     fn move_subtree(&mut self, path: &PathKey) {
         self.map.retain(|k, _| !prefix_of(path, k));
         self.map.insert(path.clone(), MState::Moved);
@@ -172,6 +186,7 @@ fn analyze_moves(
     bounds: &HashMap<String, Vec<String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let _ = bounds;
     let mut entry_states: HashMap<BlockId, MoveSet> = HashMap::new();
     entry_states.insert(cfg.entry, MoveSet::default());
     let mut queue: Vec<BlockId> = vec![cfg.entry];
@@ -252,10 +267,22 @@ fn transfer_stmt(
         CfgStmt::StorageEnd { local, span } => {
             let key = (*local, Vec::new());
             let local_info = &cfg.locals[*local];
-            let linear = local_info.linear;
-            let st = state.get(&key);
-            if linear && matches!(st, MState::Init | MState::Maybe) {
-                leaks.entry(*local).or_default().push(*span);
+            if local_info.linear {
+                let mut paths = Vec::new();
+                linear_paths(
+                    program,
+                    bounds,
+                    &local_info.ty,
+                    &key,
+                    &mut paths,
+                    &mut HashSet::new(),
+                );
+                let leaked = paths
+                    .iter()
+                    .any(|p| matches!(state.status(p), MState::Init | MState::Maybe));
+                if leaked {
+                    leaks.entry(*local).or_default().push(*span);
+                }
             }
             state.move_subtree(&key);
         }
@@ -622,6 +649,25 @@ fn use_place(
             }
             return;
         }
+        if let Some(Proj::Field(_)) = place.proj.first() {
+            let root_ty = &cfg.locals[place.local].ty;
+            if let Type::Struct(name, _) = root_ty
+                && let Some(def) = program.defs.structs.get(name)
+                && def.module != cfg.module
+                && def.kind == crate::ast::StructKind::Linear
+            {
+                if reported.insert(("E1006", span.start, place.local)) {
+                    diagnostics.push(Diagnostic::new(
+                        "E1006",
+                        "a field of a linear struct cannot be moved outside its module",
+                        source,
+                        span,
+                    ));
+                }
+                state.move_subtree(&path);
+                return;
+            }
+        }
         let ty = place_type(cfg, program, place);
         if !is_copy_type(program, bounds, &ty) {
             state.move_subtree(&path);
@@ -684,6 +730,58 @@ fn place_type(cfg: &Cfg, program: &Program, place: &Place) -> Type {
         };
     }
     ty
+}
+
+fn linear_paths(
+    program: &Program,
+    bounds: &HashMap<String, Vec<String>>,
+    ty: &Type,
+    prefix: &PathKey,
+    out: &mut Vec<PathKey>,
+    seen: &mut HashSet<String>,
+) {
+    if !ty.is_linear_value(&program.defs, bounds) {
+        return;
+    }
+    match ty {
+        Type::Struct(name, args) => {
+            let Some(def) = program.defs.structs.get(name) else {
+                out.push(prefix.clone());
+                return;
+            };
+            if !seen.insert(name.clone()) {
+                out.push(prefix.clone());
+                return;
+            }
+            let mut any_linear_part = false;
+            for (field, field_ty, _) in &def.fields {
+                let field_ty = crate::types::substitute(field_ty, &def.generics, args);
+                if field_ty.is_linear_value(&program.defs, bounds) {
+                    any_linear_part = true;
+                    let mut p = prefix.clone();
+                    p.1.push(ProjKey::Field(field.clone()));
+                    linear_paths(program, bounds, &field_ty, &p, out, seen);
+                }
+            }
+            if !any_linear_part {
+                out.push(prefix.clone());
+            }
+            seen.remove(name);
+        }
+        Type::Tuple(elems) => {
+            for (i, e) in elems.iter().enumerate() {
+                let mut p = prefix.clone();
+                p.1.push(ProjKey::Field(i.to_string()));
+                linear_paths(program, bounds, e, &p, out, seen);
+            }
+        }
+        Type::Array(_, e) => {
+            let mut p = prefix.clone();
+            p.1.push(ProjKey::Index);
+            linear_paths(program, bounds, e, &p, out, seen);
+        }
+        _ => out.push(prefix.clone()),
+    }
 }
 
 fn is_copy_type(program: &Program, bounds: &HashMap<String, Vec<String>>, ty: &Type) -> bool {
@@ -868,7 +966,19 @@ fn widen_store(
     }
 }
 
-fn store_through_operand(cfg: &Cfg, origins: &mut Origins, op: &Operand, set: &OriginSet) {
+#[allow(clippy::too_many_arguments)]
+fn store_through_operand(
+    program: &Program,
+    source: &Source,
+    cfg: &Cfg,
+    function: &crate::check::Function,
+    span: Span,
+    origins: &mut Origins,
+    op: &Operand,
+    set: &OriginSet,
+    reported: &mut HashSet<(String, usize, usize)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     if let Operand::Place(p) = op {
         // A `&mut` argument is a temporary holding a loan on its referent.
         let temp = origin_set(origins, p.local);
@@ -878,6 +988,17 @@ fn store_through_operand(cfg: &Cfg, origins: &mut Origins, op: &Operand, set: &O
                 && let Some(loan) = cfg.loans.get(*id).cloned()
             {
                 if loan.place.proj.is_empty() {
+                    check_store_boundary(
+                        program,
+                        source,
+                        cfg,
+                        function,
+                        span,
+                        loan.place.local,
+                        set,
+                        reported,
+                        diagnostics,
+                    );
                     origins
                         .entry(loan.place.local)
                         .or_default()
@@ -922,6 +1043,7 @@ fn analyze_origins(
     let mut queue = vec![cfg.entry];
     let mut queued: HashSet<BlockId> = HashSet::from([cfg.entry]);
     let mut facts = OriginFacts::default();
+    let mut reported: HashSet<(String, usize, usize)> = HashSet::new();
     while let Some(bid) = queue.pop() {
         queued.remove(&bid);
         let Some(mut state) = states.get(&bid).cloned() else {
@@ -930,7 +1052,16 @@ fn analyze_origins(
         let block = &cfg.blocks[bid];
         for (i, stmt) in block.stmts.iter().enumerate() {
             facts.points.insert((bid, i), state.clone());
-            transfer_origin_stmt(program, cfg, stmt, &mut state);
+            transfer_origin_stmt(
+                program,
+                source,
+                cfg,
+                function,
+                stmt,
+                &mut state,
+                &mut reported,
+                diagnostics,
+            );
         }
         facts.points.insert((bid, block.stmts.len()), state.clone());
         transfer_origin_term(
@@ -941,6 +1072,7 @@ fn analyze_origins(
             &block.term,
             &mut state,
             &mut facts.returned_loans,
+            &mut reported,
             diagnostics,
         );
         for succ in successors(&block.term) {
@@ -952,7 +1084,17 @@ fn analyze_origins(
     facts
 }
 
-fn transfer_origin_stmt(program: &Program, cfg: &Cfg, stmt: &CfgStmt, origins: &mut Origins) {
+#[allow(clippy::too_many_arguments)]
+fn transfer_origin_stmt(
+    program: &Program,
+    source: &Source,
+    cfg: &Cfg,
+    function: &crate::check::Function,
+    stmt: &CfgStmt,
+    origins: &mut Origins,
+    reported: &mut HashSet<(String, usize, usize)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match stmt {
         CfgStmt::StorageStart { local, .. } => {
             origins.insert(*local, OriginSet::new());
@@ -982,6 +1124,17 @@ fn transfer_origin_stmt(program: &Program, cfg: &Cfg, stmt: &CfgStmt, origins: &
                 Rvalue::Binary { .. } | Rvalue::Constant | Rvalue::Zero => OriginSet::new(),
             };
             if place.derefs() > 0 {
+                check_store_boundary(
+                    program,
+                    source,
+                    cfg,
+                    function,
+                    stmt_span_for_origins(stmt),
+                    place.local,
+                    &set,
+                    reported,
+                    diagnostics,
+                );
                 widen_store(cfg, origins, place, &set, &mut HashSet::new());
             } else {
                 strong_assign(program, cfg, origins, place, set);
@@ -1006,6 +1159,7 @@ fn transfer_origin_term(
     term: &Term,
     origins: &mut Origins,
     returned_loans: &mut HashSet<LoanId>,
+    reported: &mut HashSet<(String, usize, usize)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match term {
@@ -1031,7 +1185,18 @@ fn transfer_origin_term(
                         continue;
                     };
                     if let (Some(src), Some(dst)) = (arg_sets.get(i), args.get(j)) {
-                        store_through_operand(cfg, origins, dst, src);
+                        store_through_operand(
+                            program,
+                            source,
+                            cfg,
+                            function,
+                            *span,
+                            origins,
+                            dst,
+                            src,
+                            reported,
+                            diagnostics,
+                        );
                     }
                 }
                 // Type-parameter flow.
@@ -1064,7 +1229,18 @@ fn transfer_origin_term(
                         if ty_mentions(&p.ty, name)
                             && let Some(dst) = args.get(i)
                         {
-                            store_through_operand(cfg, origins, dst, u);
+                            store_through_operand(
+                                program,
+                                source,
+                                cfg,
+                                function,
+                                *span,
+                                origins,
+                                dst,
+                                u,
+                                reported,
+                                diagnostics,
+                            );
                         }
                     }
                 }
@@ -1110,11 +1286,25 @@ fn transfer_origin_term(
             scope,
             dest,
             handle_loan,
+            span,
             ..
         } => {
             let mut result = OriginSet::new();
             for a in args {
                 result.extend(operand_origins(program, cfg, origins, a));
+            }
+            if cfg.locals[scope.local].is_param {
+                check_store_boundary(
+                    program,
+                    source,
+                    cfg,
+                    function,
+                    *span,
+                    scope.local,
+                    &result,
+                    reported,
+                    diagnostics,
+                );
             }
             origins
                 .entry(scope.local)
@@ -1178,6 +1368,108 @@ fn ty_param_position(ty: &Ty, name: &str, under_borrow: bool) -> Option<bool> {
         }
         _ => None,
     }
+}
+
+fn stmt_span_for_origins(stmt: &CfgStmt) -> Span {
+    match stmt {
+        CfgStmt::Assign { span, .. }
+        | CfgStmt::Use { span, .. }
+        | CfgStmt::ConsumeUnion { span, .. }
+        | CfgStmt::StorageStart { span, .. }
+        | CfgStmt::StorageEnd { span, .. }
+        | CfgStmt::CancelScope { span, .. } => *span,
+        CfgStmt::Check { check } => check.span,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_store_boundary(
+    program: &Program,
+    source: &Source,
+    cfg: &Cfg,
+    function: &crate::check::Function,
+    span: Span,
+    target: LocalId,
+    set: &OriginSet,
+    reported: &mut HashSet<(String, usize, usize)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let target_local = &cfg.locals[target];
+    if !target_local.is_param {
+        return;
+    }
+    let Some(target_name) = target_local.name.clone() else {
+        return;
+    };
+    let Some(target_param) = function.decl.params.iter().find(|p| p.name == target_name) else {
+        return;
+    };
+    for origin in set {
+        match origin {
+            Origin::Loan(id) => {
+                if let Some(loan) = cfg.loans.get(*id)
+                    && loan.place.derefs() == 0
+                    && reported.insert(("E1205".to_string(), span.start, target))
+                {
+                    let mut d = Diagnostic::new(
+                        "E1205",
+                        "a borrow of a local escapes through a parameter",
+                        source,
+                        span,
+                    );
+                    d.relate("borrow", loan.span);
+                    diagnostics.push(d);
+                }
+            }
+            Origin::Param(p) | Origin::Inner(p) => {
+                if *p == target && matches!(origin, Origin::Inner(_)) {
+                    continue;
+                }
+                let source_name = cfg.locals[*p].name.clone().unwrap_or_default();
+                let allowed = function.decl.params.iter().any(|q| {
+                    q.name == source_name
+                        && q.into
+                            .as_ref()
+                            .map(|(t, _)| t == &target_name)
+                            .unwrap_or(false)
+                }) || function
+                    .decl
+                    .params
+                    .iter()
+                    .find(|q| q.name == source_name)
+                    .map(|q| {
+                        function.decl.generics.iter().any(|g| {
+                            ty_mentions(&q.ty, &g.name) && ty_mentions(&target_param.ty, &g.name)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !allowed && reported.insert(("E1204".to_string(), span.start, target)) {
+                    let mut d = Diagnostic::new(
+                        "E1204",
+                        format!(
+                            "the borrow from `{source_name}` is stored through `{target_name}`, which needs `into {target_name}`"
+                        ),
+                        source,
+                        span,
+                    );
+                    if let Some(q) = function.decl.params.iter().find(|q| q.name == source_name)
+                        && q.into.is_none()
+                    {
+                        d.fix(
+                            format!("add `into {target_name}`"),
+                            Edit {
+                                span: Span::empty(q.ty.span().end),
+                                text: format!(" into {target_name}"),
+                            },
+                        );
+                    }
+                    diagnostics.push(d);
+                }
+            }
+            Origin::SelfScope(_) => {}
+        }
+    }
+    let _ = program;
 }
 
 fn ty_mentions(ty: &Ty, name: &str) -> bool {

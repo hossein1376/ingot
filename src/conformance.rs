@@ -140,7 +140,13 @@ pub fn run(root: &Path) -> Report {
                 let actual: BTreeSet<(String, u32)> = crate::cost::cost_items(&analysis.program)
                     .into_iter()
                     .map(|i| {
-                        let line = analysis.sources.files[0].position(i.span.start).line;
+                        let line = analysis
+                            .sources
+                            .iter()
+                            .find(|s| s.path == i.file)
+                            .or_else(|| analysis.sources.files.first())
+                            .map(|s| s.position(i.span.start).line)
+                            .unwrap_or(1);
                         (i.kind.name().to_string(), line)
                     })
                     .collect();

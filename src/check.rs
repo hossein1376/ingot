@@ -6,6 +6,7 @@
 //! by the conformance programs.
 
 use crate::ast::*;
+use crate::cfg::Cfg;
 use crate::diagnostic::{Diagnostic, Edit, sort_diagnostics};
 use crate::lexer::lex;
 use crate::loader::{LoadedModule, LoadedPackage};
@@ -90,6 +91,8 @@ pub struct Program {
     pub statics: BTreeMap<String, StaticDecl>,
     pub tests: Vec<TestInfo>,
     pub imports: Vec<Import>,
+    /// Pruned CFGs from phase 10, keyed by canonical function name.
+    pub cfgs: BTreeMap<String, Cfg>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1565,8 +1568,14 @@ impl<'a> Analyzer<'a> {
         }
         checker.pop_scope(true);
         checker.finish();
-        if checker.diagnostics.len() == diag_start {
-            checker.check_ownership(function);
+        let cfg = if checker.diagnostics.len() == diag_start {
+            checker.check_ownership(function)
+        } else {
+            None
+        };
+        drop(checker);
+        if let Some(cfg) = cfg {
+            self.program.cfgs.insert(function.key.clone(), cfg);
         }
     }
 }

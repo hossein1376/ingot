@@ -57,11 +57,12 @@ performance model.
   loaded.
 * `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes
   and target selection are not diagnosed yet.
-* The CFG checker covers the conformance suite, but the origin analysis is still
-  conservative in places: a few `into`/type-parameter boundary cases rely on the
-  type checker, and partial moves inside a linear aggregate are not yet split per
-  field. The algorithms follow `docs/impl/checker.md` and can be tightened without
-  changing the graph.
+* The CFG checker splits linear aggregates per field and checks origin stores at
+  the function boundary (E1204/E1205). Its origin sets remain conservative: one
+  set per local, as `docs/impl/checker.md` section 9 allows.
+* Phase 10 runs on the CFG and removes counted-loop, `@assert` length, and constant
+  checks. Branch-derived integer ranges and duplicate-check dominance are the next
+  tightening of the same dataflow, not a return to the AST.
 * Kernel bodies are checked for the direct-call, foreign-index and trapping-op
   rules. `exec.simd`, `exec.par` and Metal/Vulkan are not implemented.
 * The evaluator runs tasks sequentially. `par for` and `dispatch` are correct but
