@@ -18,6 +18,13 @@ pub enum ParseIntErr {
     sign_only,
     bad_digit: u8,
     overflow,
+    negative,
+}
+
+/// Why a boolean literal could not be parsed.
+pub enum ParseBoolErr {
+    empty,
+    invalid,
 }
 
 /// The width of the UTF-8 sequence starting with `first`, or 0 when the byte
@@ -217,4 +224,115 @@ pub fn parse_i64(s: []u8) -> i64 ! ParseIntErr {
         return -magnitude;
     }
     return @narrow(i64, acc);
+}
+
+/// Parses a base-10 `u64`. A leading `+` is accepted.
+pub fn parse_u64(s: []u8) -> u64 ! ParseIntErr {
+    if s.len == 0 {
+        fail .empty;
+    }
+    var i: i64 = 0;
+    if s[0] == '+' {
+        i = 1;
+    } else if s[0] == '-' {
+        fail .negative;
+    }
+    if i == s.len {
+        fail .sign_only;
+    }
+    var acc: u64 = 0;
+    while i < s.len {
+        let c = s[i];
+        if c < '0' || c > '9' {
+            fail .bad_digit(c);
+        }
+        let d: u64 = @narrow(u64, c - '0');
+        if acc > (18446744073709551615 - d) / 10 {
+            fail .overflow;
+        }
+        acc = acc * 10 + d;
+        i += 1;
+    }
+    return acc;
+}
+
+fn hex_digit(c: u8) -> u8 {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    if c >= 'a' && c <= 'f' {
+        return c - 'a' + 10;
+    }
+    if c >= 'A' && c <= 'F' {
+        return c - 'A' + 10;
+    }
+    return 255;
+}
+
+/// Parses hexadecimal digits, with an optional `0x` or `0X` prefix.
+pub fn parse_hex_u64(s: []u8) -> u64 ! ParseIntErr {
+    if s.len == 0 {
+        fail .empty;
+    }
+    var i: i64 = 0;
+    if s.len >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+        i = 2;
+    }
+    if i == s.len {
+        fail .sign_only;
+    }
+    var acc: u64 = 0;
+    while i < s.len {
+        let d = hex_digit(s[i]);
+        if d == 255 {
+            fail .bad_digit(s[i]);
+        }
+        let v: u64 = @narrow(u64, d);
+        if acc > (18446744073709551615 - v) / 16 {
+            fail .overflow;
+        }
+        acc = acc * 16 + v;
+        i += 1;
+    }
+    return acc;
+}
+
+/// Parses `true`, `false`, `1` or `0`.
+pub fn parse_bool(s: []u8) -> bool ! ParseBoolErr {
+    if s.len == 0 {
+        fail .empty;
+    }
+    if s.len == 4 && s[0] == 't' && s[1] == 'r' && s[2] == 'u' && s[3] == 'e' {
+        return true;
+    }
+    if s.len == 5 && s[0] == 'f' && s[1] == 'a' && s[2] == 'l' && s[3] == 's' && s[4] == 'e' {
+        return false;
+    }
+    if s.len == 1 && s[0] == '1' {
+        return true;
+    }
+    if s.len == 1 && s[0] == '0' {
+        return false;
+    }
+    fail .invalid;
+}
+
+fn ascii_lower(c: u8) -> u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32;
+    }
+    return c;
+}
+
+/// Compares ASCII letters without case.
+pub fn eq_ignore_ascii_case(a: []u8, b: []u8) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    for i in 0..a.len {
+        if ascii_lower(a[i]) != ascii_lower(b[i]) {
+            return false;
+        }
+    }
+    return true;
 }

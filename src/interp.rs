@@ -1095,6 +1095,15 @@ impl<'a> Interp<'a> {
                 rhs,
                 op_span,
             } => {
+                if matches!(op, BinOp::And | BinOp::Or) {
+                    let l = self.eval_expr(lhs, Some(&Type::Bool))?;
+                    let short = truthy(&l);
+                    if (*op == BinOp::And && !short) || (*op == BinOp::Or && short) {
+                        return Ok(Value::Bool(short));
+                    }
+                    let r = self.eval_expr(rhs, Some(&Type::Bool))?;
+                    return Ok(Value::Bool(truthy(&r)));
+                }
                 let (l, r) = if is_literal(lhs) && !is_literal(rhs) {
                     let r = self.eval_expr(rhs, expected)?;
                     let l = self.eval_expr(lhs, Some(&value_type(&r)))?;
@@ -2342,6 +2351,24 @@ fn wrap_int(n: i128, ty: ScalarTy) -> i128 {
     v
 }
 
+fn wrap_arith(x: i128, y: i128, ty: ScalarTy, op: BinOp) -> i128 {
+    let bits = ty.int_bits().unwrap_or(64);
+    let mask = (1u128 << bits) - 1;
+    let ux = (x as u128) & mask;
+    let uy = (y as u128) & mask;
+    let raw = match op {
+        BinOp::AddWrap => ux.wrapping_add(uy),
+        BinOp::SubWrap => ux.wrapping_sub(uy),
+        BinOp::MulWrap => ux.wrapping_mul(uy),
+        _ => return wrap_int(0, ty),
+    } & mask;
+    if ty.is_signed() && raw >= (1u128 << (bits - 1)) {
+        raw as i128 - (1i128 << bits)
+    } else {
+        raw as i128
+    }
+}
+
 fn normalize_int(n: i128, ty: ScalarTy) -> Option<i128> {
     let (min, max) = int_range(ty);
     if n < min || n > max { None } else { Some(n) }
@@ -2656,10 +2683,15 @@ fn apply_binary(op: BinOp, a: Value, b: Value, span: Span) -> R<Value> {
                     return Err(EvalErr::trap("T05", "integer overflow in division", span));
                 }
             }
+            let wrapping = matches!(op, BinOp::AddWrap | BinOp::SubWrap | BinOp::MulWrap);
             let raw = match op {
-                BinOp::Add | BinOp::AddWrap | BinOp::AddSat => x.checked_add(y),
-                BinOp::Sub | BinOp::SubWrap | BinOp::SubSat => x.checked_sub(y),
-                BinOp::Mul | BinOp::MulWrap | BinOp::MulSat => x.checked_mul(y),
+                BinOp::Add | BinOp::AddSat => x.checked_add(y),
+                BinOp::Sub | BinOp::SubSat => x.checked_sub(y),
+                BinOp::Mul | BinOp::MulSat => x.checked_mul(y).or(Some(if (x < 0) != (y < 0) {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                })),
                 BinOp::Div => Some(x / y),
                 BinOp::Rem => Some(x % y),
                 BinOp::BitAnd => Some(x & y),
@@ -2667,18 +2699,21 @@ fn apply_binary(op: BinOp, a: Value, b: Value, span: Span) -> R<Value> {
                 BinOp::BitXor => Some(x ^ y),
                 _ => None,
             };
-            let Some(raw) = raw else {
-                return Err(EvalErr::trap("T03", "integer overflow", span));
-            };
             let (min, max) = int_range(ty);
-            let v = match op {
-                BinOp::AddWrap | BinOp::SubWrap | BinOp::MulWrap => wrap_int(raw, ty),
-                BinOp::AddSat | BinOp::SubSat | BinOp::MulSat => raw.clamp(min, max),
-                _ => {
-                    if raw < min || raw > max {
-                        return Err(EvalErr::trap("T03", "integer overflow", span));
+            let v = if wrapping {
+                wrap_arith(x, y, ty, op)
+            } else {
+                let Some(raw) = raw else {
+                    return Err(EvalErr::trap("T03", "integer overflow", span));
+                };
+                match op {
+                    BinOp::AddSat | BinOp::SubSat | BinOp::MulSat => raw.clamp(min, max),
+                    _ => {
+                        if raw < min || raw > max {
+                            return Err(EvalErr::trap("T03", "integer overflow", span));
+                        }
+                        raw
                     }
-                    raw
                 }
             };
             Ok(int_value(v, ty))

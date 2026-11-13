@@ -52,7 +52,7 @@ performance model.
 ## Deliberate limits
 
 * `std/` is a real package tree with `Env`, `mem`, `io`, `fs`, `net`, `time`,
-  `text`, `fmt`, `sys` and `sys.macos`. Modules that do not exist yet
+  `text`, `fmt`, `math`, `hash`, `sort`, `sys` and `sys.macos`. Modules that do not exist yet
   (`std.sync`, `std.task`, `std.simd`, `std.exec`) and `arch.*` stay opaque
   external names. Dependencies listed in `[deps]` are not loaded.
 * `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes

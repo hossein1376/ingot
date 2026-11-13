@@ -1,0 +1,114 @@
+//! Scalar mathematics shared by every target.
+//!
+//! The elementary functions are the compiler's `@sqrt`, `@abs`, `@floor`,
+//! `@ceil` and `@round` builtins, so every target agrees.
+
+pub const pi: f64 = 3.141592653589793;
+pub const e: f64 = 2.718281828459045;
+
+pub fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+pub fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+pub fn clamp_i64(value: i64, lo: i64, hi: i64) -> i64 {
+    if value < lo {
+        return lo;
+    }
+    if value > hi {
+        return hi;
+    }
+    return value;
+}
+
+pub fn min_u64(a: u64, b: u64) -> u64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+pub fn max_u64(a: u64, b: u64) -> u64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+/// The magnitude of `value`. Traps on the `i64` minimum, like unary `-`.
+pub fn abs_i64(value: i64) -> i64 {
+    if value < 0 {
+        return -value;
+    }
+    return value;
+}
+
+/// The greatest common divisor. Both inputs are made non-negative first; the
+/// `i64` minimum traps in that conversion.
+pub fn gcd_i64(a: i64, b: i64) -> i64 {
+    var x = a;
+    var y = b;
+    if x < 0 {
+        x = -x;
+    }
+    if y < 0 {
+        y = -y;
+    }
+    while y != 0 {
+        let t = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+pub fn abs_f64(value: f64) -> f64 {
+    return @abs(value);
+}
+
+pub fn sqrt_f64(value: f64) -> f64 {
+    return @sqrt(value);
+}
+
+pub fn floor_f64(value: f64) -> f64 {
+    return @floor(value);
+}
+
+pub fn ceil_f64(value: f64) -> f64 {
+    return @ceil(value);
+}
+
+pub fn round_f64(value: f64) -> f64 {
+    return @round(value);
+}
+
+pub fn min_f64(a: f64, b: f64) -> f64 {
+    return @min(a, b);
+}
+
+pub fn max_f64(a: f64, b: f64) -> f64 {
+    return @max(a, b);
+}
+
+pub fn clamp_f64(value: f64, lo: f64, hi: f64) -> f64 {
+    if value < lo {
+        return lo;
+    }
+    if value > hi {
+        return hi;
+    }
+    return value;
+}
+
+pub fn lerp_f64(a: f64, b: f64, t: f64) -> f64 {
+    return a + (b - a) * t;
+}

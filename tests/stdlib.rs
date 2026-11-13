@@ -122,3 +122,54 @@ pub fn main(env: &Env) -> u8 {
     assert_eq!(outcome.status, 0);
     assert!(outcome.trap.is_none(), "{:?}", outcome.trap);
 }
+
+#[test]
+fn std_math_hash_sort_and_parsing_run() {
+    let source = r#"
+import std.Env;
+import std.hash;
+import std.math;
+import std.sort;
+import std.text;
+
+pub fn main(env: &Env) -> u8 {
+    @assert(math.abs_i64(-5) == 5);
+    @assert(math.min_i64(3, 7) == 3);
+    @assert(math.max_i64(3, 7) == 7);
+    @assert(math.clamp_i64(9, 1, 4) == 4);
+    @assert(math.gcd_i64(24, 18) == 6);
+    @assert(math.abs_f64(-2.5) == 2.5);
+    @assert(math.sqrt_f64(9.0) == 3.0);
+
+    @assert(hash.fnv1a("a") == 0xaf63dc4c8601ec8c);
+    @assert(hash.mix_u64(1) == 0x5692161d100b05e5);
+    @assert(hash.hash_i64(1) == hash.hash_i64(1));
+    @assert(hash.combine(1, 2) != hash.combine(2, 1));
+
+    var xs: [5]i64 = [5]i64.{ 3, 1, 4, 1, 5 };
+    sort.sort_i64(&mut xs[0..5]);
+    @assert(sort.is_sorted_i64(&xs[0..5]));
+    @assert(xs[0] == 1);
+    @assert(xs[4] == 5);
+    let found = match sort.binary_search_i64(&xs[0..5], 4) {
+        .some(i) => i,
+        .none => -1,
+    };
+    @assert(found == 3);
+
+    @assert((text.parse_u64("18446744073709551615") catch _ => 0) == 18446744073709551615);
+    @assert((text.parse_hex_u64("0xdeadbeef") catch _ => 0) == 3735928559);
+    @assert(text.parse_bool("true") catch _ => false);
+    @assert(text.eq_ignore_ascii_case("Hello", "hELLo"));
+    return 0;
+}
+"#;
+    let analysis = analyze(Source::new("test.ingot", source));
+    for d in &analysis.diagnostics {
+        eprintln!("{}", d.to_human(&analysis.sources));
+    }
+    assert!(analysis.diagnostics.is_empty());
+    let outcome = interp::run(&analysis).unwrap();
+    assert_eq!(outcome.status, 0);
+    assert!(outcome.trap.is_none(), "{:?}", outcome.trap);
+}
