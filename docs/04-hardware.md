@@ -87,8 +87,12 @@ object format.
   sharing is avoided. The argument is a constant power of two, no smaller than the
   natural alignment of what it applies to.
 * **Enums** store the tag first, then the payload at the alignment of the most aligned
-  payload. `?&T`, `?&mut T`, `?[]T`, `?Box[T, A]` and `?fn(...)` use the null pointer for
-  `.none` and are the size of the pointer. No other niche is guaranteed.
+  payload. `?&T`, `?&mut T`, `?[]T`, `?Box[T, A]` and `?fn(...)` use a null pointer for
+  `.none` and are the size of the type without `?`. No other niche is guaranteed. An
+  enum with no variants has size 0 and alignment 1.
+* **Vectors** are as large as their width (16, 32 or 64 bytes) and aligned to their
+  size. A **mask** `boolxN` in memory is `N` bytes, one per lane holding 0 or 1, aligned
+  to its size.
 * **Slices** are `{ ptr, len }`, 16 bytes. **Tuples** are structs with fields `0`, `1`...
 * **`&dyn I`** is `{ data pointer, method table pointer }`.
 * The calling convention between Ingot functions is not specified and may change. Small

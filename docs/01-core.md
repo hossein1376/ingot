@@ -77,8 +77,8 @@ warnings.
 | `i8 i16 i32 i64`, `u8 u16 u32 u64` | 1, 2, 4, 8 | two's complement. Lengths and indices are `i64` |
 | `f32 f64` | 4, 8 | IEEE-754 binary32 and binary64 |
 | `bool` | 1 | `true` or `false`, never an integer |
-| `void` | 0 | the type with one value. Used for functions that return nothing |
-| `never` | 0 | the type with no values: the type of `return`, `fail`, `break`, `@panic(...)` |
+| `void` | 0, 1 | the type with one value. Used for functions that return nothing |
+| `never` | 0, 1 | the type with no values: the type of `return`, `fail`, `break`, `@panic(...)` |
 | `[N]T` | N·size(T) | array. `N` is a constant expression |
 | `(A, B, ...)` | struct layout | tuple of two or more. Fields are `.0`, `.1`, ... |
 | `struct` | section 25 | fields in declaration order |
@@ -186,8 +186,10 @@ enum LoadErr { io: from fs.IoErr, parse: from ParseErr, too_large: i64 }
 ### 4.4 Interfaces and implementations
 
 ```ingot
-interface Hash {
-    fn hash(self: &Self, state: &mut Hasher);
+import std.hash.Hasher;
+
+interface Length {
+    fn length_squared(self: &Self) -> f32;
 }
 
 impl Vec3 {
@@ -200,6 +202,10 @@ impl Hash for Vec3 {
         state.write_u32(@bits(u32, self.y));
         state.write_u32(@bits(u32, self.z));
     }
+}
+
+impl Length for Vec3 {
+    fn length_squared(self: &Vec3) -> f32 { return self.dot(self.*); }
 }
 ```
 
@@ -221,6 +227,40 @@ impl Hash for Vec3 {
 * Calls through a generic parameter are resolved at compile time. Dynamic dispatch
   happens only through `&dyn I` and `&mut dyn I`, and only for interfaces whose methods
   do not mention `Self` by value and have no generic parameters.
+* **The built-in interfaces** are declared by the language, as if this were written in
+  every module (they need no import, section 8):
+
+  ```ingot
+  copy enum Ordering { less, equal, greater }
+
+  interface Eq {
+      fn eq(self: &Self, other: &Self) -> bool;
+  }
+  interface Ord: Eq {
+      fn cmp(self: &Self, other: &Self) -> Ordering;
+  }
+  interface Hash {
+      fn hash(self: &Self, state: &mut hash.Hasher);
+  }
+  interface Iter {
+      type Item;
+      fn next(self: &mut Self) -> ?Self.Item from self.*;
+  }
+  interface Format {
+      fn format(self: &Self, out: &mut fmt.Formatter);
+  }
+  ```
+
+  `hash` and `fmt` are `std.hash` and `std.fmt`; a module that implements `Hash` or
+  `Format` imports `std.hash.Hasher` or `std.fmt.Formatter` to name them. A `Formatter`
+  records the first write error itself, and `@format` returns it, so `format` cannot
+  fail. Every integer, `bool`, raw pointer and payload-free enum implements `Eq`, `Ord`
+  and `Hash`, comparing and hashing by value; floats implement `Eq` and `Ord` with the
+  IEEE total order, and nothing else implements them without an `impl`. Every scalar,
+  vector and slice of `u8` implements `Format`. `Ordering` is a builtin name like the
+  interfaces. `Executor` (section 27.2) has no members a program can call; it is
+  implemented only by the executors `std.exec` and `std.gpu` declare, and an `impl
+  Executor` anywhere else is an error.
 * There is no inheritance and no operator overloading. `+` is never a function call.
   The built-in interfaces `Eq`, `Ord` and `Hash` are ordinary: `a.eq(&b)`, `a.cmp(&b)`.
   The operators `==` and `<` work only on scalars, raw pointers and payload-free enums,
@@ -576,7 +616,7 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
   relatives grant `@zero`. Nothing grants `@bits`, which needs concrete types.
 * **Builtin names** need no import, because the compiler itself gives them meaning:
   `Option` and `Result` (section 3), the bounds below, the interfaces `Eq`, `Ord`,
-  `Hash` (section 4.4), `Iter` (section 7.1) and `Format` (section 35), and the kernel
+  `Hash`, `Ordering` (section 4.4), `Iter` (section 7.1) and `Format` (section 35), and the kernel
   names `Executor`, `Idx`, `Idx2`, `Idx3`, `Grid` and `GridMut` (section 27). Every other
   name is declared in the program or imported. A declaration or import of the same name
   hides a builtin name.
@@ -588,7 +628,7 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
   | `Discard` | letting a value go out of scope unused |
   | `Send`, `Sync` | crossing task boundaries (section 20) |
   | `Owned` | holding no borrow, so a value may outlive everything around it (section 13.6) |
-  | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Each implies `Copy` |
+  | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Only scalars satisfy them, so each implies `Copy`, `Discard`, `Owned`, `Send` and `Sync` |
   | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value |
 
   With no bound, a `T` can only be moved, borrowed and passed on, and each `T` value
@@ -602,7 +642,8 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
 * Any function may be called in a constant expression if its execution does not touch a
   `static`, enter `unsafe`, call an `extern` function, spawn, or exceed the evaluation
   step limit. A trap during evaluation is a compile error at the call.
-* Compile-time builtins: `@sizeof(T)`, `@alignof(T)`, `@offsetof(T, field)`,
+* Compile-time builtins: `@sizeof(T)`, `@alignof(T)`, `@offsetof(T, field)` (each an
+  `i64`),
   `@static_assert(cond, "msg")`, and the `@target` record (section 24).
 * There is no reflection over fields and no code generation inside the language.
   `ingot api --json` is the supported way for a tool to learn the shape of a program.

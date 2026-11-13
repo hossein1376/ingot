@@ -262,7 +262,6 @@ pub interface Allocator: Copy {
 | General heap | `Heap` (zero-sized) | obtained from `env.heap`. Size-class allocator with per-worker caches |
 | Arena | `&Arena` | bump allocation. `free` does nothing. Everything is released by `reset` or `deinit` |
 | Fixed buffer | `&FixedBuf` | bump allocation inside a caller-provided `[]mut u8`, typically on the stack |
-| Dynamic | `&dyn Allocator` | when the choice is made at run time. Costs an indirect call |
 
 Allocation failure is an error value, `AllocErr`, never a trap. A fixed-size arena
 filling up is a normal, recoverable event, and the `try` on an allocating call is also

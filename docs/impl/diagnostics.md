@@ -162,8 +162,8 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0505 | `bad_enum_tag` | an explicit tag value without a tag type, a value that does not fit, or two variants with one value | the value | — |
 | E0506 | `impl_wrong_module` | `impl I for T` in a module that declares neither `I` nor `T` | the `impl` | — |
 | E0507 | `duplicate_impl` | `I` is implemented for one type twice | the second (`previous`) | — |
-| E0508 | `impl_for_type_parameter` | `impl I for T` where `T` is a bare type parameter | the type | — |
-| E0509 | `impl_mismatch` | an implementation lacks a required function, adds one, or declares a signature that differs from the interface's, including a `from` or `into` clause the interface does not have | the function name, or the `impl` for a missing one (`signature`) | for a missing function, insert its signature with a body of `@panic("todo")` |
+| E0508 | `impl_for_type_parameter` | `impl I for T` or `impl T` where `T` is a bare type parameter | the type | — |
+| E0509 | `impl_mismatch` | an implementation lacks a required function, adds a function or a constant the interface does not declare, or declares a signature that differs from the interface's, including a `from` or `into` clause the interface does not have | the function name, or the `impl` for a missing one (`signature`) | for a missing function, insert its signature with a body of `@panic("todo")` |
 | E0510 | `not_dyn_capable` | `dyn I` where a method of `I` takes or returns `Self` by value or has generic parameters | the `dyn I` (`declared`: the method) | — |
 | E0511 | `static_not_sync` | the type of a `static` is not `Sync` | the type | — |
 | E0512 | `initializer_not_constant` | **retired**: a non-constant initializer is E0807 | — | — |
@@ -174,6 +174,12 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0517 | `bad_self_type` | a parameter named `self` whose type is not the implementing type, `&` of it or `&mut` of it; or `self` outside an `impl` or interface | the type | — |
 | E0518 | `missing_body` | a function without a body outside an interface or `extern` block, or with one inside an `extern` block | the function name | — |
 | E0519 | `bad_associated_type` | an implementation omits an associated type, or a path names one the interface does not declare | the name, or the `impl` for an omitted one (`signature`: the `type` line of the interface) | — |
+| E0520 | `alias_cycle` | a type alias expands, directly or through other aliases, to a type that contains itself | the alias name | — |
+| E0521 | `negative_length` | an array length is negative | the length | — |
+| E0522 | `bad_tag_type` | the tag type of an enum is not an integer type | the type | — |
+| E0523 | `not_an_interface` | an `impl ... for`, a bound or a `dyn` names something that is not an interface or a built-in bound, or `Fn`, `FnMut` or `FnOnce` is written without a signature | the name | — |
+| E0524 | `interface_as_type` | an interface or a bound is used as a type | the name | — |
+| E0525 | `impl_not_allowed` | an `impl` of `Copy`, `Discard`, `Owned`, a numeric bound or an `Fn` bound (these are properties, not interfaces), or of `Executor` outside `std` | the interface name | — |
 
 ## 7. Statements, patterns and control flow (E06xx)
 
@@ -223,6 +229,8 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
 | E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond` | the builtin call | — |
 | E0811 | `layout_depends_on_parameter` | `@bits` or `@zero` on a type parameter with no bound that grants it | the builtin call | — |
+| E0812 | `constant_cycle` | the value of a constant depends on itself | the constant's name | — |
+| E0813 | `wrong_generic_argument_kind` | a type is given for a constant generic parameter, or a constant for a type parameter | the argument | — |
 
 ## 10. Moves and linear values (E10xx)
 
@@ -310,7 +318,7 @@ with a `spawn` related span.
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E1601 | `not_ffi_type` | a parameter or result of an `extern` declaration or `export fn` is not an FFI type (§29) | the type | — |
+| E1601 | `not_ffi_type` | a parameter or result of an `extern` declaration or `export fn` is not an FFI type (§29); a fallible result `T ! E` never is | the type | — |
 | E1602 | `bad_variadic_argument` | a variadic argument that is an integer narrower than 32 bits, an `f32`, or not a scalar or raw pointer | the argument | append ` as i32`, ` as u32` or ` as f64` when that is lossless |
 | E1603 | `unknown_abi` | an ABI string other than `"c"`, `"c-blocking"`, `"c-bigstack"` | the string | — |
 | E1604 | `bad_export` | an `export fn` that is generic, fallible, or shares its symbol with another | the name | — |
