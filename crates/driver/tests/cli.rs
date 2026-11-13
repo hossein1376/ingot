@@ -79,6 +79,51 @@ fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
 }
 
 #[test]
+fn a_package_of_checked_declarations_is_accepted() {
+    // Phases 1 to 6 check every item here: types, a constant, an alias, an interface
+    // and a foreign declaration. There is no body and no constant outside the
+    // evaluated subset.
+    let main = "const width: i64 = 2 + 2;\n\
+                struct Row { cells: [width]u8 }\n\
+                type Rows = [3]Row;\n\
+                interface Measure { fn measure(self: &Self) -> i64; }\n\
+                extern \"c\" { fn abs(x: i32) -> i32; }\n";
+    let dir = package("decls-only", "name = \"app\"\n", main);
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(0), "{}{}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).contains("\"ok\":true"), "{}", stdout(&o));
+    assert!(!stdout(&o).contains("not_implemented"));
+}
+
+#[test]
+fn a_declaration_error_is_a_rejection() {
+    let dir = package(
+        "decl-error",
+        "name = \"app\"\n",
+        "const too_big: u8 = 255 + 1;\n",
+    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stdout(&o).contains("\"code\":\"E0806\""), "{}", stdout(&o));
+}
+
+#[test]
+fn a_constant_outside_the_evaluated_subset_is_not_accepted() {
+    let dir = package(
+        "const-subset",
+        "name = \"app\"\n",
+        "struct P { x: i64 }\nconst origin: P = P.{ x: 0 };\n",
+    );
+    let o = ingot(&["check"], &dir);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains("not implemented: constant evaluation of a value of type `P`"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
 fn an_error_is_a_rejection_even_when_checking_is_incomplete() {
     let dir = package(
         "reject",

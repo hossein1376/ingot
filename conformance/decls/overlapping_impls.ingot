@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 4.4
+
+interface Tagged {
+    fn tag(self: &Self) -> i64 { return 0; }
+}
+
+struct Wrapper[T] { value: T }
+
+impl[T] Tagged for Wrapper[T] {}
+impl Tagged for Wrapper[i64] {} //~ E0507

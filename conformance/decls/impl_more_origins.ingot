@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 13.5
+
+interface Pick {
+    fn pick(self: &Self, other: []u8) -> []u8 from other;
+}
+
+struct Holder { n: i64 }
+
+impl Pick for Holder {
+    fn pick(self: &Holder, other: []u8) -> []u8 from self, other { //~ E0509
+        return other;
+    }
+}

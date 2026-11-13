@@ -1,17 +1,38 @@
-//! Semantic analysis for Ingot: pipeline phase 4 (`when`) and phase 5 (name
-//! resolution), lowering every package to a resolved HIR.
+//! Semantic analysis for Ingot: pipeline phase 4 (`when`), phase 5 (name resolution,
+//! lowering every package to a resolved HIR) and phase 6 (signatures, type properties
+//! and layouts).
 //!
-//! The entry point is [`resolve`]. It takes the packages of a compilation in
-//! dependency order (each file already parsed, or `None` when the file had a lexical
-//! or syntax error) and returns the definitions, one HIR package per input package,
-//! and the diagnostics.
+//! [`resolve`] takes the packages of a compilation in dependency order (each file
+//! already parsed, or `None` when the file had a lexical or syntax error) and returns
+//! the definitions, one HIR package per input package, and the diagnostics.
+//! [`check_declarations`] then builds the [`Declarations`] of all of them.
 
+mod checks;
+pub mod consteval;
 pub mod defs;
 pub mod hir;
+mod layout;
 mod lower;
+pub mod lowering;
+mod props;
 mod resolve;
+pub mod sigs;
 pub mod target;
+mod traits;
+pub mod ty;
 mod when;
+
+pub use layout::{LayoutError, align_up, valid_align};
+pub use sigs::{
+    AliasSig, AlignAttr, Bound, ConstSig, Declarations, EnumSig, FieldLayout, FieldSig, FnSig,
+    GenericSig, Head, ImplOf, ImplSig, ImplTables, InterfaceSig, ItemSig, Layout, LayoutKind,
+    OriginSig, ParamSig, PropBound, Props, StaticSig, StructSig, Tri, VariantSig,
+};
+pub use traits::ImplMatch;
+pub use ty::{
+    ConstArg, ConstValue, FloatTy, FnKind, FnPtrSig, GenericArg, IntTy, Lane, Mutability, Subst,
+    TyKind, TypeId, TypeTable,
+};
 
 pub use defs::{
     Builtin, Def, DefId, DefKind, ModuleData, ModuleId, PackageData, PackageId, Sema, Vis,
@@ -74,5 +95,25 @@ pub fn resolve(sources: &Sources, packages: Vec<PackageInput>, target: &Target) 
     }
 }
 
+/// What phase 6 does not do for a package that has function or test bodies.
+pub const UNCHECKED_BODIES: &str = "type checking of function bodies (pipeline phases 7 to 10)";
+
+/// Run phase 6 for every package of `resolved`. `checked` is the index of the package
+/// the command is about (the last one): the parts of the language that are not
+/// implemented are reported for it only, since an unimplemented part of the standard
+/// library's constants does not make a program that does not use it unchecked.
+pub fn check_declarations(
+    sources: &Sources,
+    resolved: &Output,
+    target: &Target,
+    checked: usize,
+) -> Declarations {
+    let mut cx = lowering::Cx::new(&resolved.sema, &resolved.packages, sources, target, checked);
+    cx.check_all();
+    cx.d
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests6;

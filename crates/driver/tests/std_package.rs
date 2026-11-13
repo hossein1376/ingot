@@ -43,8 +43,17 @@ fn std_resolves_without_a_diagnostic() {
         eprintln!("{}", d.to_human(&analysis.sources));
     }
     assert!(analysis.diagnostics.is_empty());
-    // Declarations are not checked beyond resolution yet, and the result says so.
-    assert_eq!(analysis.not_implemented, vec![UNCHECKED.to_string()]);
+    // std has no body, so phases 1 to 6 check all of it except the executors' constants,
+    // whose struct values the constant evaluator does not cover yet. The result says so.
+    assert_eq!(
+        analysis.not_implemented,
+        vec![
+            "constant evaluation of a value of type `Seq`".to_string(),
+            "constant evaluation of a value of type `Simd`".to_string(),
+            "constant evaluation of a value of type `Par`".to_string(),
+        ]
+    );
+    assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
     assert_eq!(analysis.files, 11);
 }
 
@@ -170,9 +179,12 @@ fn std_has_no_functions_yet() {
     ] {
         let (_, ast) = module(file);
         assert!(
-            !ast.items
-                .iter()
-                .any(|i| matches!(i, Item::Fn(_) | Item::Impl(_))),
+            !ast.items.iter().any(|i| match i {
+                Item::Fn(_) => true,
+                // `unsafe impl Send/Sync` states a property and has no member.
+                Item::Impl(imp) => !imp.members.is_empty(),
+                _ => false,
+            }),
             "{file}"
         );
     }

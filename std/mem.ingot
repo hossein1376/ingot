@@ -2,6 +2,10 @@
 // Capability types: they have no public field, so safe code outside `std` cannot make
 // one (spec section 4.2).
 
-pub struct Heap {}
+/// The general allocator. `Allocator` is `Copy` (section 14.1) and `Heap` is one, and
+/// `env.heap` is copied out of a `&Env`, so the type is `Copy`.
+pub copy struct Heap {}
 
-pub struct Vm {}
+/// An address-space reservation, passed by value (`Arena.init(vm, ...)`, section 14.2)
+/// out of `env.vm`, so it is `Copy`.
+pub copy struct Vm {}

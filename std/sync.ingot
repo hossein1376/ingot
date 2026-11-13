@@ -1,6 +1,18 @@
-// std.sync (spec sections 13.6 and 35). "Contents are `Owned`": a type with interior
-// mutability holds no borrow.
+// std.sync (spec sections 13.6, 20, 21 and 35). "Contents are `Owned`": a type with
+// interior mutability holds no borrow.
 
 pub struct Atomic[T: Owned] {}
 
 pub struct Mutex[T: Owned] {}
+
+// Section 20: `Atomic[T]` is `Send` and `Sync` for every `T`; `Mutex[T]` is both when
+// `T: Send`. These rows are given with `unsafe impl` (section 20) rather than derived
+// from the fields, since the types will hold raw pointers once they have bodies, and
+// the properties must not change when they do.
+unsafe impl[T: Owned] Send for Atomic[T] {}
+
+unsafe impl[T: Owned] Sync for Atomic[T] {}
+
+unsafe impl[T: Owned + Send] Send for Mutex[T] {}
+
+unsafe impl[T: Owned + Send] Sync for Mutex[T] {}

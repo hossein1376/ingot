@@ -145,6 +145,8 @@ pub struct PathRef {
     /// The segments as written (module prefix, then the name).
     pub segments: Vec<(String, Span)>,
     pub args: Vec<GenericArg>,
+    /// The bracketed argument list, `[...]` with the brackets, when one was written.
+    pub args_span: Option<Span>,
     pub fn_sig: Option<FnSig>,
     /// The trailing `.Item` of an associated type, resolved by type later.
     pub assoc: Option<(String, Span)>,
@@ -159,6 +161,9 @@ pub struct FnSig {
     pub span: Span,
 }
 
+// A `Ty` is large and a constant argument is an index; boxing the type would only add a
+// pointer to every argument list of the arena.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum GenericArg {
     Ty(Ty),

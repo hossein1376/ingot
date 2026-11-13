@@ -1,9 +1,10 @@
 //! The front-end pipeline (`docs/impl/pipeline.md`), as far as it is implemented.
 //!
 //! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
-//! every file), 4 (`when`) and 5 (name resolution) run. Phases 6 to 10 do not exist
-//! yet. A package with anything to check in them is not accepted: `Analysis` says so in
-//! `not_implemented`, and the command line exits with status 2 instead of 0.
+//! every file), 4 (`when`), 5 (name resolution) and 6 (signatures, type properties,
+//! layouts) run. Phases 7 to 10 do not exist yet. A package with a function or test
+//! body, or with a constant that phase 6 cannot evaluate, is not accepted: `Analysis`
+//! says so in `not_implemented`, and the command line exits with status 2 instead of 0.
 
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
@@ -14,9 +15,8 @@ use ingot_syntax::parser::{check_operator_mixing, parse};
 use std::io;
 use std::path::Path;
 
-/// What the pipeline does not do yet, reported for a package that has declarations.
-pub const UNCHECKED: &str =
-    "type checking (pipeline phases 6 to 10: signatures, bodies, ownership)";
+/// What the pipeline does not do yet, reported for a package that has bodies.
+pub const UNCHECKED: &str = ingot_sema::UNCHECKED_BODIES;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -135,12 +135,13 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
     // reporting every one of them as unresolved would be wrong: stop at what is known.
     if !package.manifest_failed && package.not_implemented.is_empty() {
         let output = ingot_sema::resolve(&all, inputs, &target);
+        // Phase 6 finishes for every item of every package (std included) before
+        // anything later; nothing in a body is looked at.
+        let declarations = ingot_sema::check_declarations(&all, &output, &target, std_count);
         diagnostics.extend(output.diagnostics);
+        diagnostics.extend(declarations.diagnostics);
         not_implemented.extend(output.not_implemented);
-        // Phases 6 to 10 would check everything that was declared.
-        if output.packages[std_count].has_items() {
-            not_implemented.push(UNCHECKED.to_string());
-        }
+        not_implemented.extend(declarations.not_implemented);
     }
     not_implemented.dedup();
     sort_diagnostics(&mut diagnostics);
