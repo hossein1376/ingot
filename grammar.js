@@ -463,10 +463,13 @@ module.exports = grammar({
         seq($.literal, choice("..", "..="), $.literal),
         seq(optional($.path_type), ".", $.identifier, optional(seq("(", $._pattern, ")"))),
         seq("(", $._pattern, ",", commaSep($._pattern), ")"),
-        seq($.path_type, ".{", optional(commaSep($.field_pattern)), "}")
+        $.struct_pattern
       ),
 
     field_pattern: ($) => seq($.identifier, optional(seq(":", $._pattern))),
+
+    struct_pattern: ($) =>
+      seq($.path_type, ".{", optional(commaSep($.field_pattern)), "}"),
 
     // ---- expressions ----
     _expression: ($) => $.expression,
@@ -535,12 +538,14 @@ module.exports = grammar({
             seq(".", $.identifier),
             seq(".", $.integer),
             ".*",
-            seq(".[", commaSep($._type), "]")
+            $.explicit_type_arguments
           )
         )
       )),
 
     call_expression: ($) => $.postfix_expression,
+
+    explicit_type_arguments: ($) => seq(".[", commaSep($._type), "]"),
 
     arguments: ($) => commaSep($._expression),
 
@@ -560,8 +565,8 @@ module.exports = grammar({
         seq("(", $._expression, ",", commaSep($._expression), ")"),
         $.struct_literal,
         $.array_literal,
+        $.expected_type_literal,
         seq(".", $.identifier, optional(seq("(", optional($.arguments), ")"))),
-        seq(".{", optional($.field_inits), "}"),
         $.closure_expression,
         $.if_expression,
         $.match_expression,
@@ -583,6 +588,8 @@ module.exports = grammar({
         optional(commaSep($._expression)),
         "}"
       ),
+
+    expected_type_literal: ($) => seq(".{", optional($.field_inits), "}"),
 
     field_inits: ($) => commaSep($.field_init),
 

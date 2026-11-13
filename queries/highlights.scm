@@ -172,6 +172,13 @@
   "}"
 ] @punctuation.bracket
 
+; Dot-brace / dot-bracket literals: closing token matches the opening one
+(struct_literal ".{" @punctuation.special "}" @punctuation.special)
+(array_literal ".{" @punctuation.special "}" @punctuation.special)
+(expected_type_literal ".{" @punctuation.special "}" @punctuation.special)
+(struct_pattern ".{" @punctuation.special "}" @punctuation.special)
+(explicit_type_arguments ".[" @punctuation.special "]" @punctuation.special)
+
 [
   ".{"
   ".["
