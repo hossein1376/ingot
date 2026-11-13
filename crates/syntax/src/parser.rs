@@ -337,6 +337,7 @@ impl<'a> Parser<'a> {
                 k,
                 Kw::Let
                     | Kw::Var
+                    | Kw::Try
                     | Kw::If
                     | Kw::Match
                     | Kw::While
@@ -4166,6 +4167,15 @@ mod tests {
         let stmts = fn_stmts(text);
         assert_eq!(stmts.len(), 2);
         assert!(stmts.iter().all(|s| matches!(s, Stmt::Let { .. })));
+    }
+
+    /// `try f();` is a statement (E0206 allows a call under `try`), so a missing `;` before
+    /// it is E0202 and the `try` statement is kept.
+    #[test]
+    fn missing_semicolon_before_a_try_statement_is_e0202() {
+        let text = "fn f() {\n    let a = 1\n    try g();\n}\n";
+        assert_eq!(code_lines(text), [("E0202", 2)]);
+        assert_eq!(fn_stmts(text).len(), 2);
     }
 
     #[test]
