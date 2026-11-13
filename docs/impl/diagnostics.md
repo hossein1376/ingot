@@ -113,7 +113,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0304 | `undefined_name` | a value identifier resolves to nothing | the name | if exactly one imported module exports the name, qualify it; else if one name in scope is within edit distance 2, replace |
 | E0305 | `undefined_type` | a type identifier resolves to nothing | the name | as E0304 |
 | E0306 | `private_item` | a non-`pub` item is named from another module | the name (`declared`) | — |
-| E0307 | `private_field` | a non-`pub` field is read, written or matched from another module | the field name (`declared`) | — |
+| E0307 | `private_field` | a non-`pub` field is read, written or matched from another module; a struct pattern ending in `..` matches every field it leaves out, so it cannot take apart a struct with a private field there (§4.2) | the field name (`declared`) | — |
 | E0308 | `duplicate_definition` | two items, fields, variants, parameters, generic parameters or labels with one name in one scope, or an item and an import of one name in one module. Function overloading is this error | the second, or the item (`previous`: the import) | — |
 | E0309 | `shadowing` | a local or pattern binding has the name of a local or parameter in scope | the new binding (`previous`) | — |
 | E0310 | `unused_import` | an imported name is never used. A use inside any branch of a `when`, taken on this target or not, counts | the import | delete the import line |
