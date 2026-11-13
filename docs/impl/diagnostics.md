@@ -173,7 +173,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0516 | `infinite_type` | a struct or enum contains itself by value | the field's type | — |
 | E0517 | `bad_self_type` | a parameter named `self` whose type is not the implementing type, `&` of it or `&mut` of it; or `self` outside an `impl` or interface | the type | — |
 | E0518 | `missing_body` | a function without a body outside an interface or `extern` block, or with one inside an `extern` block | the function name | — |
-| E0519 | `bad_associated_type` | an implementation omits an associated type, or a path names one the interface does not declare | the name | — |
+| E0519 | `bad_associated_type` | an implementation omits an associated type, or a path names one the interface does not declare | the name, or the `impl` for an omitted one (`signature`: the `type` line of the interface) | — |
 
 ## 7. Statements, patterns and control flow (E06xx)
 
