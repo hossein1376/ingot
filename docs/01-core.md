@@ -52,6 +52,9 @@ warnings.
 
 * One file is one module. A directory with an `ingot.toml` is a package (section 33).
   The module `net/http.ingot` in package `app` has the path `app.net.http`.
+* `main.ingot` at the package root is the package's **root module**. Its path is the
+  package name itself, so its public items are reached as `app.name`: `std.Env` is the
+  item `Env` of `std/main.ingot`. A package with no `main.ingot` has no root module.
 * `import a.b.c;` binds the last segment. That segment is either a module (then its
   public items are reached as `c.name`) or a public item of module `a.b` (then it is
   used directly). `import a.b.c as d;` binds it under another name.
