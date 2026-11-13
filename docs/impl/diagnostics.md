@@ -58,6 +58,10 @@ One JSON object per line on standard output, for `check`, `build`, `test` and `f
   between behaviors (for example how a lossy conversion should treat values that do not
   fit), there is no fix, and the candidates are listed in `message` and `related`.
 * An inserted statement goes on its own line, indented like the line it follows.
+* An inserted member of an `impl` or `interface` goes on its own lines, indented one
+  level (four spaces) deeper than the line of the opening brace, after the last member.
+  An empty `{}` is opened so that the braces end up on their own lines. A body of
+  `@panic("todo")` is written as the block `{ @panic("todo"); }` laid out the same way.
 * `ingot fix` applies the first fix of each diagnostic that does not overlap a fix
   already taken in this round, re-checks, and repeats until a round applies nothing.
 

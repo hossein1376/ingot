@@ -76,7 +76,8 @@ object format.
   agent can reorder them itself.
 * **Alignment** can be raised: `struct Slot align(@target.cache_line) { ... }` on a
   type, `hits: Atomic[i64] align(128)` on a field, and on a `static`. This is how false
-  sharing is avoided.
+  sharing is avoided. The argument is a constant power of two, no smaller than the
+  natural alignment of what it applies to.
 * **Enums** store the tag first, then the payload at the alignment of the most aligned
   payload. `?&T`, `?&mut T`, `?[]T`, `?Box[T, A]` and `?fn(...)` use the null pointer for
   `.none` and are the size of the pointer. No other niche is guaranteed.

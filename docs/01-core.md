@@ -306,7 +306,8 @@ a different association order is a `reduce` kernel (section 27), where it is dec
 ### 5.4 Conversions
 
 `x as T` compiles only if every value of the source type is a value of `T`: a narrower
-integer to a wider one of compatible signedness, any 32-bit-or-smaller integer to `f64`,
+integer to a wider one, unless the source is signed and the target unsigned (`u8` to
+`i32` and `i8` to `i64` compile, `i8` to `u64` does not), any 32-bit-or-smaller integer to `f64`,
 any 16-bit-or-smaller integer to `f32`, `f32` to `f64`, `bool` to any integer, a
 payload-free enum to its tag type, `&T` to `*T`, `&mut T` to `*mut T`. Everything else is
 a builtin that names what happens to values that do not fit:
