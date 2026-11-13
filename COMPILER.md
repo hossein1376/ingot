@@ -1,80 +1,121 @@
-# Bootstrap compiler
+# The bootstrap compiler
 
-`src/` is the first Ingot compiler. It is a Rust crate with one binary:
+The first Ingot compiler, written in Rust (rationale §14). The specification in `docs/`
+defines the language; `docs/impl/` says how a compiler is organised; this file records
+how *this* compiler is built and in what order. Where this file and `docs/` disagree,
+`docs/` wins and this file is fixed.
 
-```sh
-cargo run -- check FILE        # diagnostics, human or --json
-cargo run -- run FILE          # check, then evaluate main
-cargo run -- test FILE         # check and run test blocks
-cargo run -- cost FILE         # surviving checks from phase 10
-cargo run -- conformance       # the whole suite
-```
+## History
 
-`cargo test` runs the conformance suite as an integration test.
+An MVP (tag `mvp-reference`) passed the 99 conformance tests but left most of the
+language unimplemented: `const` items did not resolve, bounded generics and interface
+methods did not type-check, unknown names became an opaque "external" type that
+silenced every check, and the ownership checker had soundness holes (an undeclared
+`from` origin, loop-carried loans, `return` inside `par for`). Its lexer, parser,
+diagnostics, fix engine and conformance runner were kept; the semantic layer is being
+rebuilt here from the specification.
 
-## What is implemented
+## Rules for everyone working on it
 
-| Phase | State |
-|---|---|
-| 1 Load | Package directory trees, module names from file paths, `ingot.toml` name/targets, and the `std` source package attached from `std/`. Dependency graphs and content hashes are not loaded |
-| 2 Lex | Complete E01xx set, including maximal munch and builtin spelling |
-| 3 Parse | Grammar through expressions, patterns, items, `when`, kernels and `spawn`/`dispatch`; E02xx recovery |
-| 4 `when` | Parsed; the first branch is used because target selection is not wired |
-| 5 Resolve | Per-module names, imports and aliases, module-qualified items, value/type namespaces, visibility, shadowing and unused bindings |
-| 6 Signatures | Structs, enums, aliases, functions, methods, properties, layouts for the checks |
-| 7 Type check | Literals and context, arithmetic and traps, structs/enums, `match`, results, `try`/`catch`/`fail`, conversions, SIMD types, receivers |
-| 8 Lower | Typed AST to CFG: places, explicit moves, two-phase borrows, storage ranges, deferred copies, cleanups, calls, spawn and scope waits |
-| 9 Ownership | Four CFG dataflows: moves, linear storage ends, origin sets, and loan liveness/access checks (E1001 to E1005, E1101 to E1105, E1202/E1203, E1403) |
-| 10 Check removal | The covered `ingot cost` cases: counted loops and `@assert` length facts |
-| 11 to 14 | Not yet |
+1. **The specification is the only source of language rules.** Silent, ambiguous or
+   contradictory spec, or a conformance test that disagrees with it: stop and report.
+   Never pick a behaviour in code.
+2. **Tests first.** A new diagnostic code, trap or fix gets a conformance test (and a
+   `.fixed.ingot` for a fix) before it is emitted. `conformance/README.md` has the rules
+   for writing tests.
+3. **Never special-case a test** by its file, function or variable names.
+4. **No placeholder semantics.** There is no "unknown, so accept" type. An unresolved
+   name is an error (E0304/E0305) and its declaration is poison; anything else that is
+   not implemented yet is a compiler failure (exit 2, `not implemented: …`), never a
+   silent acceptance.
+5. **Bootstrap subset of Rust:** arenas and indices for trees and graphs, no `Rc`/`Arc`,
+   no trait objects where an enum will do, no macros beyond derives, no `async`, no
+   dependencies.
+6. **Determinism** (pipeline §2): name tables are `BTreeMap` or sorted `Vec`. A
+   `HashMap` may be used for lookup only, never iterated into anything observable.
+7. **The gate** is `scripts/verify.sh`: fmt, clippy `-D warnings`, all tests, the
+   conformance ratchet (`crates/driver/tests/expected_pass.txt` lists exactly the tests
+   that pass; a listed test that fails or an unlisted test that passes fails the build),
+   and byte-identical `check --json` output over three runs.
 
-The evaluator in `src/interp.rs` is a tree-walking second implementation of the
-semantics. It supplies real traps, deferred blocks, results, slices, SIMD values,
-scope tasks and sequential `par for`/`dispatch`. It exists so the front end can be
-tested before LLVM is linked in; it is not a code generator and does not claim the
-performance model.
+## Crates
 
-## Layout
+| Crate | Phases (pipeline §1) | Contents |
+|---|---|---|
+| `ingot-diag` | — | spans, sources, the diagnostic type and JSON, the code catalog |
+| `ingot-syntax` | 2, 3 | tokens, lexer, AST, parser (kept from the MVP) |
+| `ingot-sema` | 4–7 | `when`, name resolution, signatures, type properties, body type-checking, constant evaluation |
+| `ingot-cfg` | 8–10 | lowering to a CFG, the ownership checker, check removal and cost items |
+| `ingot-codegen` | 11–14 | instantiation, LLVM IR text, linking with `clang` |
+| `ingot-driver` | 1 | loading, the pipeline, `ingot` CLI, fix engine, conformance runner |
 
-| File | Role |
-|---|---|
-| `src/lexer.rs`, `src/token.rs` | phase 2 |
-| `src/ast.rs`, `src/parser.rs` | phase 3 and the parenthesization rule |
-| `src/check.rs`, `src/check_body.rs` | phases 5 to 7 |
-| `src/cfg.rs` | phase 8: lowering to basic blocks, places and cleanup edges |
-| `src/cfg_check.rs` | phase 9: moves, linear values, origins, loans and the function boundary |
-| `src/types.rs` | semantic types and §10 properties |
-| `src/cost.rs` | first phase-10 pass |
-| `src/interp.rs` | evaluator for `run`, `test`, `trap` |
-| `src/diagnostic.rs` | catalog names, JSON lines, related spans and fixes |
-| `src/conformance.rs` | `expect:` runner |
+A crate depends only on crates above it in this table.
 
-## Deliberate limits
+## Data model of `ingot-sema`
 
-* `std/` is a real package tree with `Env`, `mem`, `io`, `fs`, `net`, `time`,
-  `text`, `fmt`, `math`, `hash`, `sort`, `sys` and `sys.macos`. Modules that do not exist yet
-  (`std.sync`, `std.task`, `std.simd`, `std.exec`) and `arch.*` stay opaque
-  external names. Dependencies listed in `[deps]` are not loaded.
-* `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes
-  and target selection are not diagnosed yet.
-* The CFG checker splits linear aggregates per field and checks origin stores at
-  the function boundary (E1204/E1205). Its origin sets remain conservative: one
-  set per local, as `docs/impl/checker.md` section 9 allows.
-* Phase 10 runs on the CFG and removes counted-loop, `@assert`, branch-range,
-  widening-cast, slice-range, duplicate-check dominance, and constant checks. The
-  deliberate conservative case left is width>1 vector loads, which keep their check
-  until the vector-specific range analysis lands.
-* Kernel bodies are checked for the direct-call, foreign-index and trapping-op
-  rules. `exec.simd`, `exec.par` and Metal/Vulkan are not implemented.
-* The evaluator runs tasks sequentially. `par for` and `dispatch` are correct but
-  single-threaded.
-* No object code, linker, debug info or platform C ABI yet.
+**Definitions.** Every declared thing gets a `DefId(u32)` in one arena: packages,
+modules, functions, structs, enums, variants, fields, interfaces, interface members,
+associated types, impls, consts, statics, aliases, generic parameters, extern
+functions. `Def { kind: DefKind, name, span, module, vis }`. Language items that are
+"builtin names" (pipeline §4.3: `Option`, `Result`, the built-in bounds, scalar types)
+are pre-made defs, not strings.
 
-## Next steps
+**Scopes.** Each module has two `BTreeMap<String, DefId>` namespaces (values and types,
+pipeline §4.3) holding its items and its imports. Body-local scopes live in the type
+checker.
 
-1. Expand the standard library: allocator implementations, `list`/`str`/`map`
-   containers, then `fs`, `io` and `fmt` over `sys.macos`.
-2. Code generation for `aarch64-macos-m4` through LLVM, starting with arithmetic,
-   calls, arrays and slices. The raw-pointer builtins the containers need are part
-   of this step.
-3. Finish the remaining phase-10 and origin cases once code generation is present.
+**Types** are interned: `TypeId(u32)` into a table of `TyKind`:
+`Int(IntTy) | Float(FloatTy) | Bool | Void | Never | Array(TypeId, Const) |
+Tuple(Vec<TypeId>) | Adt(DefId, Vec<GenericArg>) | Optional(TypeId) |
+Result(TypeId, TypeId) | Ref(Mutability, TypeId) | Slice(Mutability, TypeId) |
+RawPtr(Mutability, TypeId) | FnPtr(FnSig) | Dyn(Mutability, DefId) |
+Vector(ScalarTy, u32) | Mask(u32) | Param(DefId) | Projection(TypeId, DefId) |
+Closure(..) | Poison`. Type equality is `TypeId` equality (pipeline §4.4).
+
+**Poison** (pipeline §3). A failed name or expression has the poison declaration or
+type; every operation with a poison operand yields poison and reports nothing. A body
+with any phase-7 error does not enter phases 8–10.
+
+**Type properties** (spec §10, pipeline §4.5): `Copy`, linear, view, `Send`, `Sync`,
+computed once per type, by a fixed point over the ADT graph in phase 6. A type parameter
+has exactly the properties its bounds grant.
+
+**Signatures** (phase 6) are complete before any body is checked: parameter and result
+types, error type, `from`/`into` clauses, generic parameters with bounds, and per-type
+`impl` and interface tables for method lookup.
+
+**Typed bodies** (phase 7): each function body becomes a `Body` with arenas of locals,
+expressions, statements and blocks (`ExprId`, `LocalId`, …). Every node has its type and
+span. Everything the source leaves implicit is explicit here: the receiver borrow of a
+method call, literal types, resolved callee `DefId` with its generic arguments, the
+conversion of a `try` operand (identity or a `from` variant). Phase 8 reads only this.
+
+**Constant evaluation** (spec §9) interprets typed bodies with a step limit, sharing one
+arithmetic module with check folding so a constant and a run-time value of the same
+expression never differ.
+
+**The standard library** is Ingot source in `std/`, checked by this compiler like any
+package. It is written only as far as conformance tests and programs need it, and only
+with APIs that spec §35 describes. Nothing in `std` is hard-coded in the compiler except
+the entry points of pipeline §8.
+
+## Steps
+
+Each step ends with `scripts/verify.sh` passing and the reviewer having read the full
+diff. "Haiku" and "Sonnet" name the subagent that does the work.
+
+| Step | Who | Content | Done when |
+|---|---|---|---|
+| R0 | Haiku | Workspace restructure; old semantic layer removed; harness fixes; ratchet; spec-snippet parse test | lex/syntax tests pass, gate green |
+| S1 | Sonnet | `ingot-sema` skeleton, defs, module scopes, imports and visibility, consts/statics/aliases as names, `when` (phase 4) for the selected target, poisoning; E03xx, E0612, E1606, E17xx | `names/*`; new tests for the uncovered E03xx/E17xx codes |
+| S2 | Sonnet | Type table, signatures, generics and bounds, interfaces and impls, type properties, layout (§25); E05xx, E0516, signature-level E08xx, E16xx | new E05xx/E16xx tests |
+| S3 | Sonnet | Bodies: expressions, expected types and literals, operators, conversions, calls and method lookup, structs, enums, `match` exhaustiveness, statements; E04xx, E06xx | `types/*`, `syntax/*` semantics |
+| S4 | Sonnet | Bodies: errors and cleanup (E07xx), generic bodies (E0801–E0803), constant evaluation (E0806–E0810), `unsafe` (E13xx), concurrency/SIMD/kernel shape rules | `errors/*` reject tests, `arith/*` constant tests |
+| S5 | Sonnet | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | dumps for every lowering rule |
+| S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
+| S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
+| B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
+
+Alongside each S step, a Haiku subagent may write the missing conformance tests for the
+*next* step's codes (it touches only `conformance/`). The reviewer checks each test
+against the specification before it is used.
