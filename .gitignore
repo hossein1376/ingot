@@ -3,3 +3,6 @@
 *.s.tmp
 /target
 .DS_Store
+
+/tree-sitter-ingot
+/zed-ingot
