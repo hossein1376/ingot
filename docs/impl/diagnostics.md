@@ -187,7 +187,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 |---|---|---|---|---|
 | E0601 | `non_exhaustive_match` | a `match` does not cover every value of its scrutinee | the `match` keyword | insert one arm per missing variant with a body of `@panic("todo")`; for other types insert an `else` arm |
 | E0602 | `unreachable_arm` | an arm can never be chosen because earlier arms cover it | the arm's pattern (`previous`) | delete the arm |
-| E0603 | `bad_pattern` | a pattern does not fit the type it is matched against | the pattern | — |
+| E0603 | `bad_pattern` | a pattern does not fit the type it is matched against, including a struct pattern that leaves out a field without ending in `..` | the pattern | — |
 | E0604 | `refutable_pattern` | a pattern in `let`, `var` or a `for` binding can fail to match | the pattern | — |
 | E0605 | `break_outside_loop` | `break` or `continue` with no enclosing loop | the keyword | — |
 | E0606 | `assign_to_immutable` | assignment to a `let`, a parameter, or a place reached through a shared borrow | the place (`declared`) | for a `let`, change it to `var` |

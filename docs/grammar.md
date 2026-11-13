@@ -148,6 +148,12 @@ literal      = INT | FLOAT | STRING | CSTRING | "true" | "false" ;
   statement when they appear in statement position, and an expression elsewhere. In
   expression form each branch of `if` and each arm of `match` holds exactly one
   expression.
+* **The first argument of a builtin** is a type when it is a `type` that does not
+  begin with an `IDENT` standing alone: a scalar or vector type, a borrow, slice, array,
+  pointer, optional or function type, or a `path_type`, including one that starts with
+  module names (`@lanes(simd.F32)`, `@bits(lib.Ticket, x)`). Field and variant names are
+  lower case, so a path that ends in a `TYPE` token and is followed by `,` or `)` can only
+  be a type. Anything else is an expression.
 * **Struct literals** always use `.{`, so `if x == y { ... }` never needs lookahead to
   tell a literal from a block.
 * **The parenthesization rule** (section 5.1) and the ban on chained comparisons are
