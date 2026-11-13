@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 5.6
+
+fn bumped(n: i64) -> i64 {
+    let bump = fn [n, n](d: i64) -> i64 { return d + n; }; //~ E0611
+    return bump(1);
+}

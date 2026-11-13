@@ -15,4 +15,5 @@ path = "src/main.rs"
 
 [dependencies]
 ingot-diag = { path = "../diag" }
+ingot-sema = { path = "../sema" }
 ingot-syntax = { path = "../syntax" }

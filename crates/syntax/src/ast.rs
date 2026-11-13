@@ -162,6 +162,7 @@ pub enum StructKind {
 pub struct StructDecl {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub kind: StructKind,
     pub generics: Vec<GenericParam>,
     pub fields: Vec<FieldDecl>,
@@ -183,6 +184,7 @@ pub struct FieldDecl {
 pub struct EnumDecl {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub copy: bool,
     pub tag: Option<Ty>,
     pub generics: Vec<GenericParam>,
@@ -204,6 +206,7 @@ pub struct VariantDecl {
 pub struct InterfaceDecl {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub generics: Vec<GenericParam>,
     pub bounds: Vec<PathTy>,
     pub members: Vec<Item>,
@@ -224,6 +227,7 @@ pub struct ImplDecl {
 pub struct ConstDecl {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub ty: Ty,
     pub value: Expr,
     pub span: Span,
@@ -233,6 +237,7 @@ pub struct ConstDecl {
 pub struct StaticDecl {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub ty: Ty,
     pub align: Option<Expr>,
     pub value: Expr,
@@ -243,6 +248,7 @@ pub struct StaticDecl {
 pub struct TypeAlias {
     pub name: String,
     pub name_span: Span,
+    pub public: bool,
     pub generics: Vec<GenericParam>,
     pub ty: Ty,
     pub span: Span,
@@ -250,6 +256,7 @@ pub struct TypeAlias {
 
 #[derive(Clone, Debug)]
 pub struct ExternBlock {
+    pub public: bool,
     pub abi: String,
     pub abi_span: Span,
     pub functions: Vec<FnDecl>,
@@ -258,6 +265,8 @@ pub struct ExternBlock {
 
 #[derive(Clone, Debug)]
 pub struct TestDecl {
+    /// True for a `bench` block, false for a `test` block.
+    pub bench: bool,
     pub name: String,
     pub body: Block,
     pub span: Span,
@@ -305,11 +314,11 @@ pub enum Stmt {
         span: Span,
     },
     Break {
-        label: Option<String>,
+        label: Option<(String, Span)>,
         span: Span,
     },
     Continue {
-        label: Option<String>,
+        label: Option<(String, Span)>,
         span: Span,
     },
     Defer {
@@ -320,19 +329,20 @@ pub enum Stmt {
     Block(Block),
     If(IfStmt),
     While {
+        label: Option<(String, Span)>,
         cond: Cond,
         body: Block,
         span: Span,
     },
     Loop {
-        label: Option<String>,
+        label: Option<(String, Span)>,
         body: Block,
         span: Span,
     },
     For {
         par: bool,
         grain: Option<Expr>,
-        label: Option<String>,
+        label: Option<(String, Span)>,
         vars: Vec<(String, Span)>,
         index: Option<(String, Span)>,
         iter: Expr,
@@ -446,6 +456,9 @@ pub enum ArmBody {
 
 #[derive(Clone, Debug)]
 pub struct SelectArm {
+    /// True for the `else => { ... }` arm. Its pattern is a wildcard and its call a
+    /// poison expression, both with empty spans.
+    pub is_else: bool,
     pub pattern: Pattern,
     pub call: Expr,
     pub body: Block,
@@ -796,7 +809,8 @@ pub enum ExprKind {
     },
     Catch {
         value: Box<Expr>,
-        binding: Option<String>,
+        /// The bound error name, or `None` for `catch _ =>`.
+        binding: Option<(String, Span)>,
         handler: Handler,
         catch_span: Span,
     },
@@ -850,6 +864,10 @@ pub struct Capture {
 pub struct PathTy {
     pub segments: Vec<(String, Span)>,
     pub args: Vec<GenericArg>,
+    /// The signature of a function-trait bound: `Fn(A, B) -> R ! E`. When it is
+    /// present, `segments` is the single name `Fn`, `FnMut` or `FnOnce` and `args`
+    /// is empty.
+    pub fn_sig: Option<FnBoundSig>,
     pub args_span: Option<Span>,
     pub assoc: Option<(String, Span)>,
     pub span: Span,
@@ -867,6 +885,14 @@ impl PathTy {
             &[]
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct FnBoundSig {
+    pub params: Vec<Ty>,
+    pub ret: Option<Box<Ty>>,
+    pub error: Option<Box<Ty>>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
@@ -909,6 +935,8 @@ pub enum Ty {
         span: Span,
     },
     Fn {
+        /// True for `extern fn(...)`, the C-ABI function pointer.
+        ext: bool,
         params: Vec<Ty>,
         ret: Box<Ty>,
         error: Option<Box<Ty>>,

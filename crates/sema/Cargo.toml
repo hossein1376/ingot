@@ -1,0 +1,14 @@
+[package]
+name = "ingot-sema"
+version = "0.1.0"
+edition = "2024"
+description = "Semantic analysis for Ingot: `when` elimination, name resolution and the resolved HIR"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_sema"
+path = "src/lib.rs"
+
+[dependencies]
+ingot-diag = { path = "../diag" }
+ingot-syntax = { path = "../syntax" }

@@ -11,8 +11,17 @@ is fixed.
 ## Layout
 
 A test is a single `name.ingot` file, or a directory with a `main.ingot` in it (for
-tests that need more than one module). A single file is compiled as module `main` of a
-package named `t`. A directory is compiled as a package named after the directory.
+tests that need more than one module). A single file is compiled as the root module of a
+package named `t`. A directory is compiled as a package named after the directory, unless
+it has an `ingot.toml`, which then names the package and is itself under test (it is the
+only way to test E17xx). `main.ingot` is the package's root module (spec section 2), so
+a test that imports its own modules writes `import dirname.lib;`. Only the header of
+`main.ingot` is read; the other files of a directory test have none.
+
+These are conventions of the test harness. A command-line `ingot check DIR` needs a real
+`ingot.toml` (E1701 otherwise), and a file called `x.fixed.ingot` is an ordinary module.
+In a directory test, `main.fixed.ingot` is the fix result of `main.ingot`, and is not
+loaded as a module. The standard library (`std/`) is available to every test.
 
 ## Header
 
@@ -31,6 +40,8 @@ Each test starts with directive lines:
 ## Markers
 
 A marker is a trailing comment `//~ CODE` on a source line.
+
+A marker in an `ingot.toml` is written `#~ CODE`, since `#` starts a TOML comment.
 
 * In a `reject` test, `//~ E1101` means: a diagnostic with code `E1101` whose primary
   span starts on this line. The set of (code, line) pairs reported must equal the set
@@ -67,17 +78,17 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-99 test files: 23 `accept` (of which 11 are fix results), 53
-`reject`, 13 `run`, 6 `trap`, 4 `cost`.
+129 test files: 31 `accept` (of which 16 are fix results), 75 `reject`, 13 `run`,
+6 `trap`, 4 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|
 | E01xx | 2 of 11 | E0101, E0102, E0103, E0106, E0107, E0108, E0109, E0110, E0111 |
 | E02xx | 5 of 13 | E0201, E0202, E0203, E0208, E0210, E0211, E0212, E0213 |
-| E03xx | 5 of 17 | E0301, E0302, E0303, E0305, E0306, E0307, E0308, E0310, E0313, E0314, E0316, E0317 |
+| E03xx | 13 of 17 | E0303, E0307, E0313, E0314 |
 | E04xx | 5 of 21 | E0404, E0405, E0406, E0408, E0409, E0410, E0411, E0412, E0413, E0415, E0416, E0417, E0418, E0419, E0420, E0421 |
 | E05xx | 0 of 19 | E0501, E0502, E0503, E0504, E0505, E0506, E0507, E0508, E0509, E0510, E0511, E0512, E0513, E0514, E0515, E0516, E0517, E0518, E0519 |
-| E06xx | 0 of 13 | E0601, E0602, E0603, E0604, E0605, E0606, E0607, E0608, E0609, E0610, E0611, E0612, E0613 |
+| E06xx | 2 of 13 | E0601, E0602, E0603, E0604, E0605, E0606, E0607, E0608, E0609, E0610, E0613 |
 | E07xx | 4 of 10 | E0702, E0704, E0706, E0708, E0709, E0710 |
 | E08xx | 2 of 11 | E0802, E0803, E0804, E0805, E0807, E0808, E0809, E0810, E0811 |
 | E10xx | 5 of 6 | E1006 |
@@ -86,8 +97,12 @@ trailing white space from both. The fixed file is also a test of its own and exp
 | E13xx | 3 of 4 | E1303 |
 | E14xx | 3 of 10 | E1402, E1404, E1405, E1406, E1408, E1409, E1410 |
 | E15xx | 3 of 14 | E1501, E1502, E1503, E1504, E1510, E1511, E1514, E1516, E1517, E1518, E1519 |
-| E16xx | 0 of 6 | E1601, E1602, E1603, E1604, E1605, E1606 |
-| E17xx | 0 of 7 | E1701, E1702, E1703, E1704, E1705, E1706, E1707 |
+| E16xx | 1 of 6 | E1601, E1602, E1603, E1604, E1605 |
+| E17xx | 5 of 7 | E1703, E1704 |
 | traps | 6 of 17 | T02, T05, T08, T09, T10, T11, T12, T13, T15, T16, T17 |
 
-51 of 191 catalog codes have a test.
+67 of 191 catalog codes have a test.
+
+E1701 for a *missing* `ingot.toml` has no conformance test, because the harness supplies
+a manifest by convention; `crates/driver/tests/cli.rs` covers it. The other cases of
+E1701, and E1702, E1705, have tests in `packages/`.

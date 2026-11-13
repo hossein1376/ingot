@@ -1,0 +1,2 @@
+name = "unknown_target"
+targets = ["aarch64-macos-m4", "riscv64-linux-sifive"] #~ E1702

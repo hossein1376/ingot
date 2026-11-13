@@ -1,0 +1,3 @@
+// std.time (spec section 35). A capability type: no public field.
+
+pub struct Clock {}

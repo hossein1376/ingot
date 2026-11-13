@@ -7,8 +7,8 @@
 //! skip.
 
 use crate::fix;
-use crate::loader;
-use crate::pipeline::{self, Analysis};
+use crate::loader::{self, LoadOptions};
+use crate::pipeline::{self, Analysis, Options};
 use ingot_diag::diagnostic::DEFAULT_TARGET;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -177,8 +177,8 @@ fn test_sources(path: &Path, text: &str) -> Result<Vec<(String, String)>, String
             Some(dir) if !dir.as_os_str().is_empty() => dir,
             _ => Path::new("."),
         };
-        let package =
-            loader::load(dir).map_err(|e| format!("could not load {}: {e}", dir.display()))?;
+        let package = loader::load_with(dir, harness_load())
+            .map_err(|e| format!("could not load {}: {e}", dir.display()))?;
         return Ok(package
             .sources
             .files
@@ -193,13 +193,19 @@ fn test_sources(path: &Path, text: &str) -> Result<Vec<(String, String)>, String
     Ok(vec![(name, text.to_string())])
 }
 
+/// The marker comment of a file: `//~` in source files, `#~` in `ingot.toml`.
+fn marker_prefix(file: &str) -> &'static str {
+    if file.ends_with(".toml") { "#~" } else { "//~" }
+}
+
 fn collect_markers(case: &mut Case, file: &str, text: &str) {
+    let prefix = marker_prefix(file);
     for (i, line) in text.lines().enumerate() {
         let line_no = i as u32 + 1;
-        let Some(idx) = line.find("//~") else {
+        let Some(idx) = line.find(prefix) else {
             continue;
         };
-        let code = line[idx + 3..]
+        let code = line[idx + prefix.len()..]
             .split_whitespace()
             .next()
             .unwrap_or("")
@@ -277,6 +283,31 @@ pub fn run(root: &Path) -> Report {
     report
 }
 
+/// The loader conventions of the harness (see `loader.rs`).
+fn harness_load() -> LoadOptions {
+    LoadOptions { harness: true }
+}
+
+/// The analysis options of a case: the harness's loader and the default target.
+pub fn case_options() -> Options {
+    Options {
+        load: harness_load(),
+        ..Options::default()
+    }
+}
+
+/// What to hand the loader: the directory of a package test, or the single file.
+fn case_root(path: &Path) -> PathBuf {
+    if path.file_name().is_some_and(|name| name == "main.ingot") {
+        match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            _ => PathBuf::from("."),
+        }
+    } else {
+        path.to_path_buf()
+    }
+}
+
 fn run_case(case: &Case) -> Result<(), String> {
     match case.expect {
         Expect::Accept | Expect::Reject => {}
@@ -290,13 +321,20 @@ fn run_expectation(case: &Case) -> Result<(), String> {
     let analysis = analyze_case(case).ok_or_else(|| "could not read source".to_string())?;
     let actual = diagnostics_markers(&analysis);
     if case.expect == Expect::Accept {
-        return if actual.is_empty() {
-            Ok(())
-        } else {
+        return if !actual.is_empty() {
             Err(format!(
                 "accept test reported [{}]",
                 format_markers(&actual)
             ))
+        } else if !analysis.not_implemented.is_empty() {
+            // Not a rejection, but not an acceptance either: part of the check is
+            // missing, and a test must not pass on that.
+            Err(format!(
+                "not implemented: {}",
+                analysis.not_implemented.join("; ")
+            ))
+        } else {
+            Ok(())
         };
     }
     if actual == case.markers {
@@ -311,7 +349,8 @@ fn run_expectation(case: &Case) -> Result<(), String> {
 }
 
 fn run_fix(case: &Case) -> Result<(), String> {
-    let outcome = fix::fix_path(&case.path).map_err(|e| format!("fix engine failed: {e}"))?;
+    let outcome = fix::fix_path_with(&case_root(&case.path), &case_options())
+        .map_err(|e| format!("fix engine failed: {e}"))?;
     let expected_path = fixed_path(&case.path);
     let expected = std::fs::read_to_string(&expected_path)
         .map_err(|e| format!("could not read {}: {e}", expected_path.display()))?;
@@ -386,5 +425,5 @@ pub fn supported(case: &Case) -> bool {
 }
 
 pub fn analyze_case(case: &Case) -> Option<Analysis> {
-    pipeline::analyze_path(&case.path).ok()
+    pipeline::analyze_path_with(&case_root(&case.path), &case_options()).ok()
 }

@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 2
+
+import private_item.lib;
+
+fn f() {
+    lib.secret(); //~ E0306
+}

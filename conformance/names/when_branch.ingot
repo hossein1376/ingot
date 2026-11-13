@@ -1,0 +1,16 @@
+//! expect: accept
+//! section: 7.3
+
+when @target.os == .macos {
+    fn here() -> i64 {
+        return 1;
+    }
+} else {
+    fn here() -> i64 {
+        return 2;
+    }
+}
+
+fn f() -> i64 {
+    return here();
+}

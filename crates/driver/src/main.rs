@@ -1,7 +1,9 @@
-use ingot_diag::diagnostic::DEFAULT_TARGET;
+use ingot_diag::diagnostic::{Diagnostic, json_string};
+use ingot_diag::source::{Sources, Span};
 use ingot_driver::conformance;
 use ingot_driver::fix;
 use ingot_driver::pipeline;
+use ingot_sema::Target;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -25,18 +27,42 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let json = has_flag(&args, "--json");
     match command {
         "check" => {
-            let path = path_arg(&args, &[])?;
+            if has_flag(&args, "--all-targets") {
+                return Err("not implemented: `check --all-targets`".to_string());
+            }
+            let path = path_arg(&args, &["--target"])?;
             let started = Instant::now();
-            let analysis = pipeline::analyze_path(&path).map_err(|e| e.to_string())?;
-            let ok = analysis.diagnostics.is_empty();
+            let mut options = pipeline::Options::default();
+            if let Some(name) = flag_value(&args, "--target")? {
+                if Target::by_name(&name).is_none() {
+                    return Ok(unknown_target(&name, json, started));
+                }
+                options.target = name;
+            }
+            let analysis =
+                pipeline::analyze_path_with(&path, &options).map_err(|e| e.to_string())?;
+            let ok = analysis.accepted();
+            let target = analysis.target.as_str();
             if json {
                 for d in &analysis.diagnostics {
-                    println!("{}", d.to_json(&analysis.sources));
+                    println!("{}", d.to_json_for(&analysis.sources, target));
                 }
+                let not_implemented = if analysis.not_implemented.is_empty() {
+                    String::new()
+                } else {
+                    let mut list = String::new();
+                    for (i, what) in analysis.not_implemented.iter().enumerate() {
+                        if i > 0 {
+                            list.push(',');
+                        }
+                        json_string(&mut list, what);
+                    }
+                    format!(",\"not_implemented\":[{list}]")
+                };
                 println!(
-                    "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":{ok},\"protocol\":1,\"errors\":{},\"files\":{},\"targets\":[\"{DEFAULT_TARGET}\"],\"ms\":{}}}",
+                    "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":{ok},\"protocol\":1,\"errors\":{},\"files\":{},\"targets\":[\"{target}\"],\"ms\":{}{not_implemented}}}",
                     analysis.diagnostics.len(),
-                    analysis.sources.files.len(),
+                    analysis.files,
                     started.elapsed().as_millis()
                 );
             } else {
@@ -47,7 +73,19 @@ fn run(args: Vec<String>) -> Result<u8, String> {
                     eprintln!("ok: no diagnostics");
                 }
             }
-            Ok(if ok { 0 } else { 1 })
+            for what in &analysis.not_implemented {
+                eprintln!("ingot: not implemented: {what}");
+            }
+            // 0: accepted. 1: diagnostics (a rejection stands whatever is unchecked).
+            // 2: nothing found, but part of the check does not exist yet, so the
+            // compiler cannot claim the package is correct.
+            Ok(if !analysis.diagnostics.is_empty() {
+                1
+            } else if ok {
+                0
+            } else {
+                2
+            })
         }
         "fix" => {
             let path = path_arg(&args, &[])?;
@@ -104,6 +142,46 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             Ok(if report.failed == 0 { 0 } else { 1 })
         }
         other => Err(format!("unknown command `{other}`")),
+    }
+}
+
+/// E1702 for a `--target` that is not one of the three. The name has no file, so the
+/// diagnostic points into the command line.
+fn unknown_target(name: &str, json: bool, started: Instant) -> u8 {
+    let text = format!("--target {name}");
+    let source = pipeline::command_line_source(&text);
+    let span = Span::new("--target ".len(), text.len());
+    let d = Diagnostic::new(
+        "E1702",
+        format!(
+            "`{name}` is not a target; the targets are {}",
+            ingot_sema::target::TARGETS.join(", ")
+        ),
+        &source,
+        span,
+    );
+    let mut sources = Sources::default();
+    sources.add(source);
+    if json {
+        println!("{}", d.to_json(&sources));
+        println!(
+            "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":false,\"protocol\":1,\"errors\":1,\"files\":0,\"targets\":[],\"ms\":{}}}",
+            started.elapsed().as_millis()
+        );
+    } else {
+        print!("{}", d.to_human(&sources));
+    }
+    1
+}
+
+/// The value of `--flag VALUE`, if the flag is given.
+fn flag_value(args: &[String], flag: &str) -> Result<Option<String>, String> {
+    match args.iter().position(|a| a == flag) {
+        None => Ok(None),
+        Some(i) => match args.get(i + 1) {
+            Some(v) if !v.starts_with("--") => Ok(Some(v.clone())),
+            _ => Err(format!("{flag} needs a value")),
+        },
     }
 }
 

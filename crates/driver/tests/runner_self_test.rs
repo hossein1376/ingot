@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One marker, on line 5 (`a + b;`). Line 4 is an innocent line.
 const REJECT: &str = "syntax/not_a_statement.ingot";
-/// A reject test whose one diagnostic has a fix.
-const REJECT_WITH_FIX: &str = "syntax/mixed_operators.ingot";
-/// A reject test with a `.fixed.ingot` partner.
-const REJECT_WITH_FIXED: &str = "syntax/struct_literal.ingot";
+/// A reject test whose one diagnostic has a fix, and whose fixed result declares
+/// nothing, so that it is an `accept` test the compiler can pass today.
+const REJECT_WITH_FIX: &str = "names/unused_import.ingot";
+/// The same test, for the mutation of its `.fixed.ingot` partner.
+const REJECT_WITH_FIXED: &str = "names/unused_import.ingot";
 const TRAP: &str = "arith/index_out_of_bounds.ingot";
 const COST: &str = "cost/unproven_index_keeps_check.ingot";
 
@@ -168,9 +169,17 @@ fn altered_fixed_file_fails() {
     copy_test(REJECT_WITH_FIXED, &case);
     let text = copy_fixed(REJECT_WITH_FIXED, &fixed);
     assert_passes(&dir);
-    let altered = text.replacen("Point.{ x:", "Point.{  x:", 1);
-    fs::write(&fixed, altered).unwrap();
-    assert_fails(&dir, "a one-character change to .fixed.ingot");
+    // A comment keeps the fixed file an acceptable program but changes its text.
+    fs::write(&fixed, format!("{text}// altered\n")).unwrap();
+    let report = conformance::run(&dir);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.message.contains("fixed output differs")),
+        "a change to .fixed.ingot must be seen: {:?}",
+        report.failures
+    );
 }
 
 #[test]
@@ -186,10 +195,17 @@ fn original_that_no_longer_needs_the_fix_fails() {
     let text = fs::read_to_string(&case).unwrap();
     let text = text
         .replace("//! expect: reject", "//! expect: accept")
-        .replace(" //~ E0204", "")
-        .replace("a & b == 0", "(a & b) == 0");
-    fs::write(&case, format!("{text}\nfn extra() {{}}\n")).unwrap();
-    assert_fails(&dir, "an original with no fix left to apply");
+        .replace("import std.Env; //~ E0310\n", "// extra\n");
+    fs::write(&case, text).unwrap();
+    let report = conformance::run(&dir);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.message.contains("fixed output differs")),
+        "an original with no fix left to apply must fail: {:?}",
+        report.failures
+    );
 }
 
 #[test]

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 32
+
+fn helper() {
+    _ = @test_env(); //~ E1706
+}

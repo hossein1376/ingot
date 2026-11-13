@@ -8,7 +8,7 @@
 //! the package that was fixed.
 
 use crate::loader::{self, LoadedPackage};
-use crate::pipeline;
+use crate::pipeline::{self, Options};
 use ingot_diag::diagnostic::{Diagnostic, json_string};
 use ingot_diag::source::{Position, Sources, Span};
 use std::fmt::Write as _;
@@ -64,15 +64,26 @@ pub struct FixOutcome {
 }
 
 pub fn fix_path(path: &Path) -> std::io::Result<FixOutcome> {
-    let mut package = loader::load(path)?;
-    fix_package(&mut package)
+    fix_path_with(path, &Options::default())
+}
+
+pub fn fix_path_with(path: &Path, options: &Options) -> std::io::Result<FixOutcome> {
+    let mut package = loader::load_with(path, options.load)?;
+    fix_package_with(&mut package, options)
 }
 
 pub fn fix_package(package: &mut LoadedPackage) -> std::io::Result<FixOutcome> {
+    fix_package_with(package, &Options::default())
+}
+
+pub fn fix_package_with(
+    package: &mut LoadedPackage,
+    options: &Options,
+) -> std::io::Result<FixOutcome> {
     let mut edits = Vec::new();
     let mut rounds = 0u32;
     loop {
-        let analysis = pipeline::analyze(package.clone());
+        let analysis = pipeline::analyze_with(package.clone(), options)?;
         let mut selected: Vec<AppliedEdit> = Vec::new();
         for diagnostic in &analysis.diagnostics {
             let Some(fix) = diagnostic.fixes.first() else {

@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 2
+
+import module_cycle.a;
+
+fn total() -> i64 {
+    return a.from_a();
+}

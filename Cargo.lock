@@ -11,6 +11,15 @@ name = "ingot-driver"
 version = "0.1.0"
 dependencies = [
  "ingot-diag",
+ "ingot-sema",
+ "ingot-syntax",
+]
+
+[[package]]
+name = "ingot-sema"
+version = "0.1.0"
+dependencies = [
+ "ingot-diag",
  "ingot-syntax",
 ]
 

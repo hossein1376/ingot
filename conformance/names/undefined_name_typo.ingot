@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 2
+
+fn f(total: i64) -> i64 {
+    return totl + 1; //~ E0304
+}

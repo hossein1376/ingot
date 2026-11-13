@@ -378,20 +378,20 @@ impl<'a> Parser<'a> {
                 if mods.export || mods.kernel || mods.waitable || mods.unsafe_ {
                     self.diag("E0213", "modifier is not allowed on a struct", self.span());
                 }
-                Item::Struct(self.struct_decl(StructKind::Plain, start))
+                Item::Struct(self.struct_decl(StructKind::Plain, mods.public, start))
             }
             TokenKind::Keyword(Kw::Enum) => {
                 if mods.export || mods.kernel || mods.waitable || mods.unsafe_ {
                     self.diag("E0213", "modifier is not allowed on an enum", self.span());
                 }
-                Item::Enum(self.enum_decl(false, start))
+                Item::Enum(self.enum_decl(false, mods.public, start))
             }
             TokenKind::Keyword(Kw::Copy) => {
                 let copy_span = self.bump().span;
                 if self.at_kw(Kw::Struct) {
-                    Item::Struct(self.struct_decl(StructKind::Copy, start))
+                    Item::Struct(self.struct_decl(StructKind::Copy, mods.public, start))
                 } else if self.at_kw(Kw::Enum) {
-                    Item::Enum(self.enum_decl(true, start))
+                    Item::Enum(self.enum_decl(true, mods.public, start))
                 } else {
                     self.diag(
                         "E0201",
@@ -405,19 +405,21 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Linear) => {
                 let span = self.bump().span;
                 if self.at_kw(Kw::Struct) {
-                    Item::Struct(self.struct_decl(StructKind::Linear, start))
+                    Item::Struct(self.struct_decl(StructKind::Linear, mods.public, start))
                 } else {
                     self.diag("E0201", "`linear` must be followed by `struct`", span);
                     self.recover_item();
                     Item::Poison
                 }
             }
-            TokenKind::Keyword(Kw::Interface) => Item::Interface(self.interface_decl(start)),
+            TokenKind::Keyword(Kw::Interface) => {
+                Item::Interface(self.interface_decl(mods.public, start))
+            }
             TokenKind::Keyword(Kw::Impl) => Item::Impl(self.impl_decl(mods.unsafe_, start)),
-            TokenKind::Keyword(Kw::Const) => Item::Const(self.const_decl(start)),
-            TokenKind::Keyword(Kw::Static) => Item::Static(self.static_decl(start)),
-            TokenKind::Keyword(Kw::Type) => Item::TypeAlias(self.type_alias(start)),
-            TokenKind::Keyword(Kw::Extern) => Item::Extern(self.extern_block(start)),
+            TokenKind::Keyword(Kw::Const) => Item::Const(self.const_decl(mods.public, start)),
+            TokenKind::Keyword(Kw::Static) => Item::Static(self.static_decl(mods.public, start)),
+            TokenKind::Keyword(Kw::Type) => Item::TypeAlias(self.type_alias(mods.public, start)),
+            TokenKind::Keyword(Kw::Extern) => Item::Extern(self.extern_block(mods.public, start)),
             TokenKind::Keyword(Kw::Test) | TokenKind::Keyword(Kw::Bench) => {
                 Item::Test(self.test_decl(start))
             }
@@ -556,35 +558,48 @@ impl<'a> Parser<'a> {
     }
 
     fn bound(&mut self) -> PathTy {
-        // `Fn(A) -> R` is represented as a path named Fn with the component types
-        // as arguments; the checker treats the built-in bounds specially.
+        // `Fn(A) -> R ! E` is a path named Fn, FnMut or FnOnce whose `fn_sig` holds
+        // the parameter, result and error types.
         if let TokenKind::TypeIdent(name) = self.kind().clone()
             && matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce")
             && self.peek_at(1).kind.is_punct(LParen)
-            && let TokenKind::TypeIdent(name) = self.bump().kind
         {
-            let start = self.span().start;
+            let name_span = self.bump().span;
             self.expect(LParen);
-            let mut args = Vec::new();
+            let mut params = Vec::new();
             while !self.at(RParen) && !self.at_eof() {
-                args.push(GenericArg::Ty(self.ty()));
+                params.push(self.ty());
                 if !self.eat(Comma) {
                     break;
                 }
             }
             let close = self.expect(RParen);
+            let mut end = close.end;
+            let mut ret = None;
+            let mut error = None;
             if self.eat(Arrow) {
-                args.push(GenericArg::Ty(self.ty()));
+                let r = self.ty();
+                end = r.span().end;
+                ret = Some(Box::new(r));
                 if self.eat(Bang) {
-                    args.push(GenericArg::Ty(self.ty()));
+                    let e = self.ty();
+                    end = e.span().end;
+                    error = Some(Box::new(e));
                 }
             }
+            let span = Span::new(name_span.start, end);
             return PathTy {
-                segments: vec![(name, close)],
-                args,
-                args_span: Some(close),
+                segments: vec![(name, name_span)],
+                args: Vec::new(),
+                fn_sig: Some(FnBoundSig {
+                    params,
+                    ret,
+                    error,
+                    span,
+                }),
+                args_span: None,
                 assoc: None,
-                span: Span::new(start, close.end),
+                span,
             };
         }
         self.path_ty()
@@ -687,15 +702,14 @@ impl<'a> Parser<'a> {
                         (String::new(), ())
                     }
                 };
-                let _ = op;
-                reduce = Some(String::new());
+                reduce = Some(op);
                 self.expect(RParen);
             }
         }
         (ret, error, from, reduce)
     }
 
-    fn struct_decl(&mut self, kind: StructKind, start: usize) -> StructDecl {
+    fn struct_decl(&mut self, kind: StructKind, public: bool, start: usize) -> StructDecl {
         self.bump(); // struct
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -734,6 +748,7 @@ impl<'a> Parser<'a> {
         StructDecl {
             name,
             name_span,
+            public,
             kind,
             generics,
             fields,
@@ -750,7 +765,7 @@ impl<'a> Parser<'a> {
         e
     }
 
-    fn enum_decl(&mut self, copy: bool, start: usize) -> EnumDecl {
+    fn enum_decl(&mut self, copy: bool, public: bool, start: usize) -> EnumDecl {
         self.bump(); // enum
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -792,6 +807,7 @@ impl<'a> Parser<'a> {
         EnumDecl {
             name,
             name_span,
+            public,
             copy,
             tag,
             generics,
@@ -824,7 +840,7 @@ impl<'a> Parser<'a> {
         mods
     }
 
-    fn interface_decl(&mut self, start: usize) -> InterfaceDecl {
+    fn interface_decl(&mut self, public: bool, start: usize) -> InterfaceDecl {
         self.bump();
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -847,6 +863,7 @@ impl<'a> Parser<'a> {
                 members.push(Item::TypeAlias(TypeAlias {
                     name: n,
                     name_span: sp,
+                    public: mods.public,
                     generics: Vec::new(),
                     ty: Ty::Poison(sp),
                     span: Span::new(sp.start, end),
@@ -862,6 +879,7 @@ impl<'a> Parser<'a> {
         InterfaceDecl {
             name,
             name_span,
+            public,
             generics,
             bounds,
             members,
@@ -899,10 +917,12 @@ impl<'a> Parser<'a> {
                     members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
                 }
                 TokenKind::Keyword(Kw::Const) => {
-                    members.push(Item::Const(self.const_decl(self.span().start)));
+                    members.push(Item::Const(self.const_decl(mods.public, self.span().start)));
                 }
                 TokenKind::Keyword(Kw::Type) => {
-                    members.push(Item::TypeAlias(self.type_alias(self.span().start)));
+                    members.push(Item::TypeAlias(
+                        self.type_alias(mods.public, self.span().start),
+                    ));
                 }
                 _ => {
                     self.unexpected();
@@ -921,7 +941,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn const_decl(&mut self, start: usize) -> ConstDecl {
+    fn const_decl(&mut self, public: bool, start: usize) -> ConstDecl {
         self.bump();
         let (name, name_span) = self.expect_ident();
         self.expect(Colon);
@@ -932,13 +952,14 @@ impl<'a> Parser<'a> {
         ConstDecl {
             name,
             name_span,
+            public,
             ty,
             value,
             span: Span::new(start, end),
         }
     }
 
-    fn static_decl(&mut self, start: usize) -> StaticDecl {
+    fn static_decl(&mut self, public: bool, start: usize) -> StaticDecl {
         self.bump();
         let (name, name_span) = self.expect_ident();
         self.expect(Colon);
@@ -954,6 +975,7 @@ impl<'a> Parser<'a> {
         StaticDecl {
             name,
             name_span,
+            public,
             ty,
             align,
             value,
@@ -961,7 +983,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn type_alias(&mut self, start: usize) -> TypeAlias {
+    fn type_alias(&mut self, public: bool, start: usize) -> TypeAlias {
         self.bump();
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -971,13 +993,14 @@ impl<'a> Parser<'a> {
         TypeAlias {
             name,
             name_span,
+            public,
             generics,
             ty,
             span: Span::new(start, end),
         }
     }
 
-    fn extern_block(&mut self, start: usize) -> ExternBlock {
+    fn extern_block(&mut self, public: bool, start: usize) -> ExternBlock {
         self.bump();
         let mut abi = String::new();
         let mut abi_span = self.span();
@@ -1000,6 +1023,7 @@ impl<'a> Parser<'a> {
         }
         let close = self.expect(RBrace);
         ExternBlock {
+            public,
             abi,
             abi_span,
             functions,
@@ -1008,6 +1032,7 @@ impl<'a> Parser<'a> {
     }
 
     fn test_decl(&mut self, start: usize) -> TestDecl {
+        let bench = self.at_kw(Kw::Bench);
         self.bump();
         let name = if let TokenKind::Str(bytes) = self.kind().clone() {
             self.bump();
@@ -1018,6 +1043,7 @@ impl<'a> Parser<'a> {
         };
         let body = self.block();
         TestDecl {
+            bench,
             name,
             span: Span::new(start, body.span.end),
             body,
@@ -1119,6 +1145,7 @@ impl<'a> Parser<'a> {
         PathTy {
             segments,
             args,
+            fn_sig: None,
             args_span,
             assoc,
             span: Span::new(start, end),
@@ -1234,9 +1261,9 @@ impl<'a> Parser<'a> {
                 if !self.at_kw(Kw::Fn) {
                     self.unexpected();
                 }
-                self.fn_type(start)
+                self.fn_type(true, start)
             }
-            TokenKind::Keyword(Kw::Fn) => self.fn_type(start),
+            TokenKind::Keyword(Kw::Fn) => self.fn_type(false, start),
             TokenKind::TypeIdent(_) | TokenKind::Ident(_) => Ty::Path(self.path_ty()),
             _ => {
                 let span = self.unexpected();
@@ -1245,7 +1272,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn fn_type(&mut self, start: usize) -> Ty {
+    fn fn_type(&mut self, ext: bool, start: usize) -> Ty {
         self.bump(); // fn
         self.expect(LParen);
         let mut params = Vec::new();
@@ -1269,6 +1296,7 @@ impl<'a> Parser<'a> {
             .map(|t| t.span().end)
             .unwrap_or_else(|| ret.span().end);
         Ty::Fn {
+            ext,
             params,
             ret: Box::new(ret),
             error,
@@ -1306,9 +1334,8 @@ impl<'a> Parser<'a> {
                 TokenKind::Keyword(Kw::For | Kw::While | Kw::Loop | Kw::Par)
             )
         {
-            let (label, _) = self.expect_ident();
+            let label = Some(self.expect_ident());
             self.expect(Colon);
-            let label = Some(label);
             if self.at_kw(Kw::For) {
                 return self.for_stmt(label, false, None, start);
             }
@@ -1316,7 +1343,7 @@ impl<'a> Parser<'a> {
                 return self.par_for_stmt(label, start);
             }
             if self.at_kw(Kw::While) {
-                return self.while_stmt(start);
+                return self.while_stmt(label, start);
             }
             return self.loop_stmt(label, start);
         }
@@ -1325,7 +1352,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Var) => self.let_stmt(true, start),
             TokenKind::Keyword(Kw::If) => self.if_stmt(start),
             TokenKind::Keyword(Kw::Match) => self.match_stmt(start),
-            TokenKind::Keyword(Kw::While) => self.while_stmt(start),
+            TokenKind::Keyword(Kw::While) => self.while_stmt(None, start),
             TokenKind::Keyword(Kw::Loop) => self.loop_stmt(None, start),
             TokenKind::Keyword(Kw::For) => self.for_stmt(None, false, None, start),
             TokenKind::Keyword(Kw::Par) => self.par_for_stmt(None, start),
@@ -1354,7 +1381,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Break) => {
                 self.bump();
                 let label = if matches!(self.kind(), TokenKind::Ident(_)) {
-                    Some(self.expect_ident().0)
+                    Some(self.expect_ident())
                 } else {
                     None
                 };
@@ -1367,7 +1394,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Continue) => {
                 self.bump();
                 let label = if matches!(self.kind(), TokenKind::Ident(_)) {
-                    Some(self.expect_ident().0)
+                    Some(self.expect_ident())
                 } else {
                     None
                 };
@@ -1597,19 +1624,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn while_stmt(&mut self, start: usize) -> Stmt {
+    fn while_stmt(&mut self, label: Option<(String, Span)>, start: usize) -> Stmt {
         self.bump();
         let cond = self.cond();
         let body = self.block();
         let end = body.span.end;
         Stmt::While {
+            label,
             cond,
             body,
             span: Span::new(start, end),
         }
     }
 
-    fn loop_stmt(&mut self, label: Option<String>, start: usize) -> Stmt {
+    fn loop_stmt(&mut self, label: Option<(String, Span)>, start: usize) -> Stmt {
         self.bump();
         let body = self.block();
         let end = body.span.end;
@@ -1620,7 +1648,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn par_for_stmt(&mut self, label: Option<String>, start: usize) -> Stmt {
+    fn par_for_stmt(&mut self, label: Option<(String, Span)>, start: usize) -> Stmt {
         self.bump(); // par
         let mut grain = None;
         if self.eat(LParen) {
@@ -1638,7 +1666,7 @@ impl<'a> Parser<'a> {
 
     fn for_stmt(
         &mut self,
-        label: Option<String>,
+        label: Option<(String, Span)>,
         par: bool,
         grain: Option<Expr>,
         start: usize,
@@ -1749,6 +1777,7 @@ impl<'a> Parser<'a> {
                 let body = self.block();
                 let end = body.span.end;
                 arms.push(SelectArm {
+                    is_else: true,
                     pattern: Pattern::Wild(Span::empty(astart)),
                     call: Expr::poison(Span::empty(astart)),
                     body,
@@ -1763,6 +1792,7 @@ impl<'a> Parser<'a> {
             let body = self.block();
             let end = body.span.end;
             arms.push(SelectArm {
+                is_else: false,
                 pattern,
                 call,
                 body,
@@ -2078,10 +2108,9 @@ impl<'a> Parser<'a> {
                         self.bump();
                         None
                     }
-                    TokenKind::Ident(_) => Some(self.expect_ident().0),
+                    TokenKind::Ident(_) => Some(self.expect_ident()),
                     _ => {
-                        let sp = self.unexpected();
-                        let _ = sp;
+                        self.unexpected();
                         None
                     }
                 };

@@ -1,0 +1,209 @@
+//! The `ingot check` command: exit status, the target selection, the manifest, and how
+//! a package that cannot be fully checked yet is reported.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn scratch(label: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "ingot-cli-{}-{label}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn package(label: &str, manifest: &str, main: &str) -> PathBuf {
+    let dir = scratch(label);
+    fs::write(dir.join("ingot.toml"), manifest).unwrap();
+    fs::write(dir.join("main.ingot"), main).unwrap();
+    dir
+}
+
+fn ingot(args: &[&str], dir: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ingot"))
+        .args(args)
+        .arg(dir)
+        .output()
+        .unwrap()
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn a_package_with_nothing_to_check_is_accepted() {
+    let dir = package("empty", "name = \"app\"\n", "import std.Env;\n");
+    // The import is unused, which is an error.
+    let o = ingot(&["check"], &dir);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    assert!(stdout(&o).contains("E0310"));
+
+    let dir = package("empty2", "name = \"app\"\n", "// nothing here\n");
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(0), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("\"ok\":true"), "{out}");
+    assert!(!out.contains("not_implemented"), "{out}");
+}
+
+#[test]
+fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
+    let dir = package("decl", "name = \"app\"\n", "fn f() -> i64 { return 1; }\n");
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains("not implemented: type checking"),
+        "{}",
+        stderr(&o)
+    );
+    let out = stdout(&o);
+    let summary = out.lines().last().unwrap();
+    assert!(summary.contains("\"ok\":false"), "{summary}");
+    assert!(
+        summary.contains("\"not_implemented\":[\"type checking"),
+        "{summary}"
+    );
+    assert!(summary.contains("\"errors\":0"), "{summary}");
+    assert!(summary.contains("\"files\":1"), "{summary}");
+}
+
+#[test]
+fn an_error_is_a_rejection_even_when_checking_is_incomplete() {
+    let dir = package(
+        "reject",
+        "name = \"app\"\n",
+        "fn f() -> i64 { return nope; }\n",
+    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(1));
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E0304\""), "{out}");
+    assert!(out.contains("\"ok\":false"), "{out}");
+}
+
+#[test]
+fn the_target_selects_the_branch_of_a_when() {
+    let main = "when @target.os == .macos {\n\
+                fn here() -> i64 { return 1; }\n\
+                } else {\n\
+                fn there() -> i64 { return 2; }\n\
+                }\n\
+                fn f() -> i64 { return here(); }\n";
+    let dir = package("when", "name = \"app\"\n", main);
+    // The default target is the first of section 24, a macOS machine.
+    let o = ingot(&["check", "--json"], &dir);
+    assert!(!stdout(&o).contains("E0304"), "{}", stdout(&o));
+    assert!(stdout(&o).contains("\"targets\":[\"aarch64-macos-m4\"]"));
+    let o = ingot(
+        &["check", "--json", "--target", "x86_64-linux-znver4"],
+        &dir,
+    );
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E0304\""), "{out}");
+    assert!(
+        out.contains("\"targets\":[\"x86_64-linux-znver4\"]"),
+        "{out}"
+    );
+    assert_eq!(o.status.code(), Some(1));
+}
+
+#[test]
+fn an_unknown_target_is_e1702() {
+    let dir = package("target", "name = \"app\"\n", "// nothing\n");
+    let o = ingot(&["check", "--json", "--target", "riscv64"], &dir);
+    assert_eq!(o.status.code(), Some(1));
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E1702\""), "{out}");
+    assert!(out.lines().last().unwrap().contains("\"ok\":false"));
+}
+
+#[test]
+fn all_targets_is_not_implemented() {
+    let dir = package("all", "name = \"app\"\n", "// nothing\n");
+    let o = ingot(&["check", "--all-targets"], &dir);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(stderr(&o).contains("not implemented"));
+}
+
+#[test]
+fn a_missing_manifest_is_e1701_on_the_command_line_but_not_in_the_harness() {
+    let dir = scratch("nomanifest");
+    fs::write(dir.join("main.ingot"), "// nothing\n").unwrap();
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(1));
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E1701\""), "{out}");
+    assert!(out.contains("\"file\":\"ingot.toml\""), "{out}");
+
+    let options = ingot_driver::pipeline::Options {
+        load: ingot_driver::loader::LoadOptions { harness: true },
+        ..Default::default()
+    };
+    let a = ingot_driver::pipeline::analyze_path_with(&dir, &options).unwrap();
+    assert!(a.diagnostics.is_empty());
+}
+
+#[test]
+fn dependencies_are_not_implemented_yet() {
+    let dir = package(
+        "deps",
+        "name = \"app\"\n[deps]\ncsv = { path = \"../csv\" }\n",
+        "// nothing\n",
+    );
+    let o = ingot(&["check"], &dir);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains("not implemented: dependencies"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn a_bad_manifest_is_reported_and_the_package_is_not_resolved() {
+    let dir = package(
+        "badtoml",
+        "name = \"app\"\nbogus = 1\n",
+        "fn f() -> i64 { return nope; }\n",
+    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(1));
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E1701\""), "{out}");
+    // The package name is not known, so names are not resolved.
+    assert!(!out.contains("E0304"), "{out}");
+}
+
+#[test]
+fn the_output_is_the_same_on_every_run() {
+    let dir = package(
+        "determinism",
+        "name = \"app\"\n",
+        "fn f() -> i64 { return nope + nada; }\nfn g(x: Nothing) { }\n",
+    );
+    let first = stdout(&ingot(&["check", "--json"], &dir));
+    for _ in 0..3 {
+        let again = stdout(&ingot(&["check", "--json"], &dir));
+        let strip = |s: &str| -> String {
+            s.lines()
+                .map(|l| match l.find("\"ms\":") {
+                    Some(i) => l[..i].to_string(),
+                    None => l.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(strip(&first), strip(&again));
+    }
+}

@@ -7,8 +7,8 @@
 use crate::source::{Source, Span};
 use std::fmt::Write as _;
 
-/// The only target this MVP implements. `--target` and `--all-targets` are not
-/// accepted yet, so every diagnostic occurs on this target.
+/// The target `ingot check` uses when `--target` is not given (the first of spec
+/// section 24).
 pub const DEFAULT_TARGET: &str = "aarch64-macos-m4";
 
 #[derive(Clone, Debug)]
@@ -105,6 +105,11 @@ impl Diagnostic {
     }
 
     pub fn to_json(&self, sources: &crate::source::Sources) -> String {
+        self.to_json_for(sources, DEFAULT_TARGET)
+    }
+
+    /// The JSON line of this diagnostic, which occurs on `target`.
+    pub fn to_json_for(&self, sources: &crate::source::Sources, target: &str) -> String {
         let mut out = String::new();
         out.push_str("{\"type\":\"diagnostic\",\"code\":");
         json_string(&mut out, self.code);
@@ -145,9 +150,9 @@ impl Diagnostic {
             }
             out.push_str("]}");
         }
-        out.push_str("],\"targets\":[\"");
-        out.push_str(DEFAULT_TARGET);
-        out.push_str("\"]}");
+        out.push_str("],\"targets\":[");
+        json_string(&mut out, target);
+        out.push_str("]}");
         out
     }
 

@@ -1,0 +1,6 @@
+// std.sync (spec sections 13.6 and 35). "Contents are `Owned`": a type with interior
+// mutability holds no borrow.
+
+pub struct Atomic[T: Owned] {}
+
+pub struct Mutex[T: Owned] {}

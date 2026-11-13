@@ -1,0 +1,7 @@
+// std.mem (spec section 35): the general allocator and address-space reservation.
+// Capability types: they have no public field, so safe code outside `std` cannot make
+// one (spec section 4.2).
+
+pub struct Heap {}
+
+pub struct Vm {}

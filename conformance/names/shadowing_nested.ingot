@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 7
+
+fn f(n: i64) -> i64 {
+    let a = n;
+    if a > 0 {
+        let a = 2; //~ E0309
+        return a;
+    }
+    return a;
+}

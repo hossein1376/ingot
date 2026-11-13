@@ -4,4 +4,5 @@
 pub mod conformance;
 pub mod fix;
 pub mod loader;
+pub mod manifest;
 pub mod pipeline;
