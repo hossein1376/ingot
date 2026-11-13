@@ -433,6 +433,40 @@ impl Cx<'_> {
                     );
                 }
             }
+            // The type must implement every supertrait of the interface too (§4.4).
+            for sup in &isig.supers {
+                if *sup == Bound::Poison {
+                    continue;
+                }
+                let bound = self.d.subst_bound(sup, &s);
+                match self.d.satisfies(sig.target, &bound) {
+                    Tri::No => {
+                        let ty = self.ty_name(sig.target);
+                        let bname = self.bound_name(&bound);
+                        let ipath = self.path_of(self.file_of(iface));
+                        let ispan = self.sema.def(iface).span;
+                        self.error(
+                            "E0801",
+                            format!(
+                                "`{ty}` implements `{}` but not its supertrait `{bname}`",
+                                self.sema.def(iface).name
+                            ),
+                            file,
+                            sig.header,
+                        )
+                        .relate_in("signature", &ipath, ispan);
+                    }
+                    Tri::Unknown => {
+                        let ty = self.ty_name(sig.target);
+                        let bname = self.bound_name(&bound);
+                        self.ni(format!(
+                            "whether `{ty}` satisfies the supertrait `{bname}` (the \
+                             specification does not define it for this type)"
+                        ));
+                    }
+                    Tri::Yes => {}
+                }
+            }
         }
     }
 

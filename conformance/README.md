@@ -78,7 +78,7 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-203 test files: 44 `accept` (of which 20 are fix results), 136 `reject`, 13 `run`,
+204 test files: 44 `accept` (of which 20 are fix results), 137 `reject`, 13 `run`,
 6 `trap`, 4 `cost`.
 
 | Group | Codes with a test | Codes without one |

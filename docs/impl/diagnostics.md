@@ -161,7 +161,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0504 | `duplicate_from_variant` | two variants of one enum are `from` the same type | the second (`previous`) | — |
 | E0505 | `bad_enum_tag` | an explicit tag value without a tag type, a value that does not fit, or two variants with one value | the value | — |
 | E0506 | `impl_wrong_module` | `impl I for T` in a module that declares neither `I` nor `T` | the `impl` | — |
-| E0507 | `duplicate_impl` | `I` is implemented for one type twice | the second (`previous`) | — |
+| E0507 | `duplicate_impl` | `I` is implemented for one type twice, including an `impl` of a built-in interface for a type the language already implements it for (§4.4) | the second (`previous`), or the `impl` | — |
 | E0508 | `impl_for_type_parameter` | `impl I for T` or `impl T` where `T` is a bare type parameter | the type | — |
 | E0509 | `impl_mismatch` | an implementation lacks a required function, adds a function or a constant the interface does not declare, or declares a signature that differs from the interface's, including a `from` or `into` clause the interface does not have | the function name, or the `impl` for a missing one (`signature`) | for a missing function, insert its signature with a body of `@panic("todo")` |
 | E0510 | `not_dyn_capable` | `dyn I` where a method of `I` takes or returns `Self` by value or has generic parameters | the `dyn I` (`declared`: the method) | — |
@@ -218,7 +218,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E0801 | `bound_not_satisfied` | a type argument does not have a bound's property or implement its interface. This includes a view type where `Owned` is required | the argument (`signature`: the bound) | — |
+| E0801 | `bound_not_satisfied` | a type argument does not have a bound's property or implement its interface. This includes a view type where `Owned` is required, and the type of an `impl I for T` that does not implement a supertrait of `I` | the argument, or the `impl` (`signature`: the bound) | — |
 | E0802 | `missing_bound` | a generic body uses an operation on `T` that its bounds do not grant | the operation (`declared`: the parameter) | add the one built-in bound that grants it, if there is exactly one |
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
@@ -318,7 +318,7 @@ with a `spawn` related span.
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E1601 | `not_ffi_type` | a parameter or result of an `extern` declaration or `export fn` is not an FFI type (§29); a fallible result `T ! E` never is | the type | — |
+| E1601 | `not_ffi_type` | a parameter or result of an `extern` declaration or `export fn` is not an FFI type (§29); a fallible result `T ! E` never is (for an `export fn` that is E1604 instead) | the type | — |
 | E1602 | `bad_variadic_argument` | a variadic argument that is an integer narrower than 32 bits, an `f32`, or not a scalar or raw pointer | the argument | append ` as i32`, ` as u32` or ` as f64` when that is lossless |
 | E1603 | `unknown_abi` | an ABI string other than `"c"`, `"c-blocking"`, `"c-bigstack"` | the string | — |
 | E1604 | `bad_export` | an `export fn` that is generic, fallible, or shares its symbol with another | the name | — |

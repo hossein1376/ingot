@@ -716,14 +716,14 @@ impl Declarations {
         }
         if is(b.format) {
             return match self.types.kind(ty) {
-                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Vector(..) => Tri::Yes,
-                TyKind::Mask(_) => Tri::Unknown,
-                TyKind::Slice(m, e) if matches!(self.types.kind(*e), TyKind::Int(IntTy::U8)) => {
-                    if *m == Mutability::Shared {
-                        Tri::Yes
-                    } else {
-                        Tri::Unknown
-                    }
+                TyKind::Int(_)
+                | TyKind::Float(_)
+                | TyKind::Bool
+                | TyKind::Vector(..)
+                | TyKind::Mask(_) => Tri::Yes,
+                // `[]u8` and `[]mut u8` alike: formatting only reads.
+                TyKind::Slice(_, e) if matches!(self.types.kind(*e), TyKind::Int(IntTy::U8)) => {
+                    Tri::Yes
                 }
                 _ => Tri::No,
             };

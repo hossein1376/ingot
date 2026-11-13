@@ -219,6 +219,8 @@ impl Length for Vec3 {
 * An interface lists required functions, may declare associated types (`type Item;`) and
   may provide default bodies. `Self` is the implementing type.
 * `impl I for T` must be in the module that declares `I` or the module that declares `T`.
+  If `I` has supertraits (`interface Ord: Eq`), `T` must implement each of them as well,
+  by an `impl` or as a built-in type.
   A type implements an interface at most once. `T` is a named type, possibly generic
   (`impl[K: Hash] Hash for Pair[K, K]`), never a bare type parameter, so two
   implementations can never overlap.
@@ -257,7 +259,7 @@ impl Length for Vec3 {
   fail. Every integer, `bool`, raw pointer and payload-free enum implements `Eq`, `Ord`
   and `Hash`, comparing and hashing by value; floats implement `Eq` and `Ord` with the
   IEEE total order, and nothing else implements them without an `impl`. Every scalar,
-  vector and slice of `u8` implements `Format`. `Ordering` is a builtin name like the
+  vector, mask and slice of `u8` (`[]u8` or `[]mut u8`) implements `Format`. `Ordering` is a builtin name like the
   interfaces. `Executor` (section 27.2) has no members a program can call; it is
   implemented only by the executors `std.exec` and `std.gpu` declare, and an `impl
   Executor` anywhere else is an error.

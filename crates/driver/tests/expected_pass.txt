@@ -41,6 +41,7 @@ decls/impl_more_origins.ingot
 decls/impl_of_a_builtin_implementation.ingot
 decls/impl_of_a_property.ingot
 decls/impl_of_a_struct.ingot
+decls/impl_without_supertrait.ingot
 decls/impl_wrong_module/main.ingot
 decls/impl_wrong_signature.ingot
 decls/infinite_type.ingot

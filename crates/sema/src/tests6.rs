@@ -2137,7 +2137,7 @@ fn builtin_types_implement_what_section_4_4_lists() {
         IntTy::U32,
         IntTy::U64,
     ];
-    let (y, n, u) = (Tri::Yes, Tri::No, Tri::Unknown);
+    let (y, n) = (Tri::Yes, Tri::No);
     // (Eq, Ord, Hash, Format, Iter)
     let mut table: Vec<(String, TypeId, [Tri; 5])> = Vec::new();
     for i in ints {
@@ -2185,20 +2185,20 @@ fn builtin_types_implement_what_section_4_4_lists() {
         }),
     ));
     table.push(("[4]u8".into(), arr, [n; 5]));
-    // Slices of `u8` format; whether `[]mut u8` does is not said.
+    // Slices of `u8` format, `[]u8` and `[]mut u8` alike (section 4.4).
     let s = d.kind(TyKind::Slice(Mutability::Shared, u8_ty));
     table.push(("[]u8".into(), s, [n, n, n, y, n]));
     let s = d.kind(TyKind::Slice(Mutability::Mut, u8_ty));
-    table.push(("[]mut u8".into(), s, [n, n, n, u, n]));
+    table.push(("[]mut u8".into(), s, [n, n, n, y, n]));
     let s = d.kind(TyKind::Slice(Mutability::Shared, i64_ty));
     table.push(("[]i64".into(), s, [n; 5]));
-    // Vectors format and nothing else; whether a mask is a vector for this is not said.
+    // Vectors and masks format, and nothing else (section 4.4).
     let v = d.kind(TyKind::Vector(crate::Lane::Float(crate::FloatTy::F32), 4));
     table.push(("f32x4".into(), v, [n, n, n, y, n]));
     let v = d.kind(TyKind::Vector(crate::Lane::Int(IntTy::U8), 16));
     table.push(("u8x16".into(), v, [n, n, n, y, n]));
     let m = d.kind(TyKind::Mask(4));
-    table.push(("boolx4".into(), m, [n, n, n, u, n]));
+    table.push(("boolx4".into(), m, [n, n, n, y, n]));
     for (name, ty, want) in table {
         let got = [
             d.satisfies(ty, "Eq"),
