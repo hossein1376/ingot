@@ -29,5 +29,6 @@ syntax/chained_comparison.ingot
 syntax/mixed_operators.ingot
 syntax/not_a_statement.ingot
 syntax/struct_literal.ingot
+syntax/unknown_target_feature.ingot
 syntax/unknown_target_field.ingot
 syntax/when_not_constant.ingot

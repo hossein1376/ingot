@@ -140,12 +140,16 @@ fn std_declares_the_types_the_conformance_tests_import() {
         assert_eq!(s.generics[0].bounds[0].name(), "Owned");
     }
 
+    // The executors of section 27.2, `exec.par` among them.
     let (_, exec) = module("exec.ingot");
-    assert!(
-        exec.items
-            .iter()
-            .any(|i| matches!(i, Item::Const(c) if c.name == "simd" && c.public))
-    );
+    for name in ["seq", "simd", "par"] {
+        assert!(
+            exec.items
+                .iter()
+                .any(|i| matches!(i, Item::Const(c) if c.name == name && c.public)),
+            "exec.{name} is a public const"
+        );
+    }
 }
 
 #[test]

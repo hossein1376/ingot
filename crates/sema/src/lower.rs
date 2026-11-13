@@ -82,6 +82,39 @@ impl<'r, 'a> Lowerer<'r, 'a> {
         self.r.diag(code, message, file, span)
     }
 
+    /// `@target.has(.name)` outside a `when`: a name in neither CPU's feature list is
+    /// E1606 on the name (section 24.3), as it is inside one.
+    fn target_feature_query(&mut self, callee: &ast::Expr, args: &[ast::Expr]) {
+        use ast::ExprKind as K;
+        let K::Field { base, name, .. } = &callee.kind else {
+            return;
+        };
+        let on_target = matches!(&base.kind, K::Builtin { name: b, type_arg: None, args } if b == "target" && args.is_empty());
+        if name != "has" || !on_target {
+            return;
+        }
+        if let [
+            ast::Expr {
+                kind:
+                    K::EnumLit {
+                        path: None,
+                        variant,
+                        variant_span,
+                        payload: None,
+                    },
+                ..
+            },
+        ] = args
+            && self.r.target.has(variant).is_none()
+        {
+            self.diag(
+                "E1606",
+                format!("`@target.has` has no feature `{variant}`"),
+                *variant_span,
+            );
+        }
+    }
+
     fn def_at(&self, span_start: usize) -> DefId {
         *self
             .r
@@ -1553,11 +1586,14 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                 callee,
                 args,
                 args_span,
-            } => hir::ExprKind::Call {
-                callee: self.lower_expr(callee),
-                args: self.lower_exprs(args),
-                args_span: *args_span,
-            },
+            } => {
+                self.target_feature_query(callee, args);
+                hir::ExprKind::Call {
+                    callee: self.lower_expr(callee),
+                    args: self.lower_exprs(args),
+                    args_span: *args_span,
+                }
+            }
             K::Index {
                 base,
                 index,
@@ -1874,13 +1910,12 @@ impl<'r, 'a> Lowerer<'r, 'a> {
 
     fn report_unused_imports(&mut self, declared: &DeclaredPackage) {
         for (module, file, _) in &declared.modules {
-            let unused: Vec<Span> = self
-                .r
-                .sema
-                .module(*module)
+            // A use inside a `when` branch that is not taken still counts (E0310).
+            let data = self.r.sema.module(*module);
+            let unused: Vec<Span> = data
                 .imports
                 .iter()
-                .filter(|i| !i.used)
+                .filter(|i| !i.used && !data.when_mentions.contains(&i.name))
                 .map(|i| i.span)
                 .collect();
             for span in unused {

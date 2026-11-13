@@ -156,6 +156,7 @@ impl<'a> Resolver<'a> {
                 poison_items: BTreeSet::new(),
                 imports: Vec::new(),
                 import_names: BTreeMap::new(),
+                when_mentions: BTreeSet::new(),
                 items: Vec::new(),
             });
             self.sema.module_paths.insert(path.clone(), id);
@@ -192,6 +193,7 @@ impl<'a> Resolver<'a> {
                     module.poison_items.insert(name);
                 }
             }
+            self.sema.module_mut(id).when_mentions = result.mentioned;
             modules.push((id, file, ast));
         }
 

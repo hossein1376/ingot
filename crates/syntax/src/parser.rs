@@ -1326,26 +1326,29 @@ impl<'a> Parser<'a> {
 
     fn stmt(&mut self) -> Stmt {
         let start = self.span().start;
-        // label: for/while/loop
+        // label: for/while/loop, or par for
         if matches!(self.kind(), TokenKind::Ident(_))
             && self.peek_at(1).kind.is_punct(Colon)
-            && matches!(
+            && (matches!(
                 self.peek_at(2).kind,
-                TokenKind::Keyword(Kw::For | Kw::While | Kw::Loop | Kw::Par)
-            )
+                TokenKind::Keyword(Kw::For | Kw::While | Kw::Loop)
+            ) || self.par_for_at(2))
         {
             let label = Some(self.expect_ident());
             self.expect(Colon);
             if self.at_kw(Kw::For) {
                 return self.for_stmt(label, false, None, start);
             }
-            if self.at_kw(Kw::Par) {
+            if self.par_for_at(0) {
                 return self.par_for_stmt(label, start);
             }
             if self.at_kw(Kw::While) {
                 return self.while_stmt(label, start);
             }
             return self.loop_stmt(label, start);
+        }
+        if self.par_for_at(0) {
+            return self.par_for_stmt(None, start);
         }
         match self.kind().clone() {
             TokenKind::Keyword(Kw::Let) => self.let_stmt(false, start),
@@ -1355,7 +1358,6 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::While) => self.while_stmt(None, start),
             TokenKind::Keyword(Kw::Loop) => self.loop_stmt(None, start),
             TokenKind::Keyword(Kw::For) => self.for_stmt(None, false, None, start),
-            TokenKind::Keyword(Kw::Par) => self.par_for_stmt(None, start),
             TokenKind::Keyword(Kw::Return) => {
                 self.bump();
                 let value = if self.at(Semicolon) {
@@ -1914,6 +1916,22 @@ impl<'a> Parser<'a> {
 
     fn at_ident(&self, text: &str) -> bool {
         matches!(self.kind(), TokenKind::Ident(s) if s == text)
+    }
+
+    /// Whether a parallel loop starts `n` tokens ahead: `par` directly before `for`, or
+    /// before its grain clause `(grain: e)` (sections 1 and 19). Elsewhere `par` is an
+    /// ordinary name, as in `exec.par` or `let par = 1;`.
+    fn par_for_at(&self, n: usize) -> bool {
+        if !matches!(&self.peek_at(n).kind, TokenKind::Ident(s) if s == "par") {
+            return false;
+        }
+        let next = self.peek_at(n + 1);
+        if next.kind.is_kw(Kw::For) {
+            return true;
+        }
+        next.kind.is_punct(LParen)
+            && matches!(&self.peek_at(n + 2).kind, TokenKind::Ident(s) if s == "grain")
+            && self.peek_at(n + 3).kind.is_punct(Colon)
     }
 
     fn call_expr_after_keyword(&mut self) -> Expr {
@@ -3634,7 +3652,7 @@ fn check_bitwise_child(child: &Expr, source: &Source, out: &mut Vec<Diagnostic>)
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Item, Module};
+    use crate::ast::{ExprKind, Item, Module, Pattern, Stmt};
     use crate::lexer::lex;
     use crate::parser::parse;
     use ingot_diag::diagnostic::Diagnostic;
@@ -3694,5 +3712,62 @@ mod tests {
     fn dots_outside_an_extern_block_are_a_syntax_error() {
         let (_, diagnostics) = parse_text("fn k(...) {}");
         assert!(diagnostics.iter().any(|d| d.code == "E0201"));
+    }
+
+    fn fn_body(text: &str) -> Vec<Stmt> {
+        let (module, diagnostics) = parse_text(text);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let Some(Item::Fn(f)) = module.items.first() else {
+            panic!("expected a function");
+        };
+        f.body.clone().expect("a body").stmts
+    }
+
+    #[test]
+    fn par_directly_before_for_is_a_parallel_loop() {
+        let stmts = fn_body("fn f(xs: []i64) { par for x in xs { } }");
+        assert!(matches!(
+            &stmts[0],
+            Stmt::For {
+                par: true,
+                grain: None,
+                label: None,
+                ..
+            }
+        ));
+        let stmts = fn_body("fn f(xs: []i64) { outer: par for x in xs { break outer; } }");
+        assert!(matches!(
+            &stmts[0],
+            Stmt::For {
+                par: true,
+                label: Some(_),
+                ..
+            }
+        ));
+        let stmts = fn_body("fn f(xs: []i64) { par(grain: 64) for x in xs { } }");
+        assert!(matches!(
+            &stmts[0],
+            Stmt::For {
+                par: true,
+                grain: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn par_elsewhere_is_an_ordinary_name() {
+        let stmts = fn_body("fn f(exec: i64) { let a = exec.par; let par = 1; }");
+        let Stmt::Let { init, .. } = &stmts[0] else {
+            panic!("expected a let");
+        };
+        assert!(matches!(&init.kind, ExprKind::Field { name, .. } if name == "par"));
+        assert!(matches!(
+            &stmts[1],
+            Stmt::Let { pattern: Pattern::Bind { name, .. }, .. } if name == "par"
+        ));
     }
 }

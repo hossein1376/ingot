@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 24.3
+
+when @target.has(.avx1024) { //~ E1606
+    fn wide() {
+    }
+}

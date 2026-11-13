@@ -48,6 +48,13 @@ pub enum Builtin {
     Eq,
     Ord,
     Hash,
+    /// The `Iter` interface (section 7.1).
+    Iter,
+    /// The `Format` interface (section 35).
+    Format,
+    /// `Grid` and `GridMut`: the kernel grids (section 27).
+    Grid,
+    GridMut,
     /// The built-in bounds of section 8.
     Copy,
     Discard,
@@ -65,17 +72,22 @@ pub enum Builtin {
 }
 
 /// The names that resolve to builtins through the builtin scope (the scalar and
-/// vector types are keywords and never looked up by name).
-const NAMED_BUILTINS: [(&str, Builtin); 22] = [
+/// vector types are keywords and never looked up by name). These are exactly the
+/// builtin names of specification section 8 (and pipeline section 4.3).
+const NAMED_BUILTINS: [(&str, Builtin); 26] = [
     ("Option", Builtin::Option),
     ("Result", Builtin::Result),
     ("Idx", Builtin::Idx),
     ("Idx2", Builtin::Idx2),
     ("Idx3", Builtin::Idx3),
     ("Executor", Builtin::Executor),
+    ("Grid", Builtin::Grid),
+    ("GridMut", Builtin::GridMut),
     ("Eq", Builtin::Eq),
     ("Ord", Builtin::Ord),
     ("Hash", Builtin::Hash),
+    ("Iter", Builtin::Iter),
+    ("Format", Builtin::Format),
     ("Copy", Builtin::Copy),
     ("Discard", Builtin::Discard),
     ("Send", Builtin::Send),
@@ -214,6 +226,10 @@ pub struct ModuleData {
     /// Which import binds a name, so that a lookup can mark it used and so that
     /// imports can be told from declared items.
     pub import_names: BTreeMap<(Ns, String), usize>,
+    /// Names that the module's removed `when` branches mention. A use in a branch that
+    /// is not taken on this target still counts, so an import of such a name is not
+    /// unused (E0310).
+    pub when_mentions: BTreeSet<String>,
     /// The module-level definitions in source order.
     pub items: Vec<DefId>,
 }
@@ -278,6 +294,7 @@ impl Sema {
             poison_items: BTreeSet::new(),
             imports: Vec::new(),
             import_names: BTreeMap::new(),
+            when_mentions: BTreeSet::new(),
             items: Vec::new(),
         });
         for (name, builtin) in NAMED_BUILTINS.iter() {

@@ -439,6 +439,30 @@ fn an_unused_import_is_e0310_with_a_fix_and_a_used_one_is_not() {
 }
 
 #[test]
+fn an_import_used_only_in_a_when_branch_is_not_unused_on_any_target() {
+    let stdlib = ("std", &[("", "pub struct Env { }\n")][..]);
+    // Module level: the branch for Linux is removed on macOS, and its use still counts.
+    let src = "import std.Env;\nwhen @target.os == .linux {\n fn f(e: &Env) { }\n}\n";
+    let r = run(&[stdlib, ("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![]);
+    let r = run_on("x86_64-linux-znver4", &[stdlib, ("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![]);
+    // Statement level, in a body.
+    let src =
+        "import std.Env;\nfn g() {\n when @target.os == .linux {\n let e: Env = Env.{};\n }\n}\n";
+    let r = run(&[stdlib, ("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![]);
+    // An undecidable `when` removes both branches, and the uses in them still count.
+    let src = "import std.Env;\nwhen @target.bogus == 1 {\n fn f(e: &Env) { }\n}\n";
+    let r = run(&[stdlib, ("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![("E1606".to_string(), 2)]);
+    // A name that no removed branch mentions is still unused.
+    let src = "import std.Env;\nwhen @target.os == .linux {\n fn f() { }\n}\n";
+    let r = run(&[stdlib, ("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![("E0310".to_string(), 1)]);
+}
+
+#[test]
 fn a_file_with_a_syntax_error_poisons_the_names_imported_from_it() {
     let r = run(&[(
         "app",
@@ -550,10 +574,93 @@ fn an_unknown_target_field_is_e1606() {
 }
 
 #[test]
-fn target_values_the_specification_does_not_define_are_not_guessed() {
-    let r = one("when @target.arch == .aarch64 {\n fn f() { }\n}\n");
+fn a_target_value_outside_the_specification_is_not_guessed() {
+    // `m5` is not a value of `@target.cpu`: its error belongs to type checking, so the
+    // condition is not decided and the result is not accepted.
+    let r = one("when @target.cpu == .m5 {\n fn f() { }\n}\n");
     assert_eq!(r.codes(), vec![]);
     assert!(!r.out.not_implemented.is_empty());
+    let r = one("when @target.arch == .m4 {\n fn f() { }\n}\n");
+    assert!(!r.out.not_implemented.is_empty());
+}
+
+#[test]
+fn arch_and_cpu_are_decided_per_target() {
+    let src = "when @target.arch == .aarch64 && @target.cpu == .m4 {\n fn arm() { }\n\
+               } else {\n fn other() { }\n}\n\
+               when @target.arch == .x86_64 {\n fn x86() { }\n}\n\
+               when @target.cpu != .znver4 {\n fn not_zen() { }\n}\n";
+    let defined = |r: &Run| -> Vec<String> {
+        let mut names: Vec<String> = r
+            .out
+            .sema
+            .defs
+            .iter()
+            .filter(|d| d.kind == DefKind::Fn)
+            .map(|d| d.name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    let r = one(src);
+    assert_eq!(r.codes(), vec![]);
+    assert!(r.out.not_implemented.is_empty());
+    assert_eq!(defined(&r), vec!["arm", "not_zen"]);
+    let r = run_on("x86_64-linux-znver4", &[("app", &[("", src)])]);
+    assert_eq!(r.codes(), vec![]);
+    assert!(r.out.not_implemented.is_empty());
+    assert_eq!(defined(&r), vec!["other", "x86"]);
+    let r = run_on("x86_64-windows-znver4", &[("app", &[("", src)])]);
+    assert_eq!(defined(&r), vec!["other", "x86"]);
+}
+
+#[test]
+fn has_is_true_for_a_feature_of_the_cpu_and_false_for_the_other_cpus() {
+    // `yes` is defined when the feature is present on the target's CPU.
+    let present = |target: &str, feature: &str| {
+        let src = format!(
+            "when @target.has(.{feature}) {{\n fn yes() {{ }}\n}} else {{\n fn no() {{ }}\n}}\n"
+        );
+        let r = run_on(target, &[("app", &[("", src.as_str())])]);
+        assert_eq!(r.codes(), vec![], "{target} .{feature}");
+        r.out.sema.defs.iter().any(|d| d.name == "yes")
+    };
+    assert!(present("aarch64-macos-m4", "sme"));
+    assert!(present("aarch64-macos-m4", "sha3"));
+    assert!(present("aarch64-macos-m4", "aes"));
+    assert!(!present("aarch64-macos-m4", "avx2"));
+    assert!(!present("aarch64-macos-m4", "aesni"));
+    assert!(present("x86_64-linux-znver4", "avx512vbmi2"));
+    assert!(present("x86_64-linux-znver4", "aesni"));
+    assert!(present("x86_64-linux-znver4", "sha"));
+    assert!(!present("x86_64-linux-znver4", "neon"));
+    assert!(!present("x86_64-linux-znver4", "sha2"));
+    assert!(present("x86_64-windows-znver4", "bmi2"));
+    assert!(!present("x86_64-windows-znver4", "sme"));
+}
+
+#[test]
+fn an_unknown_feature_is_e1606_on_the_name() {
+    let src = "when @target.has(.avx1024) {\n fn f() { }\n}\n";
+    for target in crate::target::TARGETS {
+        let r = run_on(target, &[("app", &[("", src)])]);
+        assert_eq!(r.codes(), vec![("E1606".to_string(), 1)], "{target}");
+        let d = &r.out.diagnostics[0];
+        assert_eq!(r.sources.get(0).text_of(d.span), "avx1024");
+    }
+    // Outside a `when` the same query is checked too.
+    let r = one("fn f() -> bool {\n return @target.has(.avx1024);\n}\n");
+    assert_eq!(r.codes(), vec![("E1606".to_string(), 2)]);
+    // A feature name of the M4 that the x86-64 CPU lacks is a name of the other CPU,
+    // not an unknown one.
+    let r = run_on(
+        "x86_64-linux-znver4",
+        &[(
+            "app",
+            &[("", "when @target.has(.neon) {\n fn f() { }\n}\n")],
+        )],
+    );
+    assert_eq!(r.codes(), vec![]);
 }
 
 #[test]
@@ -674,6 +781,56 @@ fn builtin_names_resolve_to_builtin_definitions() {
         r.def_kind(ret),
         Some(DefKind::Builtin(crate::Builtin::Result))
     ));
+
+    // The builtin names are exactly those of section 8, and each of them is a
+    // builtin definition: nothing else is in the builtin scope.
+    let mut expected = vec![
+        "Option", "Result", "Copy", "Discard", "Send", "Sync", "Owned", "Int", "SInt", "UInt",
+        "Float", "Num", "Fn", "FnMut", "FnOnce", "Eq", "Ord", "Hash", "Iter", "Format", "Executor",
+        "Idx", "Idx2", "Idx3", "Grid", "GridMut",
+    ];
+    expected.sort();
+    let scope: Vec<&str> = r
+        .out
+        .sema
+        .module(crate::defs::BUILTIN_MODULE)
+        .types
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(scope, expected);
+
+    // The names of sections 7.1, 27 and 35 resolve in bounds to their builtins.
+    let r = one(
+        "fn f[I: Iter, F: Format, G: Grid, H: GridMut, E: Executor, X: Eq + Ord + Hash](\n\
+         a: I, b: F, c: G, d: H, e: E, x: X) { }\n",
+    );
+    assert_eq!(r.codes(), vec![]);
+    let f = r
+        .pkg()
+        .items
+        .values()
+        .find_map(|i| match i {
+            hir::Item::Fn(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    let kinds: Vec<DefKind> = f
+        .generics
+        .iter()
+        .flat_map(|g| g.bounds.iter())
+        .map(|b| match &b.res {
+            Res::Def(d) => r.out.sema.def(*d).kind,
+            _ => panic!("bound did not resolve"),
+        })
+        .collect();
+    use crate::Builtin::*;
+    assert_eq!(
+        kinds,
+        [Iter, Format, Grid, GridMut, Executor, Eq, Ord, Hash]
+            .map(DefKind::Builtin)
+            .to_vec()
+    );
 }
 
 #[test]

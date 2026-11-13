@@ -32,8 +32,8 @@ warnings.
   kernel let linear loop match mut noinline orelse pub return scope select spawn
   static struct test true try type unsafe var waitable when while`. Six more words
   (`par`, `step`, `over`, `on`, `reduce`, `grain`) are keywords only in one position
-  each and are ordinary identifiers elsewhere: `par` only directly before `for`, so
-  `exec.par` is an ordinary name.
+  each and are ordinary identifiers elsewhere: `par` only where it begins a parallel
+  loop (`par for`, `par(grain: n) for`, section 19), so `exec.par` is an ordinary name.
 * Builtins are spelled `@name`. They are in their own namespace and are part of the
   language, not the library.
 * Comments: `//` to end of line. `///` before a declaration is a doc comment and is
