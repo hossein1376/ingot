@@ -122,8 +122,9 @@ The compiler reports every independent error and nothing that merely follows fro
 ### 4.3 Name resolution
 
 * Scopes, innermost first: block locals, function parameters and generic parameters,
-  module items and imports, builtin types. There is no prelude: `Option`, `Result` and
-  the built-in bounds are builtin names, and everything else is imported.
+  module items and imports, builtin types. There is no prelude. The builtin names are
+  exactly the names the compiler itself must recognize, listed in section 8 of the
+  specification; everything else is imported.
 * Value identifiers and type identifiers are separate namespaces. Variants, fields and
   methods are resolved by type during phase 7, not here.
 

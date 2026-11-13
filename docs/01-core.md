@@ -29,10 +29,11 @@ warnings.
   never`, and the vector types of section 26 (`f32x4`, `u8x16`, `boolx8`, ...).
 * Keywords: `align as bench break catch const continue copy defer dispatch dyn else enum
   errdefer export extern fail false fn for from if impl import in inline interface into
-  kernel let linear loop match mut noinline orelse par pub return scope select spawn
-  static struct test true try type unsafe var waitable when while`. Five more words
-  (`step`, `over`, `on`, `reduce`, `grain`) are keywords only in one position each and
-  are ordinary identifiers elsewhere.
+  kernel let linear loop match mut noinline orelse pub return scope select spawn
+  static struct test true try type unsafe var waitable when while`. Six more words
+  (`par`, `step`, `over`, `on`, `reduce`, `grain`) are keywords only in one position
+  each and are ordinary identifiers elsewhere: `par` only directly before `for`, so
+  `exec.par` is an ordinary name.
 * Builtins are spelled `@name`. They are in their own namespace and are part of the
   language, not the library.
 * Comments: `//` to end of line. `///` before a declaration is a doc comment and is
@@ -57,7 +58,8 @@ warnings.
   item `Env` of `std/main.ingot`. A package with no `main.ingot` has no root module.
 * `import a.b.c;` binds the last segment. That segment is either a module (then its
   public items are reached as `c.name`) or a public item of module `a.b` (then it is
-  used directly). `import a.b.c as d;` binds it under another name.
+  used directly). A module's submodules are not reached through it: `import a.b.c;`
+  and use `c.name`, not `b.c.name`. `import a.b.c as d;` binds it under another name.
 * There is no wildcard import and no merged namespace. Two imports that bind the same
   name are an error.
 * Modules of one package may import each other freely, cycles included. Names are
@@ -572,6 +574,12 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
   kernel is dispatched on an executor that lacks one of its types.
 * `@zero` and `@bits` on a type parameter need a bound that grants them. `Num` and its
   relatives grant `@zero`. Nothing grants `@bits`, which needs concrete types.
+* **Builtin names** need no import, because the compiler itself gives them meaning:
+  `Option` and `Result` (section 3), the bounds below, the interfaces `Eq`, `Ord`,
+  `Hash` (section 4.4), `Iter` (section 7.1) and `Format` (section 35), and the kernel
+  names `Executor`, `Idx`, `Idx2`, `Idx3`, `Grid` and `GridMut` (section 27). Every other
+  name is declared in the program or imported. A declaration or import of the same name
+  hides a builtin name.
 * Built-in bounds:
 
   | Bound | Grants |

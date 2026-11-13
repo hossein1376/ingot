@@ -54,7 +54,15 @@ object format.
   target is not expected to run on any other CPU.
 * `@target` is a compile-time record: `.os`, `.arch`, `.cpu`, `.simd_bits`,
   `.cache_line`, `.page_size`, `.hybrid_cores`, `.smt`, `.gpu_unified`, and
-  `.has(.sme)` style feature queries. Use it with `when` (section 7.3). Core counts are
+  `.has(.sme)` style feature queries. `.arch` is `.aarch64` or `.x86_64`; `.cpu` is
+  `.m4` or `.znver4`. A feature query names a row of the tables in section 24.1 in lower
+  case, without punctuation: `.neon`, `.sme`, `.sme2`, `.lse`, `.crc32`, `.aes`,
+  `.sha2`, `.sha3`, `.fp16`, `.dotprod` on the M4; `.avx512f`, `.avx512cd`, `.avx512bw`,
+  `.avx512dq`, `.avx512vl`, `.avx512ifma`, `.avx512vbmi`, `.avx512vbmi2`,
+  `.avx512vnni`, `.avx512bitalg`, `.avx512vpopcntdq`, `.avx512bf16`, `.avx2`, `.fma3`,
+  `.bmi1`, `.bmi2`, `.popcnt`, `.lzcnt`, `.movbe`, `.adx`, `.aesni`, `.vaes`, `.gfni`,
+  `.sha` on the 7800X3D. A feature that only the other CPU has is `false`; a name in
+  neither list is error E1606. Use it with `when` (section 7.3). Core counts are
   not in it: the M4 Pro is sold with different numbers of cores, so the runtime reads
   them at start-up (`task.workers()`).
 * Code that differs per operating system sits under `when @target.os == ...`. Because

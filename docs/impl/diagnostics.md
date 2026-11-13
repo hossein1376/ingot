@@ -114,10 +114,10 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0305 | `undefined_type` | a type identifier resolves to nothing | the name | as E0304 |
 | E0306 | `private_item` | a non-`pub` item is named from another module | the name (`declared`) | — |
 | E0307 | `private_field` | a non-`pub` field is read, written or matched from another module | the field name (`declared`) | — |
-| E0308 | `duplicate_definition` | two items, fields, variants, parameters, generic parameters or labels with one name in one scope. Function overloading is this error | the second (`previous`) | — |
+| E0308 | `duplicate_definition` | two items, fields, variants, parameters, generic parameters or labels with one name in one scope, or an item and an import of one name in one module. Function overloading is this error | the second, or the item (`previous`: the import) | — |
 | E0309 | `shadowing` | a local or pattern binding has the name of a local or parameter in scope | the new binding (`previous`) | — |
-| E0310 | `unused_import` | an imported name is never used | the import | delete the import line |
-| E0311 | `unused_binding` | a `let`, `var` or pattern binding is never read | the name | — |
+| E0310 | `unused_import` | an imported name is never used. A use inside any branch of a `when`, taken on this target or not, counts | the import | delete the import line |
+| E0311 | `unused_binding` | a `let`, `var` or pattern binding, a `for` variable or the error name of `catch e` is never read. Assigning to the whole variable (`x = ...`) is not a read; a compound assignment or an assignment to a part is. Parameters, captures and scope names are exempt | the name | — |
 | E0312 | `var_never_mutated` | a `var` is never assigned and never exclusively borrowed after its initialization | the `var` keyword | replace with `let` |
 | E0313 | `ambiguous_method` | `value.name(...)` matches a method in two interfaces and none in `impl T` | the method name (`candidate` each) | — |
 | E0314 | `unknown_member` | no field, variant, method or associated item of that name on the type | the name | replace if one member is within edit distance 2 |
@@ -166,8 +166,8 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0509 | `impl_mismatch` | an implementation lacks a required function, adds one, or declares a signature that differs from the interface's, including a `from` or `into` clause the interface does not have | the function name, or the `impl` for a missing one (`signature`) | for a missing function, insert its signature with a body of `@panic("todo")` |
 | E0510 | `not_dyn_capable` | `dyn I` where a method of `I` takes or returns `Self` by value or has generic parameters | the `dyn I` (`declared`: the method) | — |
 | E0511 | `static_not_sync` | the type of a `static` is not `Sync` | the type | — |
-| E0512 | `initializer_not_constant` | a `const` or `static` initializer is not a constant expression | the offending sub-expression | — |
-| E0513 | `static_borrows_non_static` | a `static` or `const` holds a borrow of something that is not a static or a literal | the borrow | — |
+| E0512 | `initializer_not_constant` | **retired**: a non-constant initializer is E0807 | — | — |
+| E0513 | `static_borrows_non_static` | **retired**: at item level the only borrowable places are statics and literals; a borrow of a `const` is E0607 | — | — |
 | E0514 | `bad_main` | the root module's `main` is missing `pub`, has parameters other than `env: &Env`, or returns something other than `void` or `u8`, optionally fallible | the signature | — |
 | E0515 | `bad_align` | `align(n)` where `n` is not a constant power of two, or is below the natural alignment | the argument | — |
 | E0516 | `infinite_type` | a struct or enum contains itself by value | the field's type | — |
