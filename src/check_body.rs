@@ -45,6 +45,8 @@ pub struct Checker<'a> {
     param_into: HashMap<String, Option<String>>,
     from: Vec<Origin>,
     module: String,
+    /// Semantic type of every checked expression, keyed by its start offset.
+    expr_types: HashMap<Span, Type>,
 }
 
 impl<'a> Checker<'a> {
@@ -81,6 +83,7 @@ impl<'a> Checker<'a> {
             param_into: HashMap::new(),
             from: Vec::new(),
             module: module.to_string(),
+            expr_types: HashMap::new(),
         }
     }
 
@@ -132,10 +135,35 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_ownership(&mut self, f: &FnDecl) {
+    fn check_ownership(&mut self, function: &crate::check::Function) {
+        let f = &function.decl;
         let facts: Vec<LocalFact> = self.facts.values().cloned().collect();
-        let diags = crate::ownership::check_function(self.program, self.source, f, &facts);
-        self.diagnostics.extend(diags);
+        let cfg = crate::cfg::lower(
+            self.program,
+            self.source,
+            function,
+            &facts,
+            &self.expr_types,
+        );
+        let bounds: HashMap<String, Vec<String>> = f
+            .generics
+            .iter()
+            .map(|g| {
+                (
+                    g.name.clone(),
+                    g.bounds.iter().map(|b| b.name().to_string()).collect(),
+                )
+            })
+            .collect();
+        let checked = crate::cfg_check::check(
+            self.program,
+            self.source,
+            &cfg,
+            &facts,
+            &bounds,
+            function,
+        );
+        self.diagnostics.extend(checked.diagnostics);
     }
 
     fn declare_param(&mut self, name: &str, ty: Type, span: Span) {
@@ -1538,6 +1566,12 @@ impl<'a> Checker<'a> {
     // ------------------------------------------------------------- expressions
 
     fn check_expr(&mut self, expr: &Expr, expected: Option<&Type>) -> Type {
+        let ty = self.check_expr_inner(expr, expected);
+        self.expr_types.insert(expr.span, ty.clone());
+        ty
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr, expected: Option<&Type>) -> Type {
         match &expr.kind {
             ExprKind::Int {
                 value, negative, ..
@@ -3298,6 +3332,12 @@ impl<'a> Checker<'a> {
     }
 
     fn check_place(&mut self, expr: &Expr, mutable: bool) -> Type {
+        let ty = self.check_place_inner(expr, mutable);
+        self.expr_types.insert(expr.span, ty.clone());
+        ty
+    }
+
+    fn check_place_inner(&mut self, expr: &Expr, mutable: bool) -> Type {
         match &expr.kind {
             ExprKind::Ident(name) => {
                 if mutable {
@@ -3389,6 +3429,14 @@ impl<'a> Checker<'a> {
     }
 
     fn check_assign_place(&mut self, expr: &Expr) -> Option<Type> {
+        let ty = self.check_assign_place_inner(expr);
+        if let Some(t) = &ty {
+            self.expr_types.insert(expr.span, t.clone());
+        }
+        ty
+    }
+
+    fn check_assign_place_inner(&mut self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
             ExprKind::Ident(name) if name == "_" => None,
             ExprKind::Ident(name) => self.local_for_assign(name, expr.span),

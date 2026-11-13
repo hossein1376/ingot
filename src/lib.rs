@@ -6,7 +6,8 @@
 //! can exercise the front end before a code generator exists.
 
 pub mod ast;
-pub mod borrow;
+pub mod cfg;
+pub mod cfg_check;
 pub mod check;
 pub mod conformance;
 pub mod cost;
@@ -14,7 +15,6 @@ pub mod diagnostic;
 pub mod interp;
 pub mod lexer;
 pub mod loader;
-pub mod ownership;
 pub mod parser;
 pub mod source;
 pub mod token;

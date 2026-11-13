@@ -35,6 +35,8 @@ pub struct ConstInfo {
 #[derive(Clone, Debug)]
 pub struct Function {
     pub decl: FnDecl,
+    /// Canonical key in `Program::functions`.
+    pub key: String,
     pub file: String,
     pub module: String,
     pub owner: Option<Type>,
@@ -1102,8 +1104,13 @@ impl<'a> Analyzer<'a> {
         self.generic_bounds = old_bounds;
         self.self_ty = old_self;
 
+        let key = match &owner {
+            Some(o) => format!("{}.{}", method_key(o), f.name),
+            None => self.program.qualify(&self.current_module, &f.name),
+        };
         let function = Function {
             decl: f.clone(),
+            key: key.clone(),
             file: self.source().path.clone(),
             module: self.current_module.clone(),
             owner: owner.clone(),
@@ -1511,6 +1518,7 @@ impl<'a> Analyzer<'a> {
         let f = &function.decl;
         let module = function.module.clone();
         let source = &self.sources.files[self.current_source];
+        let diag_start = self.diagnostics.len();
         let mut checker = Checker::new(
             source,
             &self.program,
@@ -1557,11 +1565,9 @@ impl<'a> Analyzer<'a> {
         }
         checker.pop_scope(true);
         checker.finish();
-        checker.check_ownership(f);
-        let facts: Vec<LocalFact> = checker.facts.values().cloned().collect();
-        let borrow_diags =
-            crate::borrow::check_function(checker.program, checker.source, f, &facts);
-        checker.diagnostics.extend(borrow_diags);
+        if checker.diagnostics.len() == diag_start {
+            checker.check_ownership(function);
+        }
     }
 }
 

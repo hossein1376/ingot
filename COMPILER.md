@@ -23,8 +23,8 @@ cargo run -- conformance       # the whole suite
 | 5 Resolve | Per-module names, imports and aliases, module-qualified items, value/type namespaces, visibility, shadowing and unused bindings |
 | 6 Signatures | Structs, enums, aliases, functions, methods, properties, layouts for the checks |
 | 7 Type check | Literals and context, arithmetic and traps, structs/enums, `match`, results, `try`/`catch`/`fail`, conversions, SIMD types, receivers |
-| 8 Lower | Not yet: ownership and borrow checks run on the typed AST |
-| 9 Ownership | Moves, linear consumption (E1001 to E1005), plus a lexical borrow/origin pass for the conformance cases (E1101 to E1105, E1202 to E1204, E1403) |
+| 8 Lower | Typed AST to CFG: places, explicit moves, two-phase borrows, storage ranges, deferred copies, cleanups, calls, spawn and scope waits |
+| 9 Ownership | Four CFG dataflows: moves, linear storage ends, origin sets, and loan liveness/access checks (E1001 to E1005, E1101 to E1105, E1202/E1203, E1403) |
 | 10 Check removal | The covered `ingot cost` cases: counted loops and `@assert` length facts |
 | 11 to 14 | Not yet |
 
@@ -41,8 +41,8 @@ performance model.
 | `src/lexer.rs`, `src/token.rs` | phase 2 |
 | `src/ast.rs`, `src/parser.rs` | phase 3 and the parenthesization rule |
 | `src/check.rs`, `src/check_body.rs` | phases 5 to 7 |
-| `src/ownership.rs` | moves and linear values (E10xx) |
-| `src/borrow.rs` | first borrow/origin pass (E11xx, E12xx, E1403) |
+| `src/cfg.rs` | phase 8: lowering to basic blocks, places and cleanup edges |
+| `src/cfg_check.rs` | phase 9: moves, linear values, origins, loans and the function boundary |
 | `src/types.rs` | semantic types and §10 properties |
 | `src/cost.rs` | first phase-10 pass |
 | `src/interp.rs` | evaluator for `run`, `test`, `trap` |
@@ -57,9 +57,11 @@ performance model.
   loaded.
 * `ingot.toml` is read for `name` and `targets`; unknown keys, dependency hashes
   and target selection are not diagnosed yet.
-* Borrow and origin checking is a lexical approximation, not the four dataflow
-  analyses in `docs/impl/checker.md`. It is tuned to the conformance suite and is
-  the first thing to replace with the CFG implementation.
+* The CFG checker covers the conformance suite, but the origin analysis is still
+  conservative in places: a few `into`/type-parameter boundary cases rely on the
+  type checker, and partial moves inside a linear aggregate are not yet split per
+  field. The algorithms follow `docs/impl/checker.md` and can be tightened without
+  changing the graph.
 * Kernel bodies are checked for the direct-call, foreign-index and trapping-op
   rules. `exec.simd`, `exec.par` and Metal/Vulkan are not implemented.
 * The evaluator runs tasks sequentially. `par for` and `dispatch` are correct but
@@ -68,7 +70,8 @@ performance model.
 
 ## Next steps
 
-1. Lowering to the CFG, then the four analyses from `docs/impl/checker.md`.
+1. Move the `@assert` and loop facts used by `ingot cost` onto the CFG and finish
+   phase 10, then tighten the remaining origin and partial-move cases.
 2. A real `std` package tree, starting with `sys`, `mem`, `list` and `fmt`.
 3. Code generation for `aarch64-macos-m4` through LLVM, starting with arithmetic,
    calls, arrays and slices.

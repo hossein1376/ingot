@@ -203,6 +203,7 @@ pub fn run_tests(
         // A test body may use `try`; a failure that reaches its end fails the
         // test rather than the compiler.
         let test_fn = Function {
+            key: format!("test.{}", t.decl.name),
             decl: FnDecl {
                 name: t.decl.name.clone(),
                 name_span: t.decl.span,
