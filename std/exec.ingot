@@ -9,6 +9,12 @@ struct Simd {}
 
 struct Par {}
 
+impl Executor for Seq {}
+
+impl Executor for Simd {}
+
+impl Executor for Par {}
+
 pub const seq: Seq = Seq.{};
 
 pub const simd: Simd = Simd.{};

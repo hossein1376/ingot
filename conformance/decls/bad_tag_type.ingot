@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 4.3
+
+enum Mode: f32 { fast, slow } //~ E0522

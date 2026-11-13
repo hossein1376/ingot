@@ -183,6 +183,9 @@ impl<'a> Resolver<'a> {
                 &mut self.not_implemented,
             );
             self.declare_items(id, file, &ast.items);
+            if self.sema.module(id).path == crate::BUILTIN_MODULE_PATH {
+                self.sema.register_builtin_module(id);
+            }
             for (name, ns) in result.poisoned_names {
                 let module = self.sema.module_mut(id);
                 let taken = match ns {

@@ -432,6 +432,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Recover inside the body of an `impl`, an `interface` or an `extern` block. Returns
+    /// false when nothing could be skipped: the token starts an item, so the body was
+    /// not closed and the member loop must stop, or it would never advance.
+    fn recover_member(&mut self) -> bool {
+        let before = self.pos;
+        self.recover_item();
+        self.pos != before
+    }
+
     fn recover_item(&mut self) {
         let mut depth = 0i32;
         while !self.at_eof() {
@@ -872,7 +881,9 @@ impl<'a> Parser<'a> {
                 members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
             } else {
                 self.unexpected();
-                self.recover_item();
+                if !self.recover_member() {
+                    break;
+                }
             }
         }
         let close = self.expect(RBrace);
@@ -926,7 +937,9 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     self.unexpected();
-                    self.recover_item();
+                    if !self.recover_member() {
+                        break;
+                    }
                 }
             }
         }
@@ -1018,7 +1031,9 @@ impl<'a> Parser<'a> {
                 functions.push(self.fn_decl_in(Modifiers::default(), fstart, true));
             } else {
                 self.unexpected();
-                self.recover_item();
+                if !self.recover_member() {
+                    break;
+                }
             }
         }
         let close = self.expect(RBrace);
@@ -3724,6 +3739,23 @@ mod tests {
             panic!("expected a function");
         };
         f.body.clone().expect("a body").stmts
+    }
+
+    /// A member list that meets the start of an item must end instead of looping.
+    #[test]
+    fn an_item_keyword_inside_a_member_list_terminates() {
+        for text in [
+            "impl P {\n    struct X {}\n}\n",
+            "interface I {\n    struct X {}\n}\n",
+            "extern \"c\" {\n    struct X {}\n}\n",
+            "impl Fn(i64) for P {}\nstruct Q {}\n",
+        ] {
+            let (_, diagnostics) = parse_text(text);
+            assert!(
+                !diagnostics.is_empty(),
+                "expected a syntax error for {text:?}"
+            );
+        }
     }
 
     #[test]

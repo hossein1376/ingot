@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 4.4
+
+struct Point { x: i64 }
+
+fn show(value: &dyn Point) { } //~ E0523

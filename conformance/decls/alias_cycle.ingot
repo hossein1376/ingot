@@ -1,0 +1,5 @@
+//! expect: reject
+//! section: 4.5
+
+type Even = Odd; //~ E0520
+type Odd = Even;

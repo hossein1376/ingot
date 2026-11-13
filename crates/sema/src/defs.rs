@@ -42,16 +42,9 @@ pub enum Builtin {
     Idx,
     Idx2,
     Idx3,
-    /// The `Executor` interface (section 27.2).
+    /// The `Executor` interface (section 27.2). It has no members a program can
+    /// call, so unlike the other built-in interfaces it has no declaration.
     Executor,
-    /// The built-in interfaces of section 4.4.
-    Eq,
-    Ord,
-    Hash,
-    /// The `Iter` interface (section 7.1).
-    Iter,
-    /// The `Format` interface (section 35).
-    Format,
     /// `Grid` and `GridMut`: the kernel grids (section 27).
     Grid,
     GridMut,
@@ -71,10 +64,11 @@ pub enum Builtin {
     FnOnce,
 }
 
-/// The names that resolve to builtins through the builtin scope (the scalar and
-/// vector types are keywords and never looked up by name). These are exactly the
-/// builtin names of specification section 8 (and pipeline section 4.3).
-const NAMED_BUILTINS: [(&str, Builtin); 26] = [
+/// The names that resolve to builtins that have no declaration (the scalar and vector
+/// types are keywords and never looked up by name). Together with the names the
+/// builtin declarations (`builtin.ingot`) give, these are exactly the builtin names of
+/// specification section 8 (and pipeline section 4.3).
+const NAMED_BUILTINS: [(&str, Builtin); 21] = [
     ("Option", Builtin::Option),
     ("Result", Builtin::Result),
     ("Idx", Builtin::Idx),
@@ -83,11 +77,6 @@ const NAMED_BUILTINS: [(&str, Builtin); 26] = [
     ("Executor", Builtin::Executor),
     ("Grid", Builtin::Grid),
     ("GridMut", Builtin::GridMut),
-    ("Eq", Builtin::Eq),
-    ("Ord", Builtin::Ord),
-    ("Hash", Builtin::Hash),
-    ("Iter", Builtin::Iter),
-    ("Format", Builtin::Format),
     ("Copy", Builtin::Copy),
     ("Discard", Builtin::Discard),
     ("Send", Builtin::Send),
@@ -355,6 +344,20 @@ impl Sema {
         let id = self.new_builtin(&vector.name(), Builtin::Vector(vector));
         self.vector_defs.push((vector, id));
         id
+    }
+
+    /// Make the types the builtin declarations (`builtin.ingot`) declare in `module`
+    /// the builtin names `Ordering`, `Eq`, ... A declaration or import of the same
+    /// name in a module still hides them (lookups try the module first).
+    pub fn register_builtin_module(&mut self, module: ModuleId) {
+        let declared: Vec<(String, DefId)> = self.modules[module.0 as usize]
+            .types
+            .iter()
+            .map(|(n, d)| (n.clone(), *d))
+            .collect();
+        for (name, def) in declared {
+            self.modules[0].types.insert(name, def);
+        }
     }
 
     /// The definition of a builtin name such as `Option`.

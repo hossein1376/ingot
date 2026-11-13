@@ -54,7 +54,7 @@ fn std_resolves_without_a_diagnostic() {
         ]
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
-    assert_eq!(analysis.files, 11);
+    assert_eq!(analysis.files, 13);
 }
 
 #[test]

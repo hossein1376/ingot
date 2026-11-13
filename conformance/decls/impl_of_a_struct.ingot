@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4
+
+struct Point { x: i64 }
+
+struct Shape { y: i64 }
+
+impl Point for Shape {} //~ E0523

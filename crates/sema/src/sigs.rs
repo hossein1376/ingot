@@ -125,6 +125,7 @@ pub struct FnSig {
     pub ret: TypeId,
     pub ret_span: Span,
     pub error: Option<TypeId>,
+    pub error_span: Option<Span>,
     pub from: Vec<OriginSig>,
     pub variadic: bool,
     pub abi: Option<String>,
@@ -476,6 +477,20 @@ pub struct Obligation {
 
 // ----------------------------------------------------------- the result
 
+/// The definitions the builtin names of section 4.4 and 27.2 stand for. `Ordering`,
+/// `Eq`, `Ord`, `Hash`, `Iter` and `Format` are declarations (`builtin.ingot`);
+/// `Executor` has none. A field is `None` only when the compilation has no `std`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuiltinNames {
+    pub ordering: Option<DefId>,
+    pub eq: Option<DefId>,
+    pub ord: Option<DefId>,
+    pub hash: Option<DefId>,
+    pub iter: Option<DefId>,
+    pub format: Option<DefId>,
+    pub executor: Option<DefId>,
+}
+
 /// Everything phase 6 knows. Phase 7 starts from this.
 pub struct Declarations {
     pub types: TypeTable,
@@ -497,9 +512,8 @@ pub struct Declarations {
     pub obligations: Vec<Obligation>,
     /// For each associated type of an interface: the interface and the name.
     pub assoc_info: BTreeMap<DefId, (DefId, String)>,
-    /// The built-in interfaces (`Eq`, `Ord`, ...): true when a type declared in source
-    /// implements it only through an explicit impl.
-    pub builtin_interfaces: BTreeMap<DefId, bool>,
+    /// The definitions behind the builtin names `Eq`, `Ord`, ... (section 4.4).
+    pub builtins: BuiltinNames,
     /// Structs and enums that contain themselves by value (E0516).
     pub infinite: BTreeSet<DefId>,
     pub diagnostics: Vec<Diagnostic>,
@@ -523,7 +537,7 @@ impl Declarations {
             layouts: BTreeMap::new(),
             obligations: Vec::new(),
             assoc_info: BTreeMap::new(),
-            builtin_interfaces: BTreeMap::new(),
+            builtins: BuiltinNames::default(),
             infinite: BTreeSet::new(),
             diagnostics: Vec::new(),
             not_implemented: Vec::new(),

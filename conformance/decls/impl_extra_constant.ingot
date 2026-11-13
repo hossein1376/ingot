@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 4.4
+
+interface Measure {
+    fn measure(self: &Self) -> i64;
+}
+
+struct Square { side: i64 }
+
+impl Measure for Square {
+    const sides: i64 = 4; //~ E0509
+
+    fn measure(self: &Square) -> i64 {
+        return self.side;
+    }
+}

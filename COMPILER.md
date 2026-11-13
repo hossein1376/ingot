@@ -58,7 +58,15 @@ modules, functions, structs, enums, variants, fields, interfaces, interface memb
 associated types, impls, consts, statics, aliases, generic parameters, extern
 functions. `Def { kind: DefKind, name, span, module, vis }`. Language items that are
 "builtin names" (pipeline §4.3: `Option`, `Result`, the built-in bounds, scalar types)
-are pre-made defs, not strings.
+are pre-made defs, not strings. The exception is what spec §4.4 writes out as Ingot
+text: `Ordering`, `Eq`, `Ord`, `Hash`, `Iter` and `Format`. They are declared in
+`crates/sema/src/builtin.ingot`, which `resolve` adds as a hidden module (`std.<builtin>`,
+file `<builtin>`) to the package `std`, so that the same code that checks a program's
+declarations checks them; the names the module declares become the builtin names.
+No diagnostic may point into that file (`scrub_builtin` turns one that would into a
+compiler failure). The types that implement them without an `impl` (§4.4) are a table
+in `traits.rs` (`builtin_implements`), not impls; `method_candidates` is the lookup
+phase 7 uses and covers both.
 
 **Scopes.** Each module has two `BTreeMap<String, DefId>` namespaces (values and types,
 pipeline §4.3) holding its items and its imports. Body-local scopes live in the type

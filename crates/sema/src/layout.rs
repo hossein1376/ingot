@@ -88,11 +88,13 @@ impl Declarations {
             TyKind::Void | TyKind::Never => Ok(Layout::scalar(0, 1)),
             TyKind::Ref(..) | TyKind::RawPtr(..) | TyKind::FnPtr(_) => Ok(Layout::scalar(8, 8)),
             TyKind::Slice(..) | TyKind::Dyn(..) | TyKind::DynFn(..) => Ok(Layout::scalar(16, 8)),
-            TyKind::Vector(..) | TyKind::Mask(_) => Err(LayoutError::Unspecified(
-                "the alignment of SIMD vector types and the size of masks (the specification \
-                 gives neither)"
-                    .to_string(),
-            )),
+            // A vector is as large as its width and aligned to its size; a mask is one
+            // byte per lane, aligned to its size (sections 3 and 25).
+            TyKind::Vector(lane, lanes) => {
+                let n = u64::from(lane.bits() * lanes / 8);
+                Ok(Layout::scalar(n, n))
+            }
+            TyKind::Mask(lanes) => Ok(Layout::scalar(u64::from(lanes), u64::from(lanes))),
             TyKind::Array(elem, n) => {
                 let len = match n {
                     ConstArg::Value(ConstValue::Int { value, .. }) if value >= 0 => value as u64,
@@ -271,11 +273,17 @@ impl Declarations {
             }
             Some(ItemSig::Enum(en)) => {
                 let mut variants = Vec::new();
+                // An enum with no variants has size 0 and alignment 1 (section 25).
                 if en.variants.is_empty() {
-                    return Err(LayoutError::Unspecified(
-                        "the layout of an enum with no variants (the specification gives none)"
-                            .to_string(),
-                    ));
+                    return Ok(Layout {
+                        size: 0,
+                        align: 1,
+                        kind: LayoutKind::Enum {
+                            tag_size: 0,
+                            payload_offset: 0,
+                        },
+                        fields: Vec::new(),
+                    });
                 }
                 for v in &en.variants {
                     let p = match v.payload {

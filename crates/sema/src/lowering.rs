@@ -331,6 +331,7 @@ impl<'a> Cx<'a> {
             .collect();
         let ret = self.lower_ty(&f.ret);
         let error = f.error.as_ref().map(|t| self.lower_ty(t));
+        let error_span = f.error.as_ref().map(|t| t.span);
         FnSig {
             def: f.def,
             parent: self
@@ -345,6 +346,7 @@ impl<'a> Cx<'a> {
             ret,
             ret_span: f.ret.span,
             error,
+            error_span,
             from: f
                 .from
                 .iter()
@@ -413,10 +415,11 @@ impl<'a> Cx<'a> {
                 TyKind::Poison => {}
                 _ => {
                     let name = self.ty_name(ty);
-                    self.ni(format!(
-                        "an enum tag type that is not an integer (`{name}`); the specification \
-                         defines no error for it"
-                    ));
+                    self.err(
+                        "E0522",
+                        format!("the tag type of an enum is an integer type, not `{name}`"),
+                        t.span,
+                    );
                 }
             }
         }
@@ -597,6 +600,7 @@ impl<'a> Cx<'a> {
         let Res::Def(def) = p.res else {
             return None;
         };
+        let name = self.sema.def(def).name.clone();
         match self.sema.def(def).kind {
             DefKind::Builtin(b @ (Builtin::Send | Builtin::Sync)) => {
                 if !p.args.is_empty() {
@@ -607,24 +611,56 @@ impl<'a> Cx<'a> {
                     PropBound::from_builtin(b).expect("Send and Sync are property bounds"),
                 ))
             }
-            DefKind::Builtin(
-                Builtin::Eq
-                | Builtin::Ord
-                | Builtin::Hash
-                | Builtin::Iter
-                | Builtin::Format
-                | Builtin::Executor,
-            ) => {
-                self.ni(format!(
-                    "an `impl` of the built-in interface `{}`: the specification does not give \
-                     its members, so the impl cannot be checked",
-                    self.sema.def(def).name
-                ));
+            DefKind::Builtin(Builtin::Executor) => {
                 if !p.args.is_empty() {
                     self.not_generic(p);
                     return None;
                 }
+                if self.pkgs[self.cur.pkg].name != "std" {
+                    self.err(
+                        "E0525",
+                        "`Executor` is implemented only by the executors `std.exec` and \
+                         `std.gpu` declare",
+                        p.span,
+                    );
+                    return None;
+                }
                 Some(ImplOf::Interface(def, Vec::new()))
+            }
+            DefKind::Builtin(Builtin::Fn | Builtin::FnMut | Builtin::FnOnce) => {
+                if p.fn_sig.is_some() {
+                    self.err(
+                        "E0525",
+                        format!("`{name}` is a property of a function value, not an interface"),
+                        p.span,
+                    );
+                } else {
+                    self.err(
+                        "E0523",
+                        format!(
+                            "`{name}` is only a bound with a signature, as in `{name}(A) -> R`"
+                        ),
+                        p.span,
+                    );
+                }
+                None
+            }
+            DefKind::Builtin(
+                Builtin::Copy
+                | Builtin::Discard
+                | Builtin::Owned
+                | Builtin::Int
+                | Builtin::SInt
+                | Builtin::UInt
+                | Builtin::Float
+                | Builtin::Num,
+            ) => {
+                self.err(
+                    "E0525",
+                    format!("`{name}` is a property of a type, which the compiler computes, not an interface"),
+                    p.span,
+                );
+                None
             }
             DefKind::Interface => {
                 let descs = self.generic_descs(def);
@@ -633,11 +669,11 @@ impl<'a> Cx<'a> {
             }
             DefKind::Poison => None,
             _ => {
-                self.ni(format!(
-                    "an `impl` of `{}`, which is not an interface; the specification defines \
-                     no error for it",
-                    self.sema.def(def).name
-                ));
+                self.err(
+                    "E0523",
+                    format!("`{name}` is not an interface, so nothing can implement it"),
+                    p.span,
+                );
                 None
             }
         }
@@ -689,21 +725,12 @@ impl<'a> Cx<'a> {
                         match &p.fn_sig {
                             Some(sig) => Bound::Fn(kind, self.lower_fn_bound_sig(sig)),
                             None => {
-                                self.ni(format!(
-                                    "the bound `{}` without a signature; the specification \
-                                     defines no error for it",
-                                    kind.name()
-                                ));
+                                self.fn_without_signature(p, kind);
                                 Bound::Poison
                             }
                         }
                     }
-                    Builtin::Eq
-                    | Builtin::Ord
-                    | Builtin::Hash
-                    | Builtin::Iter
-                    | Builtin::Format
-                    | Builtin::Executor => {
+                    Builtin::Executor => {
                         if !p.args.is_empty() {
                             self.not_generic(p);
                             return Bound::Poison;
@@ -731,12 +758,34 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn not_a_bound(&mut self, _p: &hir::PathRef, def: DefId) {
-        self.ni(format!(
-            "a bound that names `{}`, which is neither an interface nor a built-in bound; the \
-             specification defines no error for it",
-            self.sema.def(def).name
-        ));
+    /// E0523: a bound that names something that is not an interface or a built-in bound.
+    fn not_a_bound(&mut self, p: &hir::PathRef, def: DefId) {
+        let name = self.sema.def(def).name.clone();
+        self.err(
+            "E0523",
+            format!("`{name}` is neither an interface nor a built-in bound"),
+            p.span,
+        );
+    }
+
+    /// E0523: `dyn` of something that is not an interface.
+    fn not_an_interface(&mut self, p: &hir::PathRef, def: DefId) {
+        let name = self.sema.def(def).name.clone();
+        self.err(
+            "E0523",
+            format!("`dyn` needs an interface, and `{name}` is not one"),
+            p.span,
+        );
+    }
+
+    /// E0523: `Fn`, `FnMut` or `FnOnce` without a signature.
+    fn fn_without_signature(&mut self, p: &hir::PathRef, kind: FnKind) {
+        let name = kind.name();
+        self.err(
+            "E0523",
+            format!("`{name}` is a bound only with a signature, as in `{name}(A) -> R`"),
+            p.span,
+        );
     }
 
     fn lower_fn_bound_sig(&mut self, sig: &hir::FnSig) -> FnPtrSig {
@@ -808,9 +857,12 @@ impl<'a> Cx<'a> {
         if let ConstArg::Value(ConstValue::Int { value, .. }) = arg
             && value < 0
         {
-            self.ni(format!(
-                "an array of negative length {value}; the specification defines no error for it"
-            ));
+            let span = self.pkgs[self.cur.pkg].expr(e).span;
+            self.err(
+                "E0521",
+                format!("an array cannot have the negative length {value}"),
+                span,
+            );
             return ConstArg::Poison;
         }
         arg
@@ -988,6 +1040,18 @@ impl<'a> Cx<'a> {
         match arg {
             hir::GenericArg::Ty(t) => {
                 if !desc.is_const {
+                    // `Ring[N, u8]` writes the constant parameter `N` where a type is due.
+                    if let hir::TyKind::Path(p) = &t.kind
+                        && let Res::Def(d) = p.res
+                        && self.sema.def(d).kind == (DefKind::GenericParam { is_const: true })
+                    {
+                        self.err(
+                            "E0813",
+                            "this generic parameter is a type: give it a type, not a constant",
+                            t.span,
+                        );
+                        return (None, t.span);
+                    }
                     return (Some(GenericArg::Ty(self.lower_ty(t))), t.span);
                 }
                 // `Ring[T, N]` writes the constant parameter `N` as a type name.
@@ -1006,9 +1070,10 @@ impl<'a> Cx<'a> {
                 {
                     return (None, t.span);
                 }
-                self.ni(
-                    "a generic argument that is a type where a constant is expected; the \
-                     specification defines no error for it",
+                self.err(
+                    "E0813",
+                    "this generic parameter is a constant: give it a value, not a type",
+                    t.span,
                 );
                 (None, t.span)
             }
@@ -1033,9 +1098,10 @@ impl<'a> Cx<'a> {
                     let c = self.const_arg(*e, hint);
                     (Some(GenericArg::Const(c)), span)
                 } else {
-                    self.ni(
-                        "a generic argument that is a constant where a type is expected; the \
-                         specification defines no error for it",
+                    self.err(
+                        "E0813",
+                        "this generic parameter is a type: give it a type, not a constant",
+                        span,
                     );
                     (None, span)
                 }
@@ -1096,11 +1162,12 @@ impl<'a> Cx<'a> {
                 }
             }
             DefKind::Builtin(_) | DefKind::Interface => {
-                self.ni(format!(
-                    "the interface or bound `{}` used as a type; the specification defines no \
-                     error for it",
-                    self.sema.def(def).name
-                ));
+                let name = self.sema.def(def).name.clone();
+                self.err(
+                    "E0524",
+                    format!("`{name}` is an interface or a bound, not a type"),
+                    p.span,
+                );
                 poison
             }
             DefKind::Struct | DefKind::Enum => {
@@ -1155,10 +1222,13 @@ impl<'a> Cx<'a> {
         let poison = self.d.types.poison;
         if self.busy.contains(&def) {
             let name = self.sema.def(def).name.clone();
-            self.ni(format!(
-                "a cycle between type aliases (`{name}` expands to itself); the specification \
-                 defines no error for it"
-            ));
+            let (file, span) = (self.file_of(def), self.sema.def(def).span);
+            self.error(
+                "E0520",
+                format!("the type alias `{name}` expands to a type that contains itself"),
+                file,
+                span,
+            );
             return poison;
         }
         self.ensure_sig(def);
@@ -1223,13 +1293,9 @@ impl<'a> Cx<'a> {
             }
             let bounds = self.d.param_bounds.get(&param).cloned().unwrap_or_default();
             let mut found = Vec::new();
-            let mut builtin_iface = false;
             for b in &bounds {
                 if let Bound::Interface(i, _) = b {
-                    if !matches!(self.sema.def(*i).kind, DefKind::Interface) {
-                        builtin_iface = true;
-                        continue;
-                    }
+                    // `Executor` is a bound without a declaration and declares nothing.
                     if let Some(a) = self.interface_declares(*i, name)
                         && !found.contains(&a)
                     {
@@ -1239,12 +1305,6 @@ impl<'a> Cx<'a> {
             }
             return match found.as_slice() {
                 [a] => self.d.types.intern(TyKind::Projection(base, *a)),
-                [] if builtin_iface => {
-                    self.ni(format!(
-                        "the associated type `{name}` of a built-in interface"
-                    ));
-                    poison
-                }
                 [] => {
                     self.bad_assoc(name, span);
                     poison
@@ -1325,17 +1385,13 @@ impl<'a> Cx<'a> {
                         let sig = self.lower_fn_bound_sig(sig);
                         self.d.types.intern(TyKind::DynFn(m, kind, sig))
                     }
-                    None => poison,
+                    None => {
+                        self.fn_without_signature(interface, kind);
+                        poison
+                    }
                 }
             }
-            DefKind::Builtin(
-                Builtin::Eq
-                | Builtin::Ord
-                | Builtin::Hash
-                | Builtin::Iter
-                | Builtin::Format
-                | Builtin::Executor,
-            ) => {
+            DefKind::Builtin(Builtin::Executor) => {
                 if !interface.args.is_empty() {
                     self.not_generic(interface);
                     return poison;
@@ -1344,11 +1400,7 @@ impl<'a> Cx<'a> {
             }
             DefKind::Poison => poison,
             _ => {
-                self.ni(format!(
-                    "`dyn {}`, which is not an interface; the specification defines no error \
-                     for it",
-                    self.sema.def(def).name
-                ));
+                self.not_an_interface(interface, def);
                 poison
             }
         }

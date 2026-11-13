@@ -134,7 +134,7 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
     // With dependencies the imports of their packages cannot be resolved, and
     // reporting every one of them as unresolved would be wrong: stop at what is known.
     if !package.manifest_failed && package.not_implemented.is_empty() {
-        let output = ingot_sema::resolve(&all, inputs, &target);
+        let output = ingot_sema::resolve(&mut all, inputs, &target);
         // Phase 6 finishes for every item of every package (std included) before
         // anything later; nothing in a body is looked at.
         let declarations = ingot_sema::check_declarations(&all, &output, &target, std_count);

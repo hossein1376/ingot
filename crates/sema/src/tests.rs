@@ -15,6 +15,26 @@ struct Run {
     sources: Sources,
 }
 
+/// The modules of `std` the builtin declarations name (`std.hash.Hasher` and
+/// `std.fmt.Formatter`), for tests that do not load the real standard library.
+const STD_STUBS: [(&str, &str); 2] = [
+    ("hash", "pub struct Hasher {}\n"),
+    ("fmt", "pub struct Formatter {}\n"),
+];
+
+fn module_input(sources: &mut Sources, path: String, text: &str) -> ModuleInput {
+    let file = sources.add(Source::new(format!("{path}.ingot"), text));
+    let source = sources.get(file);
+    let (tokens, lex_diags) = lex(source);
+    let (ast, parse_diags) = parse(source, tokens);
+    let clean = lex_diags.is_empty() && parse_diags.is_empty();
+    ModuleInput {
+        path,
+        file,
+        ast: clean.then_some(ast),
+    }
+}
+
 fn run_on(target: &str, packages: &[Pkg]) -> Run {
     let mut sources = Sources::default();
     let mut inputs = Vec::new();
@@ -26,24 +46,35 @@ fn run_on(target: &str, packages: &[Pkg]) -> Run {
             } else {
                 format!("{name}.{rel}")
             };
-            let file = sources.add(Source::new(format!("{path}.ingot"), *text));
-            let source = sources.get(file);
-            let (tokens, lex_diags) = lex(source);
-            let (ast, parse_diags) = parse(source, tokens);
-            let clean = lex_diags.is_empty() && parse_diags.is_empty();
-            mods.push(ModuleInput {
-                path,
-                file,
-                ast: clean.then_some(ast),
-            });
+            mods.push(module_input(&mut sources, path, text));
         }
         inputs.push(PackageInput {
             name: (*name).to_string(),
             modules: mods,
         });
     }
+    // Every compilation has a `std` (the builtin interfaces are declared in it) with
+    // the modules those declarations name. A test that brings its own `std` gets the
+    // missing ones, and one that does not gets a `std` of just those, first.
+    if !inputs.iter().any(|p| p.name == "std") {
+        inputs.insert(
+            0,
+            PackageInput {
+                name: "std".to_string(),
+                modules: Vec::new(),
+            },
+        );
+    }
+    for input in inputs.iter_mut().filter(|p| p.name == "std") {
+        for (rel, text) in STD_STUBS {
+            let path = format!("std.{rel}");
+            if !input.modules.iter().any(|m| m.path == path) {
+                input.modules.push(module_input(&mut sources, path, text));
+            }
+        }
+    }
     let target = Target::by_name(target).expect("a known target");
-    let out = resolve(&sources, inputs, &target);
+    let out = resolve(&mut sources, inputs, &target);
     Run { out, sources }
 }
 
@@ -505,7 +536,7 @@ fn when_keeps_the_taken_branch_only() {
         .sema
         .defs
         .iter()
-        .filter(|d| d.kind == DefKind::Fn)
+        .filter(|d| d.kind == DefKind::Fn && d.parent.is_none())
         .map(|d| d.name.as_str())
         .collect();
     assert_eq!(names, vec!["here", "f"]);
@@ -517,7 +548,7 @@ fn when_keeps_the_taken_branch_only() {
         .sema
         .defs
         .iter()
-        .filter(|d| d.kind == DefKind::Fn)
+        .filter(|d| d.kind == DefKind::Fn && d.parent.is_none())
         .map(|d| d.name.as_str())
         .collect();
     assert_eq!(names, vec!["there", "f"]);
@@ -596,7 +627,7 @@ fn arch_and_cpu_are_decided_per_target() {
             .sema
             .defs
             .iter()
-            .filter(|d| d.kind == DefKind::Fn)
+            .filter(|d| d.kind == DefKind::Fn && d.parent.is_none())
             .map(|d| d.name.clone())
             .collect();
         names.sort();
@@ -766,13 +797,28 @@ fn builtin_names_resolve_to_builtin_definitions() {
             _ => None,
         })
         .unwrap();
-    // The bounds and the parameter types are definitions, not strings.
-    for b in &f.generics[0].bounds {
-        let Res::Def(d) = b.res else {
-            panic!("bound did not resolve")
-        };
-        assert!(matches!(r.out.sema.def(d).kind, DefKind::Builtin(_)));
-    }
+    // The bounds and the parameter types are definitions, not strings: `Copy` is a
+    // builtin definition, `Ord` the builtin declaration of section 4.4.
+    let kinds: Vec<(DefKind, bool)> = f.generics[0]
+        .bounds
+        .iter()
+        .map(|b| {
+            let Res::Def(d) = b.res else {
+                panic!("bound did not resolve")
+            };
+            (
+                r.out.sema.def(d).kind,
+                r.out.sema.builtin_def(&r.out.sema.def(d).name) == Some(d),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (DefKind::Interface, true),
+            (DefKind::Builtin(crate::Builtin::Copy), true)
+        ]
+    );
     let ret = match &f.ret.kind {
         hir::TyKind::Path(p) => p.res,
         _ => panic!("result type is a path"),
@@ -787,7 +833,7 @@ fn builtin_names_resolve_to_builtin_definitions() {
     let mut expected = vec![
         "Option", "Result", "Copy", "Discard", "Send", "Sync", "Owned", "Int", "SInt", "UInt",
         "Float", "Num", "Fn", "FnMut", "FnOnce", "Eq", "Ord", "Hash", "Iter", "Format", "Executor",
-        "Idx", "Idx2", "Idx3", "Grid", "GridMut",
+        "Idx", "Idx2", "Idx3", "Grid", "GridMut", "Ordering",
     ];
     expected.sort();
     let scope: Vec<&str> = r
@@ -825,11 +871,20 @@ fn builtin_names_resolve_to_builtin_definitions() {
         })
         .collect();
     use crate::Builtin::*;
+    // `Iter`, `Format`, `Eq`, `Ord` and `Hash` are declarations (section 4.4), the others
+    // have none.
     assert_eq!(
         kinds,
-        [Iter, Format, Grid, GridMut, Executor, Eq, Ord, Hash]
-            .map(DefKind::Builtin)
-            .to_vec()
+        vec![
+            DefKind::Interface,
+            DefKind::Interface,
+            DefKind::Builtin(Grid),
+            DefKind::Builtin(GridMut),
+            DefKind::Builtin(Executor),
+            DefKind::Interface,
+            DefKind::Interface,
+            DefKind::Interface,
+        ]
     );
 }
 

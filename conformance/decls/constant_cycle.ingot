@@ -1,0 +1,5 @@
+//! expect: reject
+//! section: 9
+
+const first: i64 = second + 1; //~ E0812
+const second: i64 = first + 1;

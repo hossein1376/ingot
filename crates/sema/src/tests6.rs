@@ -13,11 +13,13 @@ use ingot_syntax::ast::{BinOp, UnOp};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::parse;
 
-const STD: [(&str, &str); 11] = [
+const STD: [(&str, &str); 13] = [
     ("", include_str!("../../../std/main.ingot")),
     ("exec", include_str!("../../../std/exec.ingot")),
+    ("fmt", include_str!("../../../std/fmt.ingot")),
     ("fs", include_str!("../../../std/fs.ingot")),
     ("gpu", include_str!("../../../std/gpu.ingot")),
+    ("hash", include_str!("../../../std/hash.ingot")),
     ("io", include_str!("../../../std/io.ingot")),
     ("mem", include_str!("../../../std/mem.ingot")),
     ("net", include_str!("../../../std/net.ingot")),
@@ -25,6 +27,12 @@ const STD: [(&str, &str); 11] = [
     ("sync", include_str!("../../../std/sync.ingot")),
     ("task", include_str!("../../../std/task.ingot")),
     ("time", include_str!("../../../std/time.ingot")),
+];
+
+/// The part of `std` the builtin declarations need, for tests that do not load all of it.
+const STD_MIN: [(&str, &str); 2] = [
+    ("fmt", include_str!("../../../std/fmt.ingot")),
+    ("hash", include_str!("../../../std/hash.ingot")),
 ];
 
 struct D {
@@ -61,13 +69,19 @@ fn build(with_std: bool, text: &str) -> D {
             modules: mods,
         }
     };
-    if with_std {
-        inputs.push(add("std", &STD, &mut sources));
-    }
+    // Every compilation has a `std`, since the builtin interfaces are declared in it.
+    // The program's file comes first among the sources, so that its spans are easy to
+    // find.
+    let app_pkg = add("app", &[("", text)], &mut sources);
+    inputs.push(add(
+        "std",
+        if with_std { &STD } else { &STD_MIN },
+        &mut sources,
+    ));
     let app = inputs.len();
-    inputs.push(add("app", &[("", text)], &mut sources));
+    inputs.push(app_pkg);
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
-    let out = resolve(&sources, inputs, &target);
+    let out = resolve(&mut sources, inputs, &target);
     let decls = check_declarations(&sources, &out, &target, app);
     D {
         out,
@@ -186,6 +200,16 @@ impl D {
 
     fn ni(&self) -> &[String] {
         &self.decls.not_implemented
+    }
+
+    /// The gaps recorded other than "there are bodies", which any test with a function
+    /// does have.
+    fn gaps(&self) -> Vec<&String> {
+        self.decls
+            .not_implemented
+            .iter()
+            .filter(|m| m.as_str() != crate::UNCHECKED_BODIES)
+            .collect()
     }
 
     fn has_ni(&self, part: &str) -> bool {
@@ -523,6 +547,12 @@ fn a_type_parameter_has_exactly_what_its_bounds_grant() {
     assert_eq!((b.copy, b.maybe_linear), (Tri::Yes, Tri::No));
     let c = prop(2);
     assert_eq!((c.copy, c.maybe_linear), (Tri::Yes, Tri::No));
+    // `Num` and the other numeric bounds grant `Owned`, `Send` and `Sync` as well
+    // (section 8): only scalars satisfy them.
+    assert_eq!(
+        (c.discard(), c.owned(), c.send, c.sync),
+        (Tri::Yes, Tri::Yes, Tri::Yes, Tri::Yes)
+    );
     let dd = prop(3);
     assert_eq!(
         (dd.send, dd.sync, dd.owned(), dd.copy),
@@ -957,15 +987,48 @@ fn a_layout_that_depends_on_a_parameter_is_not_invented() {
 }
 
 #[test]
-fn simd_layout_is_not_invented() {
-    let mut d = app("struct V { a: f32x4 }\n");
+fn vectors_and_masks_are_as_large_as_their_width_and_aligned_to_their_size() {
+    // Sections 3, 25 and 26: a vector is 16, 32 or 64 bytes and aligned to its size; a
+    // mask is one byte per lane, aligned to its size.
+    let mut d = app("struct V { a: f32x4, b: u8x32, c: f64x8, d: i64x2 }\n\
+         struct M { a: boolx2, b: boolx4, c: boolx16, d: boolx64 }\n\
+         struct Mixed { a: u8, v: f32x4, m: boolx8 }\n");
     assert_eq!(d.codes(), vec![]);
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
+    for (field, size) in [("a", 16), ("b", 32), ("c", 64), ("d", 16)] {
+        let t = d.field("V", field);
+        let l = d.decls.layout_of(t).expect("a layout");
+        assert_eq!((l.size, l.align), (size, size), "{field}");
+    }
+    for (field, size) in [("a", 2), ("b", 4), ("c", 16), ("d", 64)] {
+        let t = d.field("M", field);
+        let l = d.decls.layout_of(t).expect("a layout");
+        assert_eq!((l.size, l.align), (size, size), "{field}");
+    }
+    // The vector is aligned to its size inside a struct, which then has that alignment.
     let v = d.adt("V");
-    assert!(matches!(
-        d.decls.layout_of(v),
-        Err(crate::LayoutError::Unspecified(_))
-    ));
-    assert!(d.has_ni("SIMD"), "{:?}", d.ni());
+    let l = d.decls.layout_of(v).expect("a layout");
+    let offsets: Vec<u64> = l.fields.iter().map(|f| f.offset).collect();
+    assert_eq!(offsets, vec![0, 32, 64, 128]);
+    assert_eq!((l.size, l.align), (192, 64));
+    let mixed = d.adt("Mixed");
+    let l = d.decls.layout_of(mixed).expect("a layout");
+    let offsets: Vec<u64> = l.fields.iter().map(|f| f.offset).collect();
+    assert_eq!(offsets, vec![0, 16, 32]);
+    assert_eq!((l.size, l.align), (48, 16));
+}
+
+#[test]
+fn an_enum_with_no_variants_has_size_0_and_alignment_1() {
+    let mut d = app("enum Never {}\nstruct S { a: u8, n: [3]Never }\n");
+    assert_eq!(d.codes(), vec![]);
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
+    let never = d.adt("Never");
+    let l = d.decls.layout_of(never).expect("a layout");
+    assert_eq!((l.size, l.align), (0, 1));
+    let s = d.adt("S");
+    let l = d.decls.layout_of(s).expect("a layout");
+    assert_eq!((l.size, l.align), (1, 1));
 }
 
 #[test]
@@ -1260,10 +1323,13 @@ fn a_cycle_between_constants_is_reported_not_followed() {
          const self_ref: i64 = self_ref;\n\
          const fine: i64 = 4;\n\
          struct S { x: [a]u8, y: [fine]u8 }\n");
-    // The catalog has no code for it: nothing is reported as a diagnostic, and the
-    // gap is recorded.
-    assert_eq!(d.codes(), vec![]);
-    assert!(d.has_ni("a cycle between constants"), "{:?}", d.ni());
+    // E0812 at the constant the evaluation came back to: `a` for the cycle, once, and
+    // `self_ref` for the constant that names itself.
+    assert_eq!(
+        d.codes(),
+        vec![("E0812".to_string(), 1), ("E0812".to_string(), 4)]
+    );
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
     assert!(d.const_value("fine").is_some());
     assert!(d.const_value("a").is_none());
     assert!(d.const_value("self_ref").is_none());
@@ -1276,8 +1342,13 @@ fn a_cycle_between_aliases_is_reported_not_followed() {
          type C = C;\n\
          type Ok1 = []u8;\n\
          struct S { a: A, b: C, c: Ok1 }\n");
-    assert_eq!(d.codes(), vec![]);
-    assert!(d.has_ni("a cycle between type aliases"), "{:?}", d.ni());
+    // E0520 at the alias the expansion came back to: `A` for the pair, `C` for the
+    // alias that names itself.
+    assert_eq!(
+        d.codes(),
+        vec![("E0520".to_string(), 1), ("E0520".to_string(), 3)]
+    );
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
 }
 
 #[test]
@@ -1677,15 +1748,18 @@ fn associated_types_are_projected_and_normalized() {
 }
 
 #[test]
-fn builtin_interface_bounds_that_the_specification_does_not_decide_are_unknown() {
+fn builtin_interface_bounds_follow_section_4_4() {
+    // Integers hash, floats do not; a user type needs an impl; nothing is unknown.
     let d = app("struct Keyed[K: Hash] { k: K }\n\
          struct Plain { x: i64 }\n\
          struct A { a: Keyed[i64] }\n\
-         struct B { b: Keyed[Plain] }\n");
-    // A user type with no impl of a built-in interface does not implement it. For a
-    // scalar the specification does not say.
-    assert_eq!(d.codes(), vec![("E0801".to_string(), 4)]);
-    assert!(d.has_ni("`i64` satisfies the bound `Hash`"), "{:?}", d.ni());
+         struct B { b: Keyed[Plain] }\n\
+         struct C { c: Keyed[f64] }\n");
+    assert_eq!(
+        d.codes(),
+        vec![("E0801".to_string(), 4), ("E0801".to_string(), 5)]
+    );
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
 }
 
 #[test]
@@ -1716,4 +1790,772 @@ fn the_order_of_everything_is_deterministic() {
             .collect()
     };
     assert_eq!(render(&one), render(&two));
+}
+
+// ------------------------------------------------ the built-in interfaces (4.4)
+
+impl D {
+    /// The definition behind a builtin name such as `Eq`.
+    fn builtin(&self, name: &str) -> DefId {
+        self.out
+            .sema
+            .builtin_def(name)
+            .unwrap_or_else(|| panic!("builtin {name}"))
+    }
+
+    fn satisfies(&mut self, ty: TypeId, interface: &str) -> Tri {
+        let i = self.builtin(interface);
+        self.decls
+            .satisfies(ty, &crate::sigs::Bound::Interface(i, vec![]))
+    }
+
+    fn kind(&mut self, kind: TyKind) -> TypeId {
+        self.decls.types.intern(kind)
+    }
+
+    fn method_sources(&mut self, ty: TypeId, name: &str) -> Vec<(String, DefId)> {
+        use crate::MethodSource as S;
+        self.decls
+            .method_candidates(ty, name)
+            .into_iter()
+            .map(|c| {
+                let how = match &c.source {
+                    S::Inherent(_) => "inherent".to_string(),
+                    S::Impl { interface, .. } => {
+                        format!("impl {}", self.out.sema.def(*interface).name)
+                    }
+                    S::Builtin { interface } => {
+                        format!("builtin {}", self.out.sema.def(*interface).name)
+                    }
+                    S::Bound { interface, .. } => {
+                        format!("bound {}", self.out.sema.def(*interface).name)
+                    }
+                };
+                (how, c.method)
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn the_builtin_interfaces_are_declarations_with_the_members_of_section_4_4() {
+    let mut d = app_with_std("");
+    assert_eq!(d.codes(), vec![]);
+    assert!(d.out.diagnostics.is_empty());
+    assert!(
+        d.out.not_implemented.is_empty(),
+        "{:?}",
+        d.out.not_implemented
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+    // Each is a declaration of the hidden module, found through the builtin scope.
+    for (name, methods, assoc) in [
+        ("Eq", vec!["eq"], vec![]),
+        ("Ord", vec!["cmp"], vec![]),
+        ("Hash", vec!["hash"], vec![]),
+        ("Iter", vec!["next"], vec!["Item"]),
+        ("Format", vec!["format"], vec![]),
+    ] {
+        let i = d.builtin(name);
+        assert_eq!(d.out.sema.def(i).kind, crate::DefKind::Interface, "{name}");
+        let sig = d.decls.interface_sig(i).expect("a signature");
+        let got: Vec<String> = sig
+            .methods
+            .iter()
+            .map(|m| d.out.sema.def(*m).name.clone())
+            .collect();
+        assert_eq!(got, methods, "{name}");
+        let got: Vec<String> = sig
+            .assoc
+            .iter()
+            .map(|m| d.out.sema.def(*m).name.clone())
+            .collect();
+        assert_eq!(got, assoc, "{name}");
+    }
+    // `Ord: Eq`.
+    let (eq, ord) = (d.builtin("Eq"), d.builtin("Ord"));
+    assert_eq!(
+        d.decls.interface_sig(ord).expect("Ord").supers,
+        vec![crate::sigs::Bound::Interface(eq, vec![])]
+    );
+    // The signatures.
+    let sig_of = |d: &D, iface: &str| {
+        let i = d.builtin(iface);
+        let m = d.decls.interface_sig(i).expect("an interface").methods[0];
+        d.decls.fn_sig(m).expect("a function").clone()
+    };
+    let shape = |d: &D, f: &crate::FnSig| -> (Vec<String>, String) {
+        (
+            f.params.iter().map(|p| d.display(p.ty)).collect(),
+            d.display(f.ret),
+        )
+    };
+    let f = sig_of(&d, "Eq");
+    assert_eq!(
+        shape(&d, &f),
+        (
+            vec!["&Self".to_string(), "&Self".to_string()],
+            "bool".to_string()
+        )
+    );
+    let f = sig_of(&d, "Ord");
+    assert_eq!(
+        shape(&d, &f),
+        (
+            vec!["&Self".to_string(), "&Self".to_string()],
+            "Ordering".to_string()
+        )
+    );
+    let f = sig_of(&d, "Hash");
+    let (params, ret) = shape(&d, &f);
+    assert_eq!(
+        (
+            params[0].as_str(),
+            params[1].ends_with("Hasher"),
+            ret.as_str()
+        ),
+        ("&Self", true, "void")
+    );
+    assert!(params[1].starts_with("&mut "), "{params:?}");
+    let f = sig_of(&d, "Format");
+    let (params, ret) = shape(&d, &f);
+    assert_eq!(
+        (
+            params[0].as_str(),
+            params[1].ends_with("Formatter"),
+            ret.as_str()
+        ),
+        ("&Self", true, "void")
+    );
+    let f = sig_of(&d, "Iter");
+    assert_eq!(
+        shape(&d, &f),
+        (vec!["&mut Self".to_string()], "?Self.Item".to_string())
+    );
+    // `from self.*`: the result borrows from the interior of the receiver.
+    assert_eq!(f.from.len(), 1);
+    assert_eq!(
+        (f.from[0].name.as_str(), f.from[0].param, f.from[0].inner),
+        ("self", Some(0), true)
+    );
+    // `Ordering` is a `copy enum` with the variants of the specification, in order.
+    let ordering = d.builtin("Ordering");
+    let e = d.decls.enum_sig(ordering).expect("an enum");
+    let names: Vec<(&str, i128)> = e
+        .variants
+        .iter()
+        .map(|v| (d.out.sema.def(v.def).name.as_str(), v.tag))
+        .collect();
+    assert_eq!(names, vec![("less", 0), ("equal", 1), ("greater", 2)]);
+    assert!(e.copy && e.variants.iter().all(|v| v.payload.is_none()));
+    let t = d.kind(TyKind::Adt(ordering, vec![]));
+    let l = d.decls.layout_of(t).expect("a layout");
+    assert_eq!((l.size, l.align), (1, 1));
+    assert_eq!(d.decls.props(t).copy, Tri::Yes);
+}
+
+#[test]
+fn hasher_and_formatter_are_capability_types_with_no_public_field() {
+    let d = app_with_std("");
+    for (module, name) in [("std.hash", "Hasher"), ("std.fmt", "Formatter")] {
+        let def = d.type_def(module, name);
+        assert_eq!(d.out.sema.def(def).vis, crate::Vis::Pub);
+        let s = d.decls.struct_sig(def).expect("a struct");
+        assert!(s.fields.iter().all(|f| !f.public), "{name}");
+    }
+}
+
+#[test]
+fn a_user_declaration_hides_a_builtin_interface_without_changing_the_builtin() {
+    let mut d = app("interface Eq { fn same(self: &Self) -> bool; }\n\
+         struct S[T: Eq] { t: T }\n\
+         struct U { s: S[i64] }\n");
+    // The program's `Eq` is the one in scope, and `i64` does not implement it.
+    assert_eq!(d.codes(), vec![("E0801".to_string(), 3)]);
+    let mine = d.type_def("app", "Eq");
+    let builtin = d.builtin("Eq");
+    assert_ne!(mine, builtin);
+    let i64_ty = d.int(IntTy::I64);
+    assert_eq!(d.satisfies(i64_ty, "Eq"), Tri::Yes);
+}
+
+#[test]
+fn impls_of_the_builtin_interfaces_are_checked_against_their_declarations() {
+    let d = app_with_std(
+        "import std.fmt.Formatter;\n\
+         import std.hash.Hasher;\n\
+         struct P { x: i64 }\n\
+         impl Eq for P { fn eq(self: &P, other: &P) -> bool { return true; } }\n\
+         impl Ord for P { fn cmp(self: &P, other: &P) -> Ordering { return .equal; } }\n\
+         impl Hash for P { fn hash(self: &P, state: &mut Hasher) { } }\n\
+         impl Format for P { fn format(self: &P, out: &mut Formatter) { } }\n\
+         struct It { n: i64 }\n\
+         impl Iter for It {\n\
+             type Item = i64;\n\
+             fn next(self: &mut It) -> ?i64 from self.* { return .none; }\n\
+         }\n",
+    );
+    assert_eq!(d.codes(), vec![]);
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+    let d = app_with_std(
+        "import std.fmt.Formatter;\n\
+         import std.hash.Hasher;\n\
+         struct Q { x: i64 }\n\
+         impl Ord for Q {}\n\
+         impl Eq for Q { fn eq(self: &Q, other: &Q) -> i64 { return 0; } }\n\
+         struct R { x: i64 }\n\
+         impl Hash for R { fn hash(self: &R, state: &i64) { } }\n\
+         impl Format for R { fn format(self: &R, out: &mut Formatter) { } fn extra(self: &R) { } }\n\
+         struct It { n: i64 }\n\
+         impl Iter for It {\n\
+             fn next(self: &mut It) -> ?i64 from self.* { return .none; }\n\
+         }\n\
+         struct Jt { n: i64 }\n\
+         impl Iter for Jt {\n\
+             type Item = i64;\n\
+             type Other = i64;\n\
+             const k: i64 = 1;\n\
+             fn next(self: &mut Jt) -> ?i64 { return .none; }\n\
+         }\n",
+    );
+    // Ord lacks `cmp`, Eq returns `i64`, Hash takes `&i64`, Format has a function
+    // the interface lacks, Iter lacks `Item` and its `next` returns `?i64` (the
+    // projection cannot be decided without `Item`), Jt: an unknown associated type, a
+    // constant, and no `from self.*` (which an impl may leave out: fewer clauses).
+    assert_eq!(
+        d.codes(),
+        vec![
+            ("E0509".to_string(), 4),
+            ("E0509".to_string(), 5),
+            ("E0509".to_string(), 7),
+            ("E0509".to_string(), 8),
+            ("E0509".to_string(), 11),
+            ("E0509".to_string(), 17),
+            ("E0519".to_string(), 10),
+            ("E0519".to_string(), 16),
+        ]
+    );
+    // Nothing points into the declaration of a built-in interface.
+    for diag in d.decls.diagnostics.iter() {
+        assert!(diag.related.iter().all(|r| r.file != crate::BUILTIN_PATH));
+        assert_ne!(diag.file, crate::BUILTIN_PATH);
+    }
+}
+
+#[test]
+fn no_diagnostic_points_into_the_builtin_declarations() {
+    let d = app_with_std(
+        "struct Q { x: i64 }\n\
+         impl Ord for Q {}\n\
+         impl Eq for Q { fn eq(self: &Q, other: &Q) -> bool { return true; } fn x(self: &Q) { } }\n\
+         impl Iter for Q {}\n\
+         fn f(a: &dyn Hash, b: &dyn Format, c: &dyn Iter, d: &dyn Ord) { }\n",
+    );
+    for diag in d.decls.diagnostics.iter().chain(d.out.diagnostics.iter()) {
+        assert_ne!(diag.file, crate::BUILTIN_PATH, "{diag:?}");
+        assert!(diag.related.iter().all(|r| r.file != crate::BUILTIN_PATH));
+        assert!(
+            diag.fixes
+                .iter()
+                .all(|f| f.edits.iter().all(|e| e.file != crate::BUILTIN_PATH))
+        );
+    }
+    // The fix of E0509 would write the signature of a function declared in another
+    // file, whose names may not mean the same here: there is none.
+    let missing: Vec<_> = d
+        .decls
+        .diagnostics
+        .iter()
+        .filter(|x| x.code == "E0509" && x.message.contains("lacks"))
+        .collect();
+    assert_eq!(missing.len(), 1 + 1);
+    assert!(
+        missing
+            .iter()
+            .all(|x| x.fixes.is_empty() && x.related.is_empty())
+    );
+    assert!(
+        d.out.not_implemented.is_empty(),
+        "{:?}",
+        d.out.not_implemented
+    );
+}
+
+#[test]
+fn a_diagnostic_inside_the_builtin_declarations_is_a_compiler_failure_not_an_error() {
+    // A `std` without `hash` cannot resolve the declaration of `Hash`.
+    let mut sources = Sources::default();
+    let mut modules = Vec::new();
+    for (path, text) in [
+        ("std", "pub struct Env {}\n"),
+        ("std.fmt", include_str!("../../../std/fmt.ingot")),
+    ] {
+        let file = sources.add(Source::new(format!("{path}.ingot"), text));
+        let source = sources.get(file);
+        let (tokens, _) = lex(source);
+        let (ast, _) = parse(source, tokens);
+        modules.push(ModuleInput {
+            path: path.to_string(),
+            file,
+            ast: Some(ast),
+        });
+    }
+    let target = Target::by_name("aarch64-macos-m4").expect("a target");
+    let out = resolve(
+        &mut sources,
+        vec![PackageInput {
+            name: "std".to_string(),
+            modules,
+        }],
+        &target,
+    );
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert!(
+        out.not_implemented
+            .iter()
+            .any(|m| m.starts_with("internal error: E0301 points into the builtin declarations")),
+        "{:?}",
+        out.not_implemented
+    );
+}
+
+#[test]
+fn builtin_types_implement_what_section_4_4_lists() {
+    let mut d = app("enum Color { red, green }\n\
+         enum Empty {}\n\
+         enum Gen[T] { a, b }\n\
+         enum Shape { dot, circle: i64 }\n\
+         struct P { x: i64 }\n");
+    assert_eq!(d.codes(), vec![]);
+    let ints = [
+        IntTy::I8,
+        IntTy::I16,
+        IntTy::I32,
+        IntTy::I64,
+        IntTy::U8,
+        IntTy::U16,
+        IntTy::U32,
+        IntTy::U64,
+    ];
+    let (y, n, u) = (Tri::Yes, Tri::No, Tri::Unknown);
+    // (Eq, Ord, Hash, Format, Iter)
+    let mut table: Vec<(String, TypeId, [Tri; 5])> = Vec::new();
+    for i in ints {
+        let t = d.int(i);
+        table.push((i.name().to_string(), t, [y, y, y, y, n]));
+    }
+    let bool_ty = d.kind(TyKind::Bool);
+    table.push(("bool".into(), bool_ty, [y, y, y, y, n]));
+    for f in [crate::FloatTy::F32, crate::FloatTy::F64] {
+        let t = d.kind(TyKind::Float(f));
+        table.push((f.name().to_string(), t, [y, y, n, y, n]));
+    }
+    let u8_ty = d.int(IntTy::U8);
+    let i64_ty = d.int(IntTy::I64);
+    for m in [Mutability::Shared, Mutability::Mut] {
+        let t = d.kind(TyKind::RawPtr(m, u8_ty));
+        table.push(("raw pointer".into(), t, [y, y, y, n, n]));
+    }
+    for name in ["Color", "Empty"] {
+        let t = d.adt(name);
+        table.push((name.into(), t, [y, y, y, n, n]));
+    }
+    let gen_i64 = d.adt_of("app", "Gen", vec![GenericArg::Ty(i64_ty)]);
+    table.push(("Gen[i64]".into(), gen_i64, [y, y, y, n, n]));
+    let ordering = d.builtin("Ordering");
+    let t = d.kind(TyKind::Adt(ordering, vec![]));
+    table.push(("Ordering".into(), t, [y, y, y, n, n]));
+    for name in ["Shape", "P"] {
+        let t = d.adt(name);
+        table.push((name.into(), t, [n, n, n, n, n]));
+    }
+    let void = d.kind(TyKind::Void);
+    table.push(("void".into(), void, [n; 5]));
+    let tuple = d.kind(TyKind::Tuple(vec![i64_ty, i64_ty]));
+    table.push(("tuple".into(), tuple, [n; 5]));
+    let r = d.kind(TyKind::Ref(Mutability::Shared, i64_ty));
+    table.push(("&i64".into(), r, [n; 5]));
+    let o = d.kind(TyKind::Optional(i64_ty));
+    table.push(("?i64".into(), o, [n; 5]));
+    let arr = d.kind(TyKind::Array(
+        u8_ty,
+        ConstArg::Value(ConstValue::Int {
+            ty: IntTy::I64,
+            value: 4,
+        }),
+    ));
+    table.push(("[4]u8".into(), arr, [n; 5]));
+    // Slices of `u8` format; whether `[]mut u8` does is not said.
+    let s = d.kind(TyKind::Slice(Mutability::Shared, u8_ty));
+    table.push(("[]u8".into(), s, [n, n, n, y, n]));
+    let s = d.kind(TyKind::Slice(Mutability::Mut, u8_ty));
+    table.push(("[]mut u8".into(), s, [n, n, n, u, n]));
+    let s = d.kind(TyKind::Slice(Mutability::Shared, i64_ty));
+    table.push(("[]i64".into(), s, [n; 5]));
+    // Vectors format and nothing else; whether a mask is a vector for this is not said.
+    let v = d.kind(TyKind::Vector(crate::Lane::Float(crate::FloatTy::F32), 4));
+    table.push(("f32x4".into(), v, [n, n, n, y, n]));
+    let v = d.kind(TyKind::Vector(crate::Lane::Int(IntTy::U8), 16));
+    table.push(("u8x16".into(), v, [n, n, n, y, n]));
+    let m = d.kind(TyKind::Mask(4));
+    table.push(("boolx4".into(), m, [n, n, n, u, n]));
+    for (name, ty, want) in table {
+        let got = [
+            d.satisfies(ty, "Eq"),
+            d.satisfies(ty, "Ord"),
+            d.satisfies(ty, "Hash"),
+            d.satisfies(ty, "Format"),
+            d.satisfies(ty, "Iter"),
+        ];
+        assert_eq!(got, want, "{name}");
+    }
+}
+
+#[test]
+fn a_user_impl_still_makes_a_type_satisfy_a_builtin_interface() {
+    let mut d = app_with_std(
+        "import std.hash.Hasher;\n\
+         struct Keyed[K: Hash] { k: K }\n\
+         struct P { x: i64 }\n\
+         struct Q { x: i64 }\n\
+         impl Hash for P { fn hash(self: &P, state: &mut Hasher) { } }\n\
+         struct A { a: Keyed[P] }\n\
+         struct B { b: Keyed[Q] }\n\
+         struct C { c: Keyed[i64] }\n\
+         struct D { d: Keyed[u8x16] }\n",
+    );
+    assert_eq!(
+        d.codes(),
+        vec![("E0801".to_string(), 7), ("E0801".to_string(), 9)]
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+    let p = d.adt("P");
+    assert_eq!(d.satisfies(p, "Hash"), Tri::Yes);
+    assert_eq!(d.satisfies(p, "Eq"), Tri::No);
+}
+
+#[test]
+fn a_type_parameter_satisfies_a_builtin_interface_through_its_bounds() {
+    let mut d = app("fn f[T: Ord](a: T) { }\n\
+         fn g[T: Eq](a: T) { }\n\
+         fn h[T](a: T) { }\n");
+    assert_eq!(d.codes(), vec![]);
+    let param = |d: &mut D, f: &str| {
+        let def = d.value_def(f);
+        let g = d.decls.generics_of(def)[0].def;
+        d.decls.types.param(g)
+    };
+    let (t_f, t_g, t_h) = (param(&mut d, "f"), param(&mut d, "g"), param(&mut d, "h"));
+    // `Ord: Eq`, so an `Ord` parameter is `Eq`; not the other way round.
+    assert_eq!(d.satisfies(t_f, "Ord"), Tri::Yes);
+    assert_eq!(d.satisfies(t_f, "Eq"), Tri::Yes);
+    assert_eq!(d.satisfies(t_f, "Hash"), Tri::No);
+    assert_eq!(d.satisfies(t_g, "Ord"), Tri::No);
+    assert_eq!(d.satisfies(t_h, "Eq"), Tri::No);
+}
+
+#[test]
+fn method_lookup_finds_the_builtin_implementations_and_user_impls() {
+    let mut d = app("struct P { x: i64 }\n\
+         impl P { fn cmp(self: &P) -> i64 { return 0; } fn make() -> P { return P.{ x: 1 }; } }\n\
+         impl Eq for P { fn eq(self: &P, other: &P) -> bool { return true; } }\n\
+         impl Ord for P { fn cmp(self: &P, other: &P) -> Ordering { return .equal; } }\n\
+         interface Shown { fn show(self: &Self) -> i64 { return 0; } }\n\
+         impl Shown for P {}\n\
+         enum Color { red, green }\n\
+         fn f[T: Ord](a: T) { }\n");
+    assert_eq!(d.codes(), vec![]);
+    let (eq, ord, hash, format) = (
+        d.builtin("Eq"),
+        d.builtin("Ord"),
+        d.builtin("Hash"),
+        d.builtin("Format"),
+    );
+    let method = |d: &D, i: DefId, name: &str| d.decls.interface_method(i, name).expect("a method");
+    // `cmp` on `i64` is the builtin implementation of `Ord`, and the function is the
+    // one the interface declares.
+    let i64_ty = d.int(IntTy::I64);
+    let cmp_ord = method(&d, ord, "cmp");
+    assert_eq!(
+        d.method_sources(i64_ty, "cmp"),
+        vec![("builtin Ord".to_string(), cmp_ord)]
+    );
+    assert_eq!(
+        d.method_sources(i64_ty, "eq"),
+        vec![("builtin Eq".to_string(), method(&d, eq, "eq"))]
+    );
+    assert_eq!(
+        d.method_sources(i64_ty, "hash"),
+        vec![("builtin Hash".to_string(), method(&d, hash, "hash"))]
+    );
+    assert!(d.method_sources(i64_ty, "len").is_empty());
+    // Floats compare but do not hash; a payload-free enum does both; `Format` is for
+    // scalars and vectors.
+    let f64_ty = d.kind(TyKind::Float(crate::FloatTy::F64));
+    assert_eq!(d.method_sources(f64_ty, "cmp").len(), 1);
+    assert!(d.method_sources(f64_ty, "hash").is_empty());
+    assert_eq!(d.method_sources(f64_ty, "format").len(), 1);
+    let color = d.adt("Color");
+    assert_eq!(d.method_sources(color, "cmp").len(), 1);
+    assert_eq!(d.method_sources(color, "hash").len(), 1);
+    assert!(d.method_sources(color, "format").is_empty());
+    let v = d.kind(TyKind::Vector(crate::Lane::Int(IntTy::U8), 16));
+    assert_eq!(
+        d.method_sources(v, "format"),
+        vec![("builtin Format".to_string(), method(&d, format, "format"))]
+    );
+    // A user type: the inherent `cmp` first, then the interface's. A function an impl
+    // leaves out but the interface gives a body is the interface's own.
+    let p = d.adt("P");
+    let got = d.method_sources(p, "cmp");
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].0, "inherent");
+    assert_eq!(got[1].0, "impl Ord");
+    assert_ne!(got[0].1, got[1].1);
+    let shown = d.type_def("app", "Shown");
+    let show = d.decls.interface_method(shown, "show").expect("show");
+    assert_eq!(
+        d.method_sources(p, "show"),
+        vec![("impl Shown".to_string(), show)]
+    );
+    // A type parameter: through its bounds and their supertraits.
+    let fdef = d.value_def("f");
+    let g = d.decls.generics_of(fdef)[0].def;
+    let t = d.decls.types.param(g);
+    assert_eq!(
+        d.method_sources(t, "cmp"),
+        vec![("bound Ord".to_string(), cmp_ord)]
+    );
+    assert_eq!(
+        d.method_sources(t, "eq"),
+        vec![("bound Eq".to_string(), method(&d, eq, "eq"))]
+    );
+}
+
+#[test]
+fn only_std_implements_executor() {
+    let mut d = app_with_std("struct Mine {}\nimpl Executor for Mine {}\n");
+    assert_eq!(d.codes(), vec![("E0525".to_string(), 2)]);
+    for name in ["Seq", "Simd", "Par"] {
+        let t = d.adt_of("std.exec", name, vec![]);
+        assert_eq!(d.satisfies(t, "Executor"), Tri::Yes, "{name}");
+    }
+    let i64_ty = d.int(IntTy::I64);
+    assert_eq!(d.satisfies(i64_ty, "Executor"), Tri::No);
+    let mine = d.adt("Mine");
+    assert_eq!(d.satisfies(mine, "Executor"), Tri::No);
+    // Within `std` the same impl is allowed: the library checks cleanly.
+    let d = app_with_std("");
+    assert_eq!(d.codes(), vec![]);
+}
+
+#[test]
+fn an_impl_of_a_builtin_implementation_or_for_a_builtin_type_is_e0507_e0506() {
+    let d = app("enum Color { red, green }\n\
+         impl Eq for Color { fn eq(self: &Color, other: &Color) -> bool { return true; } }\n\
+         impl Eq for i64 { fn eq(self: &i64, other: &i64) -> bool { return true; } }\n\
+         struct P { x: i64 }\n\
+         impl Eq for P { fn eq(self: &P, other: &P) -> bool { return true; } }\n\
+         impl Ord for P { fn cmp(self: &P, other: &P) -> Ordering { return .equal; } }\n");
+    assert_eq!(
+        d.codes(),
+        vec![("E0506".to_string(), 3), ("E0507".to_string(), 2)]
+    );
+}
+
+// --------------------------------------------------------------- the new codes
+
+#[test]
+fn e0520_alias_cycles() {
+    let d = app(
+        "type A = B;\ntype B = [4]A;\ntype C = (i64, C);\ntype D[T] = ?D[T];\n\
+         type Fine[T] = ?T;\nstruct S { x: Fine[i64] }\n",
+    );
+    assert_eq!(
+        d.codes(),
+        vec![
+            ("E0520".to_string(), 1),
+            ("E0520".to_string(), 3),
+            ("E0520".to_string(), 4)
+        ]
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+}
+
+#[test]
+fn e0521_e0522_negative_lengths_and_bad_tag_types() {
+    let d = app("const n: i64 = 0 - 2;\n\
+         struct A { a: [-1]u8, b: [n]u8, c: [0]u8, d: [4 - 4]u8 }\n\
+         enum E1: f32 { a }\n\
+         enum E2: bool { a }\n\
+         enum E3: []u8 { a }\n\
+         enum E4: u8 { a = 255 }\n\
+         enum E5: Missing { a }\n");
+    assert_eq!(
+        d.codes(),
+        vec![
+            ("E0521".to_string(), 2),
+            ("E0521".to_string(), 2),
+            ("E0522".to_string(), 3),
+            ("E0522".to_string(), 4),
+            ("E0522".to_string(), 5)
+        ]
+    );
+}
+
+#[test]
+fn e0523_e0524_e0525_interfaces_bounds_and_types() {
+    let d = app("struct Point { x: i64 }\n\
+         interface Shape { fn area(self: &Self) -> i64; }\n\
+         impl Point for Point {}\n\
+         impl Option for Point {}\n\
+         fn a[T: Point](x: T) { }\n\
+         fn b[T: Fn](x: T) { }\n\
+         fn c[T: Option](x: T) { }\n\
+         fn d(x: &dyn Point, y: &dyn Fn, z: &dyn Copy) { }\n\
+         struct H { a: Shape, b: Ord, c: Copy, d: Num, f: Executor, g: Eq }\n\
+         impl Copy for Point {}\n\
+         impl Discard for Point {}\n\
+         impl Owned for Point {}\n\
+         impl Num for Point {}\n\
+         impl Int for Point {}\n\
+         impl Fn for Point {}\n\
+         unsafe impl Send for Point {}\n\
+         unsafe impl Sync for Point {}\n");
+    let got = d.codes();
+    let on = |line: u32| -> Vec<&str> {
+        got.iter()
+            .filter(|(_, l)| *l == line)
+            .map(|(c, _)| c.as_str())
+            .collect()
+    };
+    for line in 3..=7 {
+        assert_eq!(on(line), vec!["E0523"], "line {line}");
+    }
+    assert_eq!(on(8), vec!["E0523", "E0523", "E0523"]);
+    assert_eq!(on(9), vec!["E0524"; 6]);
+    for line in 10..=14 {
+        assert_eq!(on(line), vec!["E0525"], "line {line}");
+    }
+    // `Fn` with no signature is not an interface at all (E0523); `Send` and `Sync` are
+    // the properties an `unsafe impl` states.
+    assert_eq!(on(15), vec!["E0523"]);
+    assert_eq!(got.len(), 5 + 3 + 6 + 5 + 1, "{got:?}");
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+}
+
+#[test]
+fn e0508_e0509_the_new_conditions() {
+    let d = app("interface M { fn m(self: &Self) -> i64; }\n\
+         struct S { n: i64 }\n\
+         impl[T] T { fn get(self: &T) -> i64 { return 0; } }\n\
+         impl[T] M for T {}\n\
+         impl M for S {\n\
+             const k: i64 = 1;\n\
+             fn m(self: &S) -> i64 { return 0; }\n\
+         }\n\
+         impl S { const fine: i64 = 1; }\n");
+    assert_eq!(
+        d.codes(),
+        vec![
+            ("E0508".to_string(), 3),
+            ("E0508".to_string(), 4),
+            ("E0509".to_string(), 6)
+        ]
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+}
+
+#[test]
+fn e0812_e0813_constants_and_generic_argument_kinds() {
+    let d = app("struct Ring[T, const N: i64] { items: [N]T }\n\
+         struct W[T] { t: T }\n\
+         struct A { a: Ring[u8, i64], b: Ring[u8, []u8], c: Ring[u8, 4], d: Ring[u8, { 2 + 2 }] }\n\
+         struct B { a: W[4], b: W[{ 1 }], c: W[u8] }\n\
+         struct G[const N: i64] { a: Ring[u8, N], b: Ring[N, u8] }\n");
+    assert_eq!(
+        d.codes(),
+        vec![
+            ("E0813".to_string(), 3),
+            ("E0813".to_string(), 3),
+            ("E0813".to_string(), 4),
+            ("E0813".to_string(), 4),
+            // `Ring[N, u8]`: a constant for the type parameter, a type for the constant.
+            ("E0813".to_string(), 5),
+            ("E0813".to_string(), 5)
+        ]
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+}
+
+#[test]
+fn e1601_a_fallible_foreign_result() {
+    let d = app("enum Oops { bad }\n\
+         extern \"c\" {\n\
+             fn a() -> i32 ! Oops;\n\
+             fn b() -> i32;\n\
+             fn c(x: i32) -> void ! Oops;\n\
+         }\n");
+    assert_eq!(
+        d.codes(),
+        vec![("E1601".to_string(), 3), ("E1601".to_string(), 5)]
+    );
+    assert!(d.gaps().is_empty(), "{:?}", d.gaps());
+}
+
+#[test]
+fn numeric_bounds_grant_owned_send_sync_and_discard() {
+    let mut d = app(
+        "struct S[A: Int, B: SInt, C: UInt, D: Float, E: Num] { a: A, b: B, c: C, d: D, e: E }\n",
+    );
+    assert_eq!(d.codes(), vec![]);
+    let s = d.type_def("app", "S");
+    let g: Vec<DefId> = d.decls.generics_of(s).iter().map(|g| g.def).collect();
+    for (i, def) in g.into_iter().enumerate() {
+        let p = d.decls.types.param(def);
+        let p = d.decls.props(p);
+        assert_eq!(
+            (
+                p.copy,
+                p.discard(),
+                p.owned(),
+                p.send,
+                p.sync,
+                p.linear,
+                p.view
+            ),
+            (
+                Tri::Yes,
+                Tri::Yes,
+                Tri::Yes,
+                Tri::Yes,
+                Tri::Yes,
+                Tri::No,
+                Tri::No
+            ),
+            "parameter {i}"
+        );
+    }
+    // So a numeric parameter fits where `Owned`, `Send` and `Sync` are required.
+    let d = app_with_std(
+        "import std.sync.Mutex;\n\
+         struct A[T: Num] { m: Mutex[T] }\n\
+         struct B[T: Copy] { m: Mutex[T] }\n",
+    );
+    assert_eq!(d.codes(), vec![("E0801".to_string(), 3)]);
+}
+
+#[test]
+fn the_associated_type_of_iter_is_projected_and_other_builtins_declare_none() {
+    let d = app("struct W[I: Iter] { x: ?I.Item }\n\
+         struct X[E: Executor] { x: E.Item }\n\
+         struct Y[T: Eq] { x: T.Item }\n\
+         struct Z[T: Ord + Iter] { x: T.Item }\n");
+    assert_eq!(
+        d.codes(),
+        vec![("E0519".to_string(), 2), ("E0519".to_string(), 3)]
+    );
+    assert!(d.ni().is_empty(), "{:?}", d.ni());
+    let x = d.field("W", "x");
+    assert_eq!(d.display(x), "?I.Item");
 }

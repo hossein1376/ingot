@@ -15,6 +15,39 @@ pub struct ImplMatch {
     pub subst: Subst,
 }
 
+/// Where the function a method call resolves to comes from.
+#[derive(Clone, Debug)]
+pub enum MethodSource {
+    /// `impl T { ... }`.
+    Inherent(ImplMatch),
+    /// `impl I for T { ... }`, written in a program. The function is the impl's own, or
+    /// the interface's when the impl leaves out a function that has a default body.
+    Impl {
+        interface: DefId,
+        args: Vec<GenericArg>,
+        matched: ImplMatch,
+    },
+    /// The language's own implementation of a built-in interface for a built-in type
+    /// (specification section 4.4: integers, `bool`, raw pointers and payload-free
+    /// enums implement `Eq`, `Ord` and `Hash`, floats `Eq` and `Ord`, scalars, vectors
+    /// and `[]u8` `Format`). The function is the one the interface declares; it has no
+    /// body, and code generation supplies the implementation.
+    Builtin { interface: DefId },
+    /// A bound of a type parameter: the call is resolved when the generic is
+    /// instantiated.
+    Bound {
+        interface: DefId,
+        args: Vec<GenericArg>,
+    },
+}
+
+/// A function that `value.name(...)` can mean for a receiver of a given type.
+#[derive(Clone, Debug)]
+pub struct MethodCandidate {
+    pub method: DefId,
+    pub source: MethodSource,
+}
+
 impl Declarations {
     pub fn head_of(&self, ty: TypeId) -> Head {
         match self.types.kind(ty) {
@@ -526,8 +559,8 @@ impl Declarations {
         match b {
             Bound::Prop(pb) => {
                 out.insert(*pb);
-                // Each of `Int`, `SInt`, `UInt`, `Float` and `Num` implies `Copy`
-                // (section 8), and a `Copy` type is never linear, so it is `Discard`.
+                // Only scalars satisfy `Int`, `SInt`, `UInt`, `Float` and `Num`, so each
+                // implies `Copy`, `Discard`, `Owned`, `Send` and `Sync` (section 8).
                 if matches!(
                     pb,
                     PropBound::Int
@@ -537,6 +570,9 @@ impl Declarations {
                         | PropBound::Num
                 ) {
                     out.insert(PropBound::Copy);
+                    out.insert(PropBound::Owned);
+                    out.insert(PropBound::Send);
+                    out.insert(PropBound::Sync);
                 }
                 if *pb == PropBound::Copy || out.contains(&PropBound::Copy) {
                     out.insert(PropBound::Discard);
@@ -651,22 +687,155 @@ impl Declarations {
         if result != Tri::No {
             return result;
         }
-        // A type with no impl. A user interface is implemented only by an impl. The
-        // built-in ones may have impls the specification does not list (for scalars,
-        // say); only `Eq`, `Ord` and `Hash` are known to need an explicit impl on a
-        // type declared in source.
-        let explicit_only = self.builtin_interfaces.get(&iface).copied();
-        match (self.types.kind(ty), explicit_only) {
-            (_, None) => Tri::No,
-            (TyKind::Adt(d, _), Some(true))
-                if matches!(
-                    self.items.get(d),
-                    Some(ItemSig::Struct(_) | ItemSig::Enum(_))
-                ) =>
-            {
-                Tri::No
+        if args.is_empty() {
+            self.builtin_implements(ty, iface)
+        } else {
+            Tri::No
+        }
+    }
+
+    /// Whether the language itself implements the built-in interface `iface` for `ty`
+    /// (specification section 4.4), with no `impl` written. `No` for a user-declared
+    /// interface, and for a built-in one the section does not list `ty` under.
+    ///
+    /// `Unknown`: the section says "every scalar, vector and slice of `u8` implements
+    /// `Format`" and does not say whether a mask `boolxN` is a vector for this, nor
+    /// whether `[]mut u8` is a slice of `u8`.
+    pub fn builtin_implements(&self, ty: TypeId, iface: DefId) -> Tri {
+        let b = self.builtins;
+        let is = |d: Option<DefId>| d == Some(iface);
+        if is(b.eq) || is(b.ord) || is(b.hash) {
+            let hash = is(b.hash);
+            return match self.types.kind(ty) {
+                TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr(..) => Tri::Yes,
+                // The IEEE total order: `Eq` and `Ord`, not `Hash`.
+                TyKind::Float(_) => Tri::from_bool(!hash),
+                TyKind::Adt(d, _) => Tri::from_bool(self.is_payload_free_enum(*d)),
+                _ => Tri::No,
+            };
+        }
+        if is(b.format) {
+            return match self.types.kind(ty) {
+                TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Vector(..) => Tri::Yes,
+                TyKind::Mask(_) => Tri::Unknown,
+                TyKind::Slice(m, e) if matches!(self.types.kind(*e), TyKind::Int(IntTy::U8)) => {
+                    if *m == Mutability::Shared {
+                        Tri::Yes
+                    } else {
+                        Tri::Unknown
+                    }
+                }
+                _ => Tri::No,
+            };
+        }
+        Tri::No
+    }
+
+    /// An enum none of whose variants has a payload.
+    pub fn is_payload_free_enum(&self, def: DefId) -> bool {
+        matches!(
+            self.items.get(&def),
+            Some(ItemSig::Enum(e)) if e.variants.iter().all(|v| v.payload.is_none())
+        )
+    }
+
+    /// The built-in interfaces the language implements for `ty` (the `Yes` answers of
+    /// [`Declarations::builtin_implements`]).
+    pub fn builtin_interface_impls(&self, ty: TypeId) -> Vec<DefId> {
+        let b = self.builtins;
+        [b.eq, b.ord, b.hash, b.format]
+            .into_iter()
+            .flatten()
+            .filter(|i| self.builtin_implements(ty, *i) == Tri::Yes)
+            .collect()
+    }
+
+    /// The function called `name` that interface `iface` declares.
+    pub fn interface_method(&self, iface: DefId, name: &str) -> Option<DefId> {
+        self.interface_sig(iface)?
+            .methods
+            .iter()
+            .copied()
+            .find(|m| self.fn_sig(*m).is_some_and(|f| f.name == name))
+    }
+
+    /// Every function `value.name(...)` can mean for a receiver of type `ty` (pipeline
+    /// section 4.4): the inherent impls first, then the interfaces `ty` implements,
+    /// whether by an impl or by the language (`MethodSource::Builtin`), or, for a type
+    /// parameter, the interfaces its bounds name. More than one interface candidate
+    /// is the ambiguity the call has to resolve by writing `I.name(value, args)`.
+    pub fn method_candidates(&mut self, ty: TypeId, name: &str) -> Vec<MethodCandidate> {
+        let mut out = Vec::new();
+        for m in self.inherent_impls(ty) {
+            if let Some(&f) = self.impl_sig(m.impl_def).and_then(|s| s.methods.get(name)) {
+                out.push(MethodCandidate {
+                    method: f,
+                    source: MethodSource::Inherent(m),
+                });
             }
-            (_, Some(_)) => Tri::Unknown,
+        }
+        if let TyKind::Param(p) = self.types.kind(ty).clone() {
+            let mut seen = BTreeSet::new();
+            let mut found = Vec::new();
+            for b in self.param_bounds.get(&p).cloned().unwrap_or_default() {
+                self.bound_interfaces(&b, &mut seen, &mut found);
+            }
+            for (iface, args) in found {
+                if let Some(f) = self.interface_method(iface, name) {
+                    out.push(MethodCandidate {
+                        method: f,
+                        source: MethodSource::Bound {
+                            interface: iface,
+                            args,
+                        },
+                    });
+                }
+            }
+            return out;
+        }
+        for (iface, args, m) in self.interface_impls(ty) {
+            let own = self
+                .impl_sig(m.impl_def)
+                .and_then(|s| s.methods.get(name))
+                .copied();
+            if let Some(f) = own.or_else(|| self.interface_method(iface, name)) {
+                out.push(MethodCandidate {
+                    method: f,
+                    source: MethodSource::Impl {
+                        interface: iface,
+                        args,
+                        matched: m,
+                    },
+                });
+            }
+        }
+        for iface in self.builtin_interface_impls(ty) {
+            if let Some(f) = self.interface_method(iface, name) {
+                out.push(MethodCandidate {
+                    method: f,
+                    source: MethodSource::Builtin { interface: iface },
+                });
+            }
+        }
+        out
+    }
+
+    /// The interfaces a bound names, with their supertraits, each once.
+    fn bound_interfaces(
+        &self,
+        b: &Bound,
+        seen: &mut BTreeSet<DefId>,
+        out: &mut Vec<(DefId, Vec<GenericArg>)>,
+    ) {
+        if let Bound::Interface(i, args) = b
+            && seen.insert(*i)
+        {
+            out.push((*i, args.clone()));
+            if let Some(sig) = self.interface_sig(*i) {
+                for s in &sig.supers {
+                    self.bound_interfaces(s, seen, out);
+                }
+            }
         }
     }
 

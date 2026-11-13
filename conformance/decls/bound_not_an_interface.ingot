@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 8
+
+struct Point { x: i64 }
+
+fn show[T: Point](value: T) { } //~ E0523

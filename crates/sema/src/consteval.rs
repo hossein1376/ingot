@@ -732,12 +732,15 @@ impl Cx<'_> {
         match self.d.consts.get(&d) {
             Some(ConstState::Done(r)) => return r.clone(),
             Some(ConstState::InProgress) => {
-                // A cycle between constants: the catalog has no code for it.
+                // E0812, at the constant the evaluation came back to.
                 let name = self.sema.def(d).name.clone();
-                self.ni(format!(
-                    "a cycle between constants (`{name}` depends on itself); the specification \
-                     defines no error for it"
-                ));
+                let (file, span) = (self.file_of(d), self.sema.def(d).span);
+                self.error(
+                    "E0812",
+                    format!("the value of the constant `{name}` depends on itself"),
+                    file,
+                    span,
+                );
                 // Everything on the cycle is poisoned.
                 self.d
                     .consts

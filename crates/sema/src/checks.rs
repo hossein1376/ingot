@@ -19,18 +19,15 @@ use std::collections::{BTreeMap, BTreeSet};
 impl Cx<'_> {
     /// Run all of phase 6.
     pub fn check_all(&mut self) {
-        for (name, explicit) in [
-            ("Eq", true),
-            ("Ord", true),
-            ("Hash", true),
-            ("Iter", false),
-            ("Format", false),
-            ("Executor", false),
-        ] {
-            if let Some(d) = self.sema.builtin_def(name) {
-                self.d.builtin_interfaces.insert(d, explicit);
-            }
-        }
+        self.d.builtins = BuiltinNames {
+            ordering: self.sema.builtin_def("Ordering"),
+            eq: self.sema.builtin_def("Eq"),
+            ord: self.sema.builtin_def("Ord"),
+            hash: self.sema.builtin_def("Hash"),
+            iter: self.sema.builtin_def("Iter"),
+            format: self.sema.builtin_def("Format"),
+            executor: self.sema.builtin_def("Executor"),
+        };
         self.lower_all();
         self.eval_constants();
         self.build_impl_tables();
@@ -183,6 +180,7 @@ impl Cx<'_> {
             .into_iter()
             .filter(|d| matches!(self.hir_item(*d), Some(hir::Item::Impl(_))))
             .collect();
+        let mut misplaced: BTreeSet<DefId> = BTreeSet::new();
         for def in &impls {
             let Some(sig) = self.d.impl_sig(*def).cloned() else {
                 continue;
@@ -196,19 +194,12 @@ impl Cx<'_> {
             let file = self.file_of(*def);
             let target_is_param = matches!(self.d.types.kind(sig.target), TyKind::Param(_));
             if target_is_param {
-                if sig.of == ImplOf::Inherent {
-                    self.ni(
-                        "an inherent `impl` for a type parameter; the specification defines no \
-                         error for it",
-                    );
-                } else {
-                    self.error(
-                        "E0508",
-                        "an impl cannot be written for a bare type parameter",
-                        file,
-                        item.target.span,
-                    );
-                }
+                self.error(
+                    "E0508",
+                    "an impl cannot be written for a bare type parameter",
+                    file,
+                    item.target.span,
+                );
                 self.poison_impl(*def);
                 continue;
             }
@@ -228,12 +219,36 @@ impl Cx<'_> {
                         file,
                         sig.header,
                     );
+                    misplaced.insert(*def);
                 }
             }
             self.d.register_impl(*def);
         }
-        // E0507: the same interface twice for overlapping types.
+        // E0507: the same interface twice for overlapping types, one of them the
+        // language's own implementation of a built-in interface (section 4.4).
         let registered = self.d.impls.all.clone();
+        for &j in &registered {
+            let Some(sj) = self.d.impl_sig(j).cloned() else {
+                continue;
+            };
+            let ImplOf::Interface(iface, args) = &sj.of else {
+                continue;
+            };
+            if !misplaced.contains(&j)
+                && args.is_empty()
+                && self.d.builtin_implements(sj.target, *iface) == Tri::Yes
+            {
+                let name = self.impl_of_name(&sj.of);
+                let ty = self.ty_name(sj.target);
+                let fj = self.file_of(j);
+                self.error(
+                    "E0507",
+                    format!("`{ty}` implements `{name}` already, without an impl"),
+                    fj,
+                    sj.header,
+                );
+            }
+        }
         for (n, &j) in registered.iter().enumerate() {
             let Some(sj) = self.d.impl_sig(j).cloned() else {
                 continue;
@@ -349,10 +364,17 @@ impl Cx<'_> {
                     );
                 }
             }
-            if !sig.consts.is_empty() {
-                self.ni(
-                    "an associated constant in an `impl` of an interface; the specification \
-                     does not say whether an interface impl may add one",
+            // An interface declares functions and associated types, never a constant.
+            for (name, &c) in &sig.consts {
+                let span = self.sema.def(c).span;
+                self.error(
+                    "E0509",
+                    format!(
+                        "`{name}` is not a function or associated type of `{}`",
+                        self.sema.def(iface).name
+                    ),
+                    file,
+                    span,
                 );
             }
             // Methods.
@@ -790,8 +812,16 @@ impl Cx<'_> {
                     f.name_span,
                 );
             }
-        } else if f.abi.is_some() && f.error.is_some() {
-            self.ni("a fallible function in an `extern` block; the specification defines no error for it");
+        } else if f.abi.is_some()
+            && let Some(error_span) = f.error_span
+        {
+            self.error(
+                "E1601",
+                "the result of a foreign function cannot be fallible: a `T ! E` is not a type \
+                 that can cross the C boundary",
+                file,
+                f.ret_span.join(error_span),
+            );
         }
     }
 

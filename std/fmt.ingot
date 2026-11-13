@@ -1,0 +1,5 @@
+// std.fmt (spec sections 4.4 and 35). `Formatter` is where a `Format` implementation
+// writes; it records the first write error itself. A capability-style type: no public
+// field, and no method yet.
+
+pub struct Formatter {}

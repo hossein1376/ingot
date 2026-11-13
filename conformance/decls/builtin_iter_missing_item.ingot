@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 4.4, 7.1
+
+struct Counter { n: i64 }
+
+impl Iter for Counter { //~ E0519
+    fn next(self: &mut Counter) -> ?Self.Item from self.* {
+        return .none;
+    }
+}
