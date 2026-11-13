@@ -14,7 +14,10 @@
     "version": "0.1.0",
     "description": "Tree-sitter grammar for the Ingot language",
     "authors": [
-      "Hossein Yazdani <hosseinyazdani1376@gmail.com>"
+      {
+        "name": "Hossein Yazdani",
+        "email": "hosseinyazdani1376@gmail.com"
+      }
     ]
   }
 }
