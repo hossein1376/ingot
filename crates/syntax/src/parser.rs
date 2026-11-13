@@ -18,9 +18,23 @@ pub fn parse(source: &Source, tokens: Vec<Token>) -> (Module, Vec<Diagnostic>) {
         pos: 0,
         diagnostics: Vec::new(),
         in_expr_branch: false,
+        unit: Unit::default(),
     };
     let module = p.module();
     (module, p.diagnostics)
+}
+
+/// Recovery state of the statement, item or member being parsed (pipeline §3).
+#[derive(Clone, Copy, Default)]
+struct Unit {
+    /// The first token of the unit.
+    start: usize,
+    /// The bracket that encloses the unit, if any: `}` for a statement or a member.
+    closer: Option<Punct>,
+    /// An E02xx has been reported in this unit; later ones are dropped.
+    reported: bool,
+    /// The E0201 skip has run in this unit; a later E0201 only drops its report.
+    skipped: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -40,6 +54,7 @@ struct Parser<'a> {
     pos: usize,
     diagnostics: Vec<Diagnostic>,
     in_expr_branch: bool,
+    unit: Unit,
 }
 
 impl<'a> Parser<'a> {
@@ -97,37 +112,322 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Reports a syntax error. Of the E02xx errors in one statement, item or member, only the
+    /// first is reported (pipeline §3); the others are dropped and `None` is returned.
     fn diag(
         &mut self,
         code: &'static str,
         message: impl Into<String>,
         span: Span,
-    ) -> &mut Diagnostic {
+    ) -> Option<&mut Diagnostic> {
+        if code.starts_with("E02") {
+            if self.unit.reported {
+                return None;
+            }
+            self.unit.reported = true;
+        }
         self.diagnostics
             .push(Diagnostic::new(code, message, self.source, span));
-        self.diagnostics.last_mut().unwrap()
+        self.diagnostics.last_mut()
     }
 
-    fn unexpected(&mut self) -> Span {
+    /// Reports an unexpected token that the caller can still parse past, without skipping it.
+    fn report_unexpected(&mut self) -> Span {
         let span = self.span();
         let desc = self.kind().describe();
         self.diag("E0201", format!("unexpected {desc}"), span);
         span
     }
 
+    /// An unexpected token that the parser skips (see `sync`). Returns the span of `expected`
+    /// if the skip consumed it.
+    fn unexpected_token(
+        &mut self,
+        message: impl Into<String>,
+        span: Span,
+        expected: Option<Punct>,
+    ) -> Option<Span> {
+        self.diag("E0201", message, span);
+        if self.unit.skipped {
+            return None;
+        }
+        self.unit.skipped = true;
+        self.sync(expected)
+    }
+
+    fn unexpected(&mut self) -> Span {
+        let span = self.span();
+        let desc = self.kind().describe();
+        self.unexpected_token(format!("unexpected {desc}"), span, None);
+        span
+    }
+
     fn expect(&mut self, p: Punct) -> Span {
         if self.at(p) {
-            self.bump().span
-        } else {
-            let span = self.span();
-            let desc = self.kind().describe();
-            self.diag(
-                "E0201",
-                format!("expected `{}`, found {desc}", p.as_str()),
-                span,
-            );
-            Span::empty(span.start)
+            return self.bump().span;
         }
+        let span = self.span();
+        let desc = self.kind().describe();
+        let message = format!("expected `{}`, found {desc}", p.as_str());
+        self.unexpected_token(message, span, Some(p))
+            .unwrap_or(Span::empty(span.start))
+    }
+
+    // -------------------------------------------------------------- recovery
+
+    /// Starts a unit: a statement, an item or a member. `closer` is the bracket that encloses
+    /// it. Returns the enclosing unit's state, which `leave_unit` restores.
+    fn enter_unit(&mut self, closer: Option<Punct>) -> Unit {
+        std::mem::replace(
+            &mut self.unit,
+            Unit {
+                start: self.pos,
+                closer,
+                reported: false,
+                skipped: false,
+            },
+        )
+    }
+
+    /// Ends a unit. A `;` left behind by a broken unit is its terminator, so it is consumed.
+    fn leave_unit(&mut self, outer: Unit) {
+        if self.unit.reported && self.at(Semicolon) {
+            self.bump();
+        }
+        self.unit = outer;
+    }
+
+    /// The closing bracket of the innermost bracket that is open at the current token within
+    /// the unit, or else the bracket that encloses the unit.
+    fn innermost_closer(&self) -> Option<Punct> {
+        let mut depth = 0usize;
+        for token in self.tokens[self.unit.start.min(self.pos)..self.pos]
+            .iter()
+            .rev()
+        {
+            match token.kind {
+                TokenKind::Punct(RParen | RBracket | RBrace) => depth += 1,
+                TokenKind::Punct(LParen) if depth == 0 => return Some(RParen),
+                TokenKind::Punct(LBracket | DotLBracket) if depth == 0 => return Some(RBracket),
+                TokenKind::Punct(LBrace | DotLBrace) if depth == 0 => return Some(RBrace),
+                TokenKind::Punct(LParen | LBracket | LBrace | DotLBrace | DotLBracket) => {
+                    depth -= 1
+                }
+                _ => {}
+            }
+        }
+        self.unit.closer
+    }
+
+    /// Skips the rest of a broken unit so that the parser can resume (pipeline §3). At the
+    /// current depth it stops, without consuming, at a `;`, at the innermost open bracket's
+    /// closer, and at any `}` while some bracket encloses the unit. It also stops before a `{`
+    /// when a `(` or `[` is the innermost open bracket, and, in item mode (no `expected`
+    /// token, or `;`), before an item keyword. It consumes `expected` when it reaches it at
+    /// the same depth. Brackets opened on the way are skipped whole; in item mode the skip
+    /// ends after the brace group that closes. Returns the span of `expected` if it consumed it.
+    fn sync(&mut self, expected: Option<Punct>) -> Option<Span> {
+        let innermost = self.innermost_closer();
+        let item_mode = matches!(expected, None | Some(Semicolon));
+        let mut depth = 0usize;
+        while !self.at_eof() {
+            if depth == 0 {
+                if expected.is_some_and(|p| self.at(p)) {
+                    return Some(self.bump().span);
+                }
+                let closer_here = innermost.is_some_and(|p| self.at(p))
+                    || (innermost.is_some() && self.at(RBrace));
+                if self.at(Semicolon) || closer_here {
+                    return None;
+                }
+                if self.at(LBrace)
+                    && matches!(innermost, Some(RParen | RBracket))
+                    && expected != Some(LBrace)
+                {
+                    return None;
+                }
+                if item_mode && self.at_item_keyword() {
+                    return None;
+                }
+            }
+            let closes_group = depth == 1 && self.at(RBrace);
+            match self.kind() {
+                TokenKind::Punct(LParen | LBracket | LBrace | DotLBrace | DotLBracket) => {
+                    depth += 1
+                }
+                TokenKind::Punct(RParen | RBracket | RBrace) if depth > 0 => depth -= 1,
+                _ => {}
+            }
+            self.bump();
+            if closes_group && item_mode {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Skips an item that is not allowed here, or junk where an item or member starts. The
+    /// first token is always consumed (unless it is the end of the file), so that the caller
+    /// makes progress.
+    fn skip_junk_item(&mut self) {
+        self.unit.skipped = true;
+        if self.at_eof() {
+            return;
+        }
+        let before = self.pos;
+        if self.at_item_keyword() || self.at(RBrace) || self.at(RParen) || self.at(RBracket) {
+            self.bump();
+        }
+        self.sync(None);
+        self.eat(Semicolon);
+        if self.pos == before {
+            self.bump();
+        }
+    }
+
+    /// An item or member that starts with an unexpected token: report it and skip past it.
+    fn unexpected_item(&mut self) {
+        let span = self.span();
+        let desc = self.kind().describe();
+        self.diag("E0201", format!("unexpected {desc}"), span);
+        self.skip_junk_item();
+    }
+
+    fn at_item_keyword(&self) -> bool {
+        matches!(
+            self.kind(),
+            TokenKind::Keyword(
+                Kw::Fn
+                    | Kw::Struct
+                    | Kw::Enum
+                    | Kw::Interface
+                    | Kw::Impl
+                    | Kw::Const
+                    | Kw::Static
+                    | Kw::Type
+                    | Kw::Extern
+                    | Kw::Test
+                    | Kw::Bench
+                    | Kw::When
+                    | Kw::Import
+            )
+        )
+    }
+
+    /// Whether the current token is an item keyword in a unit that has already skipped
+    /// past its error. Such a keyword starts the next item, so it is not read as a name.
+    fn ends_skipped_unit(&self) -> bool {
+        self.unit.skipped && self.at_item_keyword()
+    }
+
+    /// Whether the current token can start a statement or an item.
+    fn starts_statement_or_item(&self) -> bool {
+        match self.kind() {
+            TokenKind::Ident(_)
+            | TokenKind::TypeIdent(_)
+            | TokenKind::Int(_)
+            | TokenKind::Float(_)
+            | TokenKind::Str(_)
+            | TokenKind::CStr(_)
+            | TokenKind::Builtin(_)
+            | TokenKind::Scalar(_)
+            | TokenKind::Vector(_)
+            | TokenKind::Punct(LBrace) => true,
+            TokenKind::Keyword(k) => matches!(
+                k,
+                Kw::Let
+                    | Kw::Var
+                    | Kw::Try
+                    | Kw::If
+                    | Kw::Match
+                    | Kw::While
+                    | Kw::Loop
+                    | Kw::For
+                    | Kw::Return
+                    | Kw::Fail
+                    | Kw::Break
+                    | Kw::Continue
+                    | Kw::Defer
+                    | Kw::Errdefer
+                    | Kw::Scope
+                    | Kw::Spawn
+                    | Kw::Dispatch
+                    | Kw::Unsafe
+                    | Kw::Select
+                    | Kw::When
+                    | Kw::True
+                    | Kw::False
+                    | Kw::Import
+                    | Kw::Pub
+                    | Kw::Inline
+                    | Kw::Noinline
+                    | Kw::Export
+                    | Kw::Kernel
+                    | Kw::Waitable
+                    | Kw::Linear
+                    | Kw::Copy
+                    | Kw::Fn
+                    | Kw::Struct
+                    | Kw::Enum
+                    | Kw::Interface
+                    | Kw::Impl
+                    | Kw::Const
+                    | Kw::Static
+                    | Kw::Type
+                    | Kw::Extern
+                    | Kw::Test
+                    | Kw::Bench
+            ),
+            _ => false,
+        }
+    }
+
+    /// The end of the last token consumed.
+    fn prev_end(&self) -> usize {
+        self.pos
+            .checked_sub(1)
+            .map_or(0, |i| self.tokens[i].span.end)
+    }
+
+    /// The `;` that ends a statement or an item, and the end of the statement. A missing `;`
+    /// before a token that starts a statement or an item, before `}`, or at the end of the file
+    /// is E0202, and nothing is skipped. Any other token is E0201, and the parser skips to the
+    /// `;`.
+    fn expect_semi(&mut self) -> usize {
+        if !self.eat(Semicolon) {
+            let at = Span::empty(self.prev_end());
+            if self.at(RBrace) || self.at_eof() || self.starts_statement_or_item() {
+                let file = self.source.path.clone();
+                if let Some(d) = self.diag("E0202", "missing `;`", at) {
+                    d.fix(
+                        "insert `;`",
+                        Edit {
+                            file,
+                            span: at,
+                            text: ";".to_string(),
+                        },
+                    );
+                }
+            } else {
+                let span = self.span();
+                let desc = self.kind().describe();
+                let message = format!("expected `;`, found {desc}");
+                self.unexpected_token(message, span, Some(Semicolon));
+            }
+        }
+        self.prev_end()
+    }
+
+    /// The `{` that opens a block. A missing one is reported and skipped to. Returns `None`
+    /// when no `{` is reached, and the block is then empty.
+    fn open_brace(&mut self) -> Option<Span> {
+        if self.at(LBrace) {
+            return Some(self.bump().span);
+        }
+        let span = self.span();
+        let desc = self.kind().describe();
+        let message = format!("expected `{{`, found {desc}");
+        self.unexpected_token(message, span, Some(LBrace))
     }
 
     fn expect_ident(&mut self) -> (String, Span) {
@@ -145,7 +445,7 @@ impl<'a> Parser<'a> {
                 );
                 (name, span)
             }
-            TokenKind::Keyword(k) => {
+            TokenKind::Keyword(k) if !self.ends_skipped_unit() => {
                 let span = self.bump().span;
                 self.diag(
                     "E0212",
@@ -196,7 +496,7 @@ impl<'a> Parser<'a> {
                 );
                 (name, span)
             }
-            TokenKind::Keyword(k) => {
+            TokenKind::Keyword(k) if !self.ends_skipped_unit() => {
                 let span = self.bump().span;
                 self.diag(
                     "E0212",
@@ -210,35 +510,6 @@ impl<'a> Parser<'a> {
                 (String::new(), span)
             }
         }
-    }
-
-    fn expect_semi(&mut self, previous_end: usize) {
-        if self.eat(Semicolon) {
-            return;
-        }
-        let file = self.source.path.clone();
-        if self.at(RBrace) || self.at_eof() {
-            let at = Span::empty(previous_end);
-            self.diag("E0202", "missing `;`", at).fix(
-                "insert `;`",
-                Edit {
-                    file,
-                    span: at,
-                    text: ";".to_string(),
-                },
-            );
-            return;
-        }
-        let at = Span::empty(previous_end);
-        self.diag("E0202", "missing `;` between statements", at)
-            .fix(
-                "insert `;`",
-                Edit {
-                    file,
-                    span: at,
-                    text: ";".to_string(),
-                },
-            );
     }
 
     // ---------------------------------------------------------------- module
@@ -260,13 +531,14 @@ impl<'a> Parser<'a> {
                 imports.push(self.import());
             } else {
                 seen_item = true;
+                let outer = self.enter_unit(None);
                 let before = self.pos;
                 let item = self.item(Modifiers::default());
+                self.leave_unit(outer);
                 if !matches!(item, Item::Poison) {
                     items.push(item);
                 }
                 if self.pos == before {
-                    self.unexpected();
                     self.bump();
                 }
             }
@@ -318,7 +590,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let end = self.expect(Semicolon).end;
+        let end = self.expect_semi();
         Import {
             segments,
             alias,
@@ -398,7 +670,7 @@ impl<'a> Parser<'a> {
                         "`copy` must be followed by `struct` or `enum`",
                         copy_span,
                     );
-                    self.recover_item();
+                    self.skip_junk_item();
                     Item::Poison
                 }
             }
@@ -408,7 +680,7 @@ impl<'a> Parser<'a> {
                     Item::Struct(self.struct_decl(StructKind::Linear, mods.public, start))
                 } else {
                     self.diag("E0201", "`linear` must be followed by `struct`", span);
-                    self.recover_item();
+                    self.skip_junk_item();
                     Item::Poison
                 }
             }
@@ -425,61 +697,8 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Keyword(Kw::When) => Item::When(self.when_items(start)),
             _ => {
-                self.unexpected();
-                self.recover_item();
+                self.unexpected_item();
                 Item::Poison
-            }
-        }
-    }
-
-    /// Recover inside the body of an `impl`, an `interface` or an `extern` block. Returns
-    /// false when nothing could be skipped: the token starts an item, so the body was
-    /// not closed and the member loop must stop, or it would never advance.
-    fn recover_member(&mut self) -> bool {
-        let before = self.pos;
-        self.recover_item();
-        self.pos != before
-    }
-
-    fn recover_item(&mut self) {
-        let mut depth = 0i32;
-        while !self.at_eof() {
-            match self.kind() {
-                TokenKind::Punct(LBrace) => {
-                    depth += 1;
-                    self.bump();
-                }
-                TokenKind::Punct(RBrace) => {
-                    if depth == 0 {
-                        return;
-                    }
-                    depth -= 1;
-                    self.bump();
-                    if depth == 0 {
-                        return;
-                    }
-                }
-                TokenKind::Punct(Semicolon) if depth == 0 => {
-                    self.bump();
-                    return;
-                }
-                TokenKind::Keyword(
-                    Kw::Fn
-                    | Kw::Struct
-                    | Kw::Enum
-                    | Kw::Interface
-                    | Kw::Impl
-                    | Kw::Const
-                    | Kw::Static
-                    | Kw::Type
-                    | Kw::Extern
-                    | Kw::Test
-                    | Kw::Bench
-                    | Kw::When,
-                ) if depth == 0 => return,
-                _ => {
-                    self.bump();
-                }
             }
         }
     }
@@ -499,7 +718,7 @@ impl<'a> Parser<'a> {
         let body = if self.at(LBrace) {
             Some(self.block())
         } else {
-            self.expect_semi(self.span().start);
+            self.expect_semi();
             None
         };
         let end = body.as_ref().map(|b| b.span.end).unwrap_or(self.span().end);
@@ -865,10 +1084,12 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut members = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let outer = self.enter_unit(Some(RBrace));
+            let before = self.pos;
             let mods = self.member_modifiers();
             if self.eat_kw(Kw::Type) {
                 let (n, sp) = self.expect_type_ident();
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 members.push(Item::TypeAlias(TypeAlias {
                     name: n,
                     name_span: sp,
@@ -880,10 +1101,11 @@ impl<'a> Parser<'a> {
             } else if self.at_kw(Kw::Fn) {
                 members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
             } else {
-                self.unexpected();
-                if !self.recover_member() {
-                    break;
-                }
+                self.unexpected_item();
+            }
+            self.leave_unit(outer);
+            if self.pos == before {
+                self.bump();
             }
         }
         let close = self.expect(RBrace);
@@ -922,6 +1144,8 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut members = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let outer = self.enter_unit(Some(RBrace));
+            let before = self.pos;
             let mods = self.member_modifiers();
             match self.kind().clone() {
                 TokenKind::Keyword(Kw::Fn) => {
@@ -935,12 +1159,11 @@ impl<'a> Parser<'a> {
                         self.type_alias(mods.public, self.span().start),
                     ));
                 }
-                _ => {
-                    self.unexpected();
-                    if !self.recover_member() {
-                        break;
-                    }
-                }
+                _ => self.unexpected_item(),
+            }
+            self.leave_unit(outer);
+            if self.pos == before {
+                self.bump();
             }
         }
         let close = self.expect(RBrace);
@@ -961,7 +1184,7 @@ impl<'a> Parser<'a> {
         let ty = self.ty();
         self.expect(Eq);
         let value = self.expr();
-        let end = self.expect(Semicolon).end;
+        let end = self.expect_semi();
         ConstDecl {
             name,
             name_span,
@@ -984,7 +1207,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(Eq);
         let value = self.expr();
-        let end = self.expect(Semicolon).end;
+        let end = self.expect_semi();
         StaticDecl {
             name,
             name_span,
@@ -1002,7 +1225,7 @@ impl<'a> Parser<'a> {
         let generics = self.generics();
         self.expect(Eq);
         let ty = self.ty();
-        let end = self.expect(Semicolon).end;
+        let end = self.expect_semi();
         TypeAlias {
             name,
             name_span,
@@ -1021,19 +1244,22 @@ impl<'a> Parser<'a> {
             abi_span = self.bump().span;
             abi = String::from_utf8_lossy(&bytes).into_owned();
         } else {
-            self.unexpected();
+            self.report_unexpected();
         }
         self.expect(LBrace);
         let mut functions = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let outer = self.enter_unit(Some(RBrace));
+            let before = self.pos;
             if self.at_kw(Kw::Fn) {
                 let fstart = self.span().start;
                 functions.push(self.fn_decl_in(Modifiers::default(), fstart, true));
             } else {
-                self.unexpected();
-                if !self.recover_member() {
-                    break;
-                }
+                self.unexpected_item();
+            }
+            self.leave_unit(outer);
+            if self.pos == before {
+                self.bump();
             }
         }
         let close = self.expect(RBrace);
@@ -1053,7 +1279,7 @@ impl<'a> Parser<'a> {
             self.bump();
             String::from_utf8_lossy(&bytes).into_owned()
         } else {
-            let span = self.unexpected();
+            let span = self.report_unexpected();
             format!("test@{}", span.start)
         };
         let body = self.block();
@@ -1091,11 +1317,15 @@ impl<'a> Parser<'a> {
     }
 
     fn item_block(&mut self) -> Vec<Item> {
-        self.expect(LBrace);
+        if self.open_brace().is_none() {
+            return Vec::new();
+        }
         let mut items = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let outer = self.enter_unit(Some(RBrace));
             let before = self.pos;
             let item = self.item(Modifiers::default());
+            self.leave_unit(outer);
             if !matches!(item, Item::Poison) {
                 items.push(item);
             }
@@ -1271,14 +1501,14 @@ impl<'a> Parser<'a> {
                     span: Span::new(start, close.end),
                 }
             }
-            TokenKind::Keyword(Kw::Extern) => {
+            TokenKind::Keyword(Kw::Extern) if !self.ends_skipped_unit() => {
                 self.bump();
                 if !self.at_kw(Kw::Fn) {
-                    self.unexpected();
+                    self.report_unexpected();
                 }
                 self.fn_type(true, start)
             }
-            TokenKind::Keyword(Kw::Fn) => self.fn_type(false, start),
+            TokenKind::Keyword(Kw::Fn) if !self.ends_skipped_unit() => self.fn_type(false, start),
             TokenKind::TypeIdent(_) | TokenKind::Ident(_) => Ty::Path(self.path_ty()),
             _ => {
                 let span = self.unexpected();
@@ -1322,7 +1552,16 @@ impl<'a> Parser<'a> {
     // ------------------------------------------------------------ statements
 
     fn block(&mut self) -> Block {
-        let open = self.expect(LBrace);
+        let Some(open) = self.open_brace() else {
+            return Block {
+                stmts: Vec::new(),
+                span: Span::empty(self.span().start),
+            };
+        };
+        // A body is independent of the header that it follows, so it reports afresh.
+        let outer = self.unit;
+        self.unit.reported = false;
+        self.unit.skipped = false;
         let mut stmts = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
             let before = self.pos;
@@ -1333,13 +1572,22 @@ impl<'a> Parser<'a> {
             }
         }
         let close = self.expect(RBrace);
+        self.unit = outer;
         Block {
             stmts,
             span: open.join(close),
         }
     }
 
+    /// One statement, as a unit of error recovery.
     fn stmt(&mut self) -> Stmt {
+        let outer = self.enter_unit(Some(RBrace));
+        let stmt = self.stmt_in_unit();
+        self.leave_unit(outer);
+        stmt
+    }
+
+    fn stmt_in_unit(&mut self) -> Stmt {
         let start = self.span().start;
         // label: for/while/loop, or par for
         if matches!(self.kind(), TokenKind::Ident(_))
@@ -1380,7 +1628,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Some(self.expr())
                 };
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Return {
                     value,
                     span: Span::new(start, end),
@@ -1389,7 +1637,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Fail) => {
                 self.bump();
                 let value = self.expr();
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Fail {
                     value,
                     span: Span::new(start, end),
@@ -1402,7 +1650,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Break {
                     label,
                     span: Span::new(start, end),
@@ -1415,7 +1663,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Continue {
                     label,
                     span: Span::new(start, end),
@@ -1448,10 +1696,10 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let call = self.call_expr_after_keyword();
                 if !self.eat_kw(Kw::In) {
-                    self.unexpected();
+                    self.report_unexpected();
                 }
                 let scope = self.expr();
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Spawn {
                     call,
                     scope,
@@ -1465,7 +1713,7 @@ impl<'a> Parser<'a> {
                 let domain = self.domain();
                 self.expect_contextual("on");
                 let executor = self.expr();
-                let end = self.expect(Semicolon).end;
+                let end = self.expect_semi();
                 Stmt::Dispatch {
                     call,
                     domain,
@@ -1506,7 +1754,7 @@ impl<'a> Parser<'a> {
                     "items are not allowed inside a function body",
                     self.span(),
                 );
-                self.recover_item();
+                self.skip_junk_item();
                 Stmt::Poison
             }
             _ => self.expr_stmt(start),
@@ -1523,7 +1771,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(Eq);
         let init = self.expr();
-        let end = self.expect(Semicolon).end;
+        let end = self.expect_semi();
         Stmt::Let {
             mutable,
             pattern,
@@ -1538,7 +1786,7 @@ impl<'a> Parser<'a> {
         if let Some(op) = self.assign_op() {
             self.bump();
             let value = self.expr();
-            let end = self.expect(Semicolon).end;
+            let end = self.expect_semi();
             return Stmt::Assign {
                 place: expr,
                 op,
@@ -1558,7 +1806,7 @@ impl<'a> Parser<'a> {
             self.peek().span
         } else {
             if !trailing_branch_expr {
-                self.expect_semi(expr.span.end);
+                self.expect_semi();
             }
             self.peek().span
         };
@@ -1735,7 +1983,11 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut arms = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let before = self.pos;
             arms.push(self.arm());
+            if self.pos == before {
+                self.bump();
+            }
         }
         let close = self.expect(RBrace);
         Stmt::Match(MatchStmt {
@@ -1788,6 +2040,7 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut arms = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let before = self.pos;
             let astart = self.span().start;
             if self.eat_kw(Kw::Else) {
                 self.expect(FatArrow);
@@ -1800,21 +2053,24 @@ impl<'a> Parser<'a> {
                     body,
                     span: Span::new(astart, end),
                 });
-                continue;
+            } else {
+                let pattern = self.pattern();
+                self.expect(Eq);
+                let call = self.expr();
+                self.expect(FatArrow);
+                let body = self.block();
+                let end = body.span.end;
+                arms.push(SelectArm {
+                    is_else: false,
+                    pattern,
+                    call,
+                    body,
+                    span: Span::new(astart, end),
+                });
             }
-            let pattern = self.pattern();
-            self.expect(Eq);
-            let call = self.expr();
-            self.expect(FatArrow);
-            let body = self.block();
-            let end = body.span.end;
-            arms.push(SelectArm {
-                is_else: false,
-                pattern,
-                call,
-                body,
-                span: Span::new(astart, end),
-            });
+            if self.pos == before {
+                self.bump();
+            }
         }
         let close = self.expect(RBrace);
         Stmt::Select {
@@ -2575,8 +2831,10 @@ impl<'a> Parser<'a> {
                     }
                     let brace = self.bump().span;
                     let file = self.source.path.clone();
-                    self.diag("E0209", "a struct literal is written with `.{`", brace)
-                        .fix(
+                    if let Some(d) =
+                        self.diag("E0209", "a struct literal is written with `.{`", brace)
+                    {
+                        d.fix(
                             "insert `.` before `{`",
                             Edit {
                                 file,
@@ -2584,6 +2842,7 @@ impl<'a> Parser<'a> {
                                 text: ".".to_string(),
                             },
                         );
+                    }
                     let fields = self.inits();
                     let close = self.expect(RBrace);
                     let span = expr.span.join(close);
@@ -2869,7 +3128,7 @@ impl<'a> Parser<'a> {
                     span,
                 )
             }
-            TokenKind::Keyword(Kw::Fn) => self.closure(start),
+            TokenKind::Keyword(Kw::Fn) if !self.ends_skipped_unit() => self.closure(start),
             TokenKind::Keyword(Kw::If) => self.if_expr(start),
             TokenKind::Keyword(Kw::Match) => self.match_expr(start),
             TokenKind::Keyword(Kw::Spawn) => {
@@ -2981,19 +3240,20 @@ impl<'a> Parser<'a> {
         let mut captures = Vec::new();
         if !self.at(LBracket) {
             let file = self.source.path.clone();
-            self.diag(
+            if let Some(d) = self.diag(
                 "E0208",
                 "a closure must list its captures in `[...]`",
                 Span::new(start, start + 2),
-            )
-            .fix(
-                "insert an empty capture list",
-                Edit {
-                    file,
-                    span: Span::empty(start + 2),
-                    text: "[]".to_string(),
-                },
-            );
+            ) {
+                d.fix(
+                    "insert an empty capture list",
+                    Edit {
+                        file,
+                        span: Span::empty(start + 2),
+                        text: "[]".to_string(),
+                    },
+                );
+            }
         } else {
             self.bump();
             while !self.at(RBracket) && !self.at_eof() {
@@ -3054,7 +3314,9 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_branch(&mut self) -> Expr {
-        let open = self.expect(LBrace);
+        let Some(open) = self.open_brace() else {
+            return Expr::poison(Span::empty(self.span().start));
+        };
         if self.at(RBrace) {
             let close = self.bump().span;
             self.diag(
@@ -3085,14 +3347,17 @@ impl<'a> Parser<'a> {
             ) | TokenKind::Punct(LBrace)
         );
         if can_expr {
-            let saved = self.pos;
+            // Speculation: if the branch is not a single expression, undo what it reported.
+            let saved = (self.pos, self.unit, self.diagnostics.len());
             let expr = self.expr();
             if self.at(RBrace) {
                 let close = self.bump().span;
                 let _ = close;
                 return expr;
             }
-            self.pos = saved;
+            self.pos = saved.0;
+            self.unit = saved.1;
+            self.diagnostics.truncate(saved.2);
         }
         let old_flag = self.in_expr_branch;
         self.in_expr_branch = true;
@@ -3107,6 +3372,9 @@ impl<'a> Parser<'a> {
     }
 
     fn block_after_open(&mut self, open: Span) -> Block {
+        let outer = self.unit;
+        self.unit.reported = false;
+        self.unit.skipped = false;
         let mut stmts = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
             let before = self.pos;
@@ -3116,6 +3384,7 @@ impl<'a> Parser<'a> {
             }
         }
         let close = self.expect(RBrace);
+        self.unit = outer;
         Block {
             stmts,
             span: open.join(close),
@@ -3128,6 +3397,7 @@ impl<'a> Parser<'a> {
         self.expect(LBrace);
         let mut arms = Vec::new();
         while !self.at(RBrace) && !self.at_eof() {
+            let before = self.pos;
             let arm_start = self.span().start;
             let is_else = self.eat_kw(Kw::Else);
             let mut patterns = Vec::new();
@@ -3169,6 +3439,9 @@ impl<'a> Parser<'a> {
                 body,
                 span: Span::new(arm_start, end),
             });
+            if self.pos == before {
+                self.bump();
+            }
         }
         let close = self.expect(RBrace);
         let span = Span::new(start, close.end);
@@ -3801,5 +4074,161 @@ mod tests {
             &stmts[1],
             Stmt::Let { pattern: Pattern::Bind { name, .. }, .. } if name == "par"
         ));
+    }
+
+    /// The code and line of every diagnostic `text` produces, in report order.
+    fn code_lines(text: &str) -> Vec<(&'static str, usize)> {
+        let (_, diagnostics) = parse_text(text);
+        diagnostics
+            .iter()
+            .map(|d| (d.code, text[..d.span.start].matches('\n').count() + 1))
+            .collect()
+    }
+
+    fn fn_stmts(text: &str) -> Vec<Stmt> {
+        let (module, _) = parse_text(text);
+        let Some(Item::Fn(f)) = module.items.iter().find(|i| matches!(i, Item::Fn(_))) else {
+            panic!("expected a function");
+        };
+        f.body.clone().expect("a body").stmts
+    }
+
+    /// Pipeline §3: at most one E02xx per item header. A broken header is reported once
+    /// and the parser resumes after its body.
+    #[test]
+    fn impl_with_a_fn_signature_is_one_error() {
+        assert_eq!(
+            code_lines("struct Point { x: i64 }\nimpl Fn(i64) -> i64 for Point {}\nfn f() {}\n"),
+            [("E0201", 2)]
+        );
+        assert_eq!(
+            code_lines("impl Fn(i64) for P {}\nstruct Q {}\n"),
+            [("E0201", 1)]
+        );
+        let (module, _) = parse_text("impl Fn(i64) for P {}\nfn f() {}\n");
+        assert!(module.items.iter().any(|i| matches!(i, Item::Fn(_))));
+    }
+
+    /// Pipeline §3: an item inside a function body is skipped whole, braces included.
+    #[test]
+    fn item_inside_a_function_body_is_skipped_whole() {
+        assert_eq!(code_lines("fn f() {\n    struct X {}\n}\n"), [("E0210", 2)]);
+        let text = "fn f() {\n    struct X {}\n    let a = 1;\n}\n";
+        assert_eq!(code_lines(text), [("E0210", 2)]);
+        // The skip stops at the closing brace of `X`: the next statement is still parsed.
+        assert!(fn_stmts(text).iter().any(|s| matches!(s, Stmt::Let { .. })));
+    }
+
+    /// An item keyword in a member list must not hang the list and must not cascade.
+    #[test]
+    fn item_keyword_in_a_member_list_is_one_error() {
+        for (text, line) in [
+            ("interface I {\n    struct X {}\n}\n", 2),
+            ("extern \"c\" {\n    struct X {}\n}\n", 2),
+            ("impl P {\n    struct X {}\n}\n", 2),
+        ] {
+            assert_eq!(code_lines(text), [("E0201", line)], "{text:?}");
+        }
+    }
+
+    /// After the skip past a broken header, the next item's keyword is not read as a name.
+    #[test]
+    fn missing_fn_name_does_not_swallow_the_next_item() {
+        assert_eq!(code_lines("fn (a: i64) {}\nfn g() {}\n"), [("E0201", 1)]);
+        let (module, _) = parse_text("fn (a: i64) {}\nfn g() {}\n");
+        assert!(
+            module
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::Fn(f) if f.name == "g"))
+        );
+    }
+
+    #[test]
+    fn stray_closing_brace_is_one_error() {
+        assert_eq!(code_lines("}\nfn f() {}\n"), [("E0201", 1)]);
+        let (module, _) = parse_text("}\nfn f() {}\n");
+        assert!(module.items.iter().any(|i| matches!(i, Item::Fn(_))));
+    }
+
+    #[test]
+    fn bad_field_skips_to_the_closing_brace_of_the_struct() {
+        assert_eq!(
+            code_lines("struct S { x: i64 struct T {} }\n"),
+            [("E0201", 1)]
+        );
+    }
+
+    /// A missing `;` before a valid statement is E0202 and loses nothing.
+    #[test]
+    fn missing_semicolon_before_a_valid_statement_is_one_error() {
+        let text = "fn f() {\n    let a = 1\n    let b = 2;\n}\n";
+        assert_eq!(code_lines(text), [("E0202", 2)]);
+        let stmts = fn_stmts(text);
+        assert_eq!(stmts.len(), 2);
+        assert!(stmts.iter().all(|s| matches!(s, Stmt::Let { .. })));
+    }
+
+    /// `try f();` is a statement (E0206 allows a call under `try`), so a missing `;` before
+    /// it is E0202 and the `try` statement is kept.
+    #[test]
+    fn missing_semicolon_before_a_try_statement_is_e0202() {
+        let text = "fn f() {\n    let a = 1\n    try g();\n}\n";
+        assert_eq!(code_lines(text), [("E0202", 2)]);
+        assert_eq!(fn_stmts(text).len(), 2);
+    }
+
+    #[test]
+    fn bad_token_in_a_parameter_list_is_one_error() {
+        let text = "fn f(a: i64, 5, b: i64) -> i64 {\n    return a;\n}\n";
+        assert_eq!(code_lines(text), [("E0201", 1)]);
+        let (module, _) = parse_text(text);
+        let Some(Item::Fn(f)) = module.items.first() else {
+            panic!("expected a function");
+        };
+        assert!(f.body.is_some());
+    }
+
+    #[test]
+    fn bad_token_in_a_struct_literal_is_one_error() {
+        assert_eq!(
+            code_lines("fn f() -> Point {\n    return Point.{ x: 1 y: 2 };\n}\n"),
+            [("E0201", 2)]
+        );
+        // The missing `.` (E0209) comes first; the bad token in the same statement is dropped.
+        assert_eq!(
+            code_lines("fn f() -> Point {\n    return Point { x: 1 y: 2 };\n}\n"),
+            [("E0209", 2)]
+        );
+    }
+
+    /// Independent errors in different statements are all reported, one each.
+    #[test]
+    fn two_broken_statements_in_one_function_are_two_errors() {
+        assert_eq!(
+            code_lines("fn f() {\n    foo(1 2);\n    bar(3 4);\n}\n"),
+            [("E0201", 2), ("E0201", 3)]
+        );
+        assert_eq!(
+            code_lines("fn f() {\n    let a = 1 +;\n    let b = 2 +;\n}\n"),
+            [("E0201", 2), ("E0201", 3)]
+        );
+    }
+
+    /// A match or select arm that cannot be parsed must still consume a token.
+    #[test]
+    fn unparsable_arms_terminate_with_one_error() {
+        assert_eq!(
+            code_lines("fn f(x: i64) {\n    match x { ) }\n}\n"),
+            [("E0201", 2)]
+        );
+        assert_eq!(
+            code_lines("fn f(x: i64) {\n    match x { 5 => 1, ) => 2 }\n}\n"),
+            [("E0201", 2)]
+        );
+        assert_eq!(
+            code_lines("fn f(x: i64) {\n    select { ; }\n}\n"),
+            [("E0201", 2)]
+        );
     }
 }
