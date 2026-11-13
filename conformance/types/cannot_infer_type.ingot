@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3
+
+fn pick() -> ?i64 {
+    let x = .none; //~ E0404
+    return x;
+}

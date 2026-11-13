@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 7.1
+
+struct Item { v: i64 }
+
+fn total(xs: []Item) -> i64 {
+    var t: i64 = 0;
+    for x in xs.refs() {
+        t += x.v;
+    }
+    return t;
+}

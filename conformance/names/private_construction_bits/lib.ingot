@@ -1,0 +1,5 @@
+pub copy struct Ticket { id: i32 }
+
+pub fn issue() -> Ticket {
+    return Ticket.{ id: 1 };
+}

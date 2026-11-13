@@ -78,7 +78,9 @@ Tuple(Vec<TypeId>) | Adt(DefId, Vec<GenericArg>) | Optional(TypeId) |
 Result(TypeId, TypeId) | Ref(Mutability, TypeId) | Slice(Mutability, TypeId) |
 RawPtr(Mutability, TypeId) | FnPtr(FnSig) | Dyn(Mutability, DefId) |
 Vector(ScalarTy, u32) | Mask(u32) | Param(DefId) | Projection(TypeId, DefId) |
-Closure(..) | Poison`. Type equality is `TypeId` equality (pipeline §4.4).
+Closure(owner, expr) | Poison`. Type equality is `TypeId` equality (pipeline §4.4). A
+closure's type names the body that contains it and its expression; its signature and
+captures are in that body's `TypedBody`.
 
 **Poison** (pipeline §3). A failed name or expression has the poison declaration or
 type; every operation with a poison operand yields poison and reports nothing. A body
@@ -92,11 +94,16 @@ has exactly the properties its bounds grant.
 types, error type, `from`/`into` clauses, generic parameters with bounds, and per-type
 `impl` and interface tables for method lookup.
 
-**Typed bodies** (phase 7): each function body becomes a `Body` with arenas of locals,
-expressions, statements and blocks (`ExprId`, `LocalId`, …). Every node has its type and
-span. Everything the source leaves implicit is explicit here: the receiver borrow of a
-method call, literal types, resolved callee `DefId` with its generic arguments, the
-conversion of a `try` operand (identity or a `from` variant). Phase 8 reads only this.
+**Typed bodies** (phase 7, `crates/sema/src/body/`, result type in `typed.rs`): the HIR
+is not copied or changed. Each function, test, `const` and `static` body gets a
+`TypedBody` keyed by the HIR's own ids (`ExprId`, `PatId`, `LocalId`, `StmtId`): the
+type of every expression, pattern and local, and everything the source leaves implicit:
+the receiver adjustment of a method call, literal types, the resolved callee with its
+generic arguments and the interface and impl it was found through, the field or variant
+a member name resolved to, the binding mode of every pattern binding, the conversion of a
+`try` operand (identity or a `from` variant), how each `for` iterates, and the
+signature and captures of each closure. A body in which phase 7 reported an error is
+marked `failed` and phases 8 to 10 skip it. Phase 8 reads the HIR and this, nothing else.
 
 **Constant evaluation** (spec §9) interprets typed bodies with a step limit, sharing one
 arithmetic module with check folding so a constant and a run-time value of the same

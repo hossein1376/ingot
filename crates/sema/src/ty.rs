@@ -242,6 +242,11 @@ pub enum TyKind {
     Param(DefId),
     /// `T.Item`: the associated type `Item` (a definition) of a type.
     Projection(TypeId, DefId),
+    /// The anonymous type of a closure expression (section 5.6): the function (or
+    /// constant, or test) whose body contains it, and the index of the closure's
+    /// expression in that package's arena. Its signature and captures are in the typed
+    /// body (`typed::ClosureInfo`).
+    Closure(DefId, u32),
     /// The type of something that failed to type-check. Reports nothing downstream.
     Poison,
 }
@@ -650,6 +655,7 @@ impl TypeTable {
                 out.push('.');
                 out.push_str(&sema.def(*d).name);
             }
+            TyKind::Closure(..) => out.push_str("{closure}"),
             TyKind::Poison => out.push_str("{error}"),
         }
     }

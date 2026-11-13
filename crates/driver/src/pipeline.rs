@@ -1,10 +1,11 @@
 //! The front-end pipeline (`docs/impl/pipeline.md`), as far as it is implemented.
 //!
 //! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
-//! every file), 4 (`when`), 5 (name resolution) and 6 (signatures, type properties,
-//! layouts) run. Phases 7 to 10 do not exist yet. A package with a function or test
-//! body, or with a constant that phase 6 cannot evaluate, is not accepted: `Analysis`
-//! says so in `not_implemented`, and the command line exits with status 2 instead of 0.
+//! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
+//! layouts) and 7 (type-checking bodies) run. Phases 8 to 10 do not exist yet. A package
+//! with a body that passes phase 7, or with a constant that phase 6 cannot evaluate, is
+//! not accepted: `Analysis` says so in `not_implemented`, and the command line exits
+//! with status 2 instead of 0.
 
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
@@ -15,8 +16,12 @@ use ingot_syntax::parser::{check_operator_mixing, parse};
 use std::io;
 use std::path::Path;
 
-/// What the pipeline does not do yet, reported for a package that has bodies.
+/// What phase 6 alone leaves unchecked in a package that has bodies. Phase 7 checks
+/// them, so it never appears in an `Analysis`.
 pub const UNCHECKED: &str = ingot_sema::UNCHECKED_BODIES;
+
+/// What the pipeline does not do yet for a body that passed phase 7.
+pub const UNCHECKED_OWNERSHIP: &str = ingot_sema::UNCHECKED_OWNERSHIP;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -138,10 +143,21 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         // Phase 6 finishes for every item of every package (std included) before
         // anything later; nothing in a body is looked at.
         let declarations = ingot_sema::check_declarations(&all, &output, &target, std_count);
+        // Phase 7 checks the bodies of the package against those signatures.
+        let bodies = ingot_sema::check_bodies(&all, &output, declarations, &target, std_count);
         diagnostics.extend(output.diagnostics);
-        diagnostics.extend(declarations.diagnostics);
+        diagnostics.extend(bodies.declarations.diagnostics);
+        diagnostics.extend(bodies.diagnostics);
         not_implemented.extend(output.not_implemented);
-        not_implemented.extend(declarations.not_implemented);
+        // Phase 7 does what phase 6 reports as unchecked.
+        not_implemented.extend(
+            bodies
+                .declarations
+                .not_implemented
+                .into_iter()
+                .filter(|m| m != UNCHECKED),
+        );
+        not_implemented.extend(bodies.not_implemented);
     }
     not_implemented.dedup();
     sort_diagnostics(&mut diagnostics);

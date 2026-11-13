@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 7
+
+fn one() -> i64 {
+    return 1;
+}
+
+fn run() {
+    one(); //~ E0413
+}

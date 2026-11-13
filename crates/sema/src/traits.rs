@@ -69,7 +69,9 @@ impl Declarations {
             TyKind::DynFn(..) => Head::DynFn,
             TyKind::Vector(..) => Head::Vector,
             TyKind::Mask(_) => Head::Mask,
-            TyKind::Param(_) | TyKind::Projection(..) | TyKind::Poison => Head::Other,
+            TyKind::Param(_) | TyKind::Projection(..) | TyKind::Closure(..) | TyKind::Poison => {
+                Head::Other
+            }
         }
     }
 

@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 3, 5.5
+
+fn at(xs: []i64, i: i32) -> i64 {
+    return xs[i as i64];
+}

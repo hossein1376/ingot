@@ -319,7 +319,7 @@ with a `spawn` related span.
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
 | E1601 | `not_ffi_type` | a parameter or result of an `extern` declaration or `export fn` is not an FFI type (§29); a fallible result `T ! E` never is (for an `export fn` that is E1604 instead) | the type | — |
-| E1602 | `bad_variadic_argument` | a variadic argument that is an integer narrower than 32 bits, an `f32`, or not a scalar or raw pointer | the argument | append ` as i32`, ` as u32` or ` as f64` when that is lossless |
+| E1602 | `bad_variadic_argument` | a variadic argument that is an integer narrower than 32 bits, a `bool`, an `f32`, or not a scalar or raw pointer | the argument | following C's default argument promotions: append ` as i32` to a narrower integer or a `bool`, ` as f64` to an `f32` |
 | E1603 | `unknown_abi` | an ABI string other than `"c"`, `"c-blocking"`, `"c-bigstack"` | the string | — |
 | E1604 | `bad_export` | an `export fn` that is generic, fallible, or shares its symbol with another | the name | — |
 | E1605 | `not_on_this_target` | an item that exists only on other targets is used outside a `when` that selects one of them | the use | — |

@@ -1,6 +1,6 @@
 //! Semantic analysis for Ingot: pipeline phase 4 (`when`), phase 5 (name resolution,
-//! lowering every package to a resolved HIR) and phase 6 (signatures, type properties
-//! and layouts).
+//! lowering every package to a resolved HIR), phase 6 (signatures, type properties
+//! and layouts) and phase 7 (type-checking bodies, see [`check_bodies`] and [`typed`]).
 //!
 //! [`resolve`] takes the packages of a compilation in dependency order (each file
 //! already parsed, or `None` when the file had a lexical or syntax error) and returns
@@ -11,6 +11,7 @@
 //! (`builtin.ingot`) that [`resolve`] adds to the package `std` as a hidden module; see
 //! [`BUILTIN_PATH`].
 
+mod body;
 mod checks;
 pub mod consteval;
 pub mod defs;
@@ -24,6 +25,7 @@ pub mod sigs;
 pub mod target;
 mod traits;
 pub mod ty;
+pub mod typed;
 mod when;
 
 pub use layout::{LayoutError, align_up, valid_align};
@@ -162,8 +164,13 @@ fn scrub_builtin(diags: Vec<Diagnostic>, internal: &mut Vec<String>) -> Vec<Diag
     out
 }
 
-/// What phase 6 does not do for a package that has function or test bodies.
+/// What phase 6 alone does not do for a package that has function or test bodies. Phase 7
+/// ([`check_bodies`]) does it, so the driver drops this entry once phase 7 has run.
 pub const UNCHECKED_BODIES: &str = "type checking of function bodies (pipeline phases 7 to 10)";
+
+/// What is left after phase 7 for a body that passed it: phases 8 to 10 do not exist yet.
+pub const UNCHECKED_OWNERSHIP: &str =
+    "ownership checking and check removal (pipeline phases 8 to 10)";
 
 /// Run phase 6 for every package of `resolved`. `checked` is the index of the package
 /// the command is about (the last one): the parts of the language that are not
@@ -182,7 +189,74 @@ pub fn check_declarations(
     d
 }
 
+/// The result of phase 7.
+pub struct BodyOutput {
+    /// The declarations, with the types the bodies lowered added to the type table.
+    pub declarations: Declarations,
+    pub bodies: typed::Bodies,
+    /// The diagnostics of phase 7 only (those of phase 6 stay in `declarations`).
+    pub diagnostics: Vec<Diagnostic>,
+    /// What phase 7 did not implement, and [`UNCHECKED_OWNERSHIP`] when a body passed it.
+    pub not_implemented: Vec<String>,
+}
+
+/// Run phase 7 for the package `checked` (the last one): type-check every function,
+/// test, constant and static body against the signatures of `declarations` (pipeline
+/// section 1: phase 6 has finished for every item before any body is looked at).
+pub fn check_bodies(
+    sources: &Sources,
+    resolved: &Output,
+    mut declarations: Declarations,
+    target: &Target,
+    checked: usize,
+) -> BodyOutput {
+    let phase6_diagnostics = std::mem::take(&mut declarations.diagnostics);
+    let phase6_not_implemented = std::mem::take(&mut declarations.not_implemented);
+    let mut cx = lowering::Cx::resume(
+        declarations,
+        &resolved.sema,
+        &resolved.packages,
+        sources,
+        target,
+        checked,
+    );
+    let bodies = cx.check_bodies();
+    // Only function and test bodies become CFGs; the initializer of a constant or static
+    // is typed here and evaluated by constant evaluation.
+    if bodies
+        .bodies
+        .values()
+        .any(|b| !b.failed && matches!(b.kind, typed::BodyKind::Fn | typed::BodyKind::Test))
+    {
+        cx.ni(UNCHECKED_OWNERSHIP);
+    }
+    let mut d = cx.d;
+    let mut not_implemented = std::mem::take(&mut d.not_implemented);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut diags = std::mem::take(&mut d.diagnostics);
+    diags.retain(|x| {
+        seen.insert((
+            x.code,
+            x.file.clone(),
+            x.span.start,
+            x.span.end,
+            x.message.clone(),
+        ))
+    });
+    let diagnostics = scrub_builtin(diags, &mut not_implemented);
+    d.diagnostics = phase6_diagnostics;
+    d.not_implemented = phase6_not_implemented;
+    BodyOutput {
+        declarations: d,
+        bodies,
+        diagnostics,
+        not_implemented,
+    }
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests6;
+#[cfg(test)]
+mod tests7;

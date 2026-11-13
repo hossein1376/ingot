@@ -1284,7 +1284,7 @@ impl Cx<'_> {
 
     // ------------------------------------------------------- obligations
 
-    fn check_obligations(&mut self) {
+    pub(crate) fn check_obligations(&mut self) {
         let mut obligations = std::mem::take(&mut self.d.obligations);
         obligations.sort_by_key(|o| (o.file, o.span.start, o.span.end));
         for o in obligations {

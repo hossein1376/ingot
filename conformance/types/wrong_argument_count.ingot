@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 4.1
+
+fn id(a: i64) -> i64 {
+    return a;
+}
+
+fn two() -> i64 {
+    return id(1, 2); //~ E0410
+}

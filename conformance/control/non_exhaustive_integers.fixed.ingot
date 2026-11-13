@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 7.2
+
+fn name(n: u8) -> i64 {
+    return match n {
+        0 => 10,
+        1 => 20,
+        else => @panic("todo"),
+    };
+}
+
+fn partial(n: u8) -> i64 {
+    return match n {
+        0 => 10,
+        1..=254 => 20,
+        else => @panic("todo"),
+    };
+}

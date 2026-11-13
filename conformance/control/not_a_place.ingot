@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 5.5
+
+fn make() -> i64 {
+    return 1;
+}
+
+fn set() {
+    make() = 2; //~ E0607
+}

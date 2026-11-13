@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 7
+
+fn unwrap(o: ?i64) -> i64 {
+    let .some(v) = o; //~ E0604
+    return v;
+}

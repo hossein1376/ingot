@@ -219,6 +219,9 @@ impl Declarations {
                 sync: Tri::No,
             },
             TyKind::Poison => Props::unknown(),
+            // A closure's properties come from its captures and are entered into the
+            // table when the closure is typed (phase 7), before any use of the type.
+            TyKind::Closure(..) => self.props.get(&t).copied().unwrap_or_else(Props::unknown),
             TyKind::Adt(def, args) => {
                 let Some(parts) = self.adt_parts(def, &args) else {
                     // A built-in type without a declaration (`Idx`, `Grid[T]`): its

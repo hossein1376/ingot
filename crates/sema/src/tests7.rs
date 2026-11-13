@@ -1,0 +1,789 @@
+//! Unit tests for phase 7: literal typing, method lookup, receiver adjustment,
+//! exhaustiveness, generics and the typed result.
+
+use crate::hir::{self, ExprId, ExprKind};
+use crate::typed::*;
+use crate::{BodyOutput, Declarations, ModuleInput, Output, PackageInput, Target};
+use crate::{check_bodies, check_declarations, resolve};
+use ingot_diag::source::{Source, Sources};
+use ingot_syntax::lexer::lex;
+use ingot_syntax::parser::parse;
+
+const STD: [(&str, &str); 13] = [
+    ("", include_str!("../../../std/main.ingot")),
+    ("exec", include_str!("../../../std/exec.ingot")),
+    ("fmt", include_str!("../../../std/fmt.ingot")),
+    ("fs", include_str!("../../../std/fs.ingot")),
+    ("gpu", include_str!("../../../std/gpu.ingot")),
+    ("hash", include_str!("../../../std/hash.ingot")),
+    ("io", include_str!("../../../std/io.ingot")),
+    ("mem", include_str!("../../../std/mem.ingot")),
+    ("net", include_str!("../../../std/net.ingot")),
+    ("rand", include_str!("../../../std/rand.ingot")),
+    ("sync", include_str!("../../../std/sync.ingot")),
+    ("task", include_str!("../../../std/task.ingot")),
+    ("time", include_str!("../../../std/time.ingot")),
+];
+
+struct B {
+    out: Output,
+    decls: Declarations,
+    bodies: BodyOutput,
+    sources: Sources,
+}
+
+fn build(text: &str) -> B {
+    let mut sources = Sources::default();
+    let add = |name: &str, modules: &[(&str, &str)], sources: &mut Sources| {
+        let mut mods = Vec::new();
+        for (rel, text) in modules {
+            let path = if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name}.{rel}")
+            };
+            let file = sources.add(Source::new(format!("{path}.ingot"), *text));
+            let source = sources.get(file);
+            let (tokens, mut diags) = lex(source);
+            let (ast, parse_diags) = parse(source, tokens);
+            diags.extend(parse_diags);
+            assert!(diags.is_empty(), "{path} must parse: {diags:?}");
+            mods.push(ModuleInput {
+                path,
+                file,
+                ast: Some(ast),
+            });
+        }
+        PackageInput {
+            name: name.to_string(),
+            modules: mods,
+        }
+    };
+    let app_pkg = add("app", &[("", text)], &mut sources);
+    let inputs = vec![add("std", &STD, &mut sources), app_pkg];
+    let target = Target::by_name("aarch64-macos-m4").expect("a target");
+    let out = resolve(&mut sources, inputs, &target);
+    let decls = check_declarations(&sources, &out, &target, 1);
+    // Keep a copy of the phase 6 result for its diagnostics.
+    let phase6: Vec<_> = decls.diagnostics.clone();
+    let bodies = check_bodies(&sources, &out, decls, &target, 1);
+    let mut decls = Declarations::new();
+    decls.diagnostics = phase6;
+    B {
+        out,
+        decls,
+        bodies,
+        sources,
+    }
+}
+
+impl B {
+    /// (code, line) of the diagnostics of phase 7, sorted.
+    fn codes(&self) -> Vec<(String, u32)> {
+        let mut v: Vec<(String, u32)> = self
+            .bodies
+            .diagnostics
+            .iter()
+            .map(|d| {
+                let line = self
+                    .sources
+                    .iter()
+                    .find(|s| s.path == d.file)
+                    .map(|s| s.position(d.span.start).line)
+                    .unwrap_or(0);
+                (d.code.to_string(), line)
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn only_codes(&self) -> Vec<String> {
+        self.codes().into_iter().map(|(c, _)| c).collect()
+    }
+
+    fn phase6(&self) -> usize {
+        self.decls.diagnostics.len()
+    }
+
+    fn ni(&self) -> Vec<String> {
+        self.bodies.not_implemented.clone()
+    }
+
+    fn package(&self) -> &hir::Package {
+        &self.out.packages[1]
+    }
+
+    fn def(&self, name: &str) -> crate::DefId {
+        let m = self.out.sema.module_paths["app"];
+        *self
+            .out
+            .sema
+            .module(m)
+            .values
+            .get(name)
+            .unwrap_or_else(|| panic!("function {name}"))
+    }
+
+    fn body(&self, name: &str) -> &TypedBody {
+        self.bodies
+            .bodies
+            .bodies
+            .get(&self.def(name))
+            .unwrap_or_else(|| panic!("a typed body for {name}"))
+    }
+
+    fn display(&self, t: crate::TypeId) -> String {
+        self.bodies.declarations.types.display(&self.out.sema, t)
+    }
+
+    /// The expressions of a body that satisfy `pred`, in id order.
+    fn exprs(&self, name: &str, pred: impl Fn(&hir::Expr) -> bool) -> Vec<ExprId> {
+        let body = self.body(name);
+        body.exprs
+            .keys()
+            .copied()
+            .filter(|e| pred(self.package().expr(*e)))
+            .collect()
+    }
+
+    /// The type of each integer or float literal of a function, in source order.
+    fn literal_types(&self, name: &str) -> Vec<String> {
+        let body = self.body(name);
+        let mut ids = self.exprs(name, |e| {
+            matches!(e.kind, ExprKind::Int { .. } | ExprKind::Float(_))
+        });
+        ids.sort_by_key(|e| self.package().expr(*e).span.start);
+        ids.into_iter()
+            .map(|e| self.display(body.exprs[&e].ty))
+            .collect()
+    }
+
+    fn calls(&self, name: &str) -> Vec<(ExprId, CallInfo)> {
+        let body = self.body(name);
+        let mut v: Vec<(ExprId, CallInfo)> = body
+            .exprs
+            .iter()
+            .filter_map(|(e, i)| match &i.res {
+                ExprRes::Call(c) => Some((*e, (**c).clone())),
+                _ => None,
+            })
+            .collect();
+        v.sort_by_key(|(e, _)| self.package().expr(*e).span.start);
+        v
+    }
+}
+
+// ----------------------------------------------------------------- literals
+
+#[test]
+fn a_literal_takes_the_type_of_its_context() {
+    let b = build(
+        "fn f() -> u8 {\n    let a: u8 = 5;\n    let c = 7;\n    let d = 1.5;\n    let e: f32 = 2.5;\n    return a + 1;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.literal_types("f"), ["u8", "i64", "f64", "f32", "u8"]);
+}
+
+#[test]
+fn the_expected_type_does_not_flow_from_a_later_use() {
+    // `x` is `i64` by default; passing it where a `u8` is wanted is a mismatch.
+    let b = build(
+        "fn g(a: u8) -> u8 { return a; }\nfn f() -> u8 {\n    let x = 5;\n    return g(x);\n}\n",
+    );
+    assert_eq!(b.codes(), vec![("E0401".to_string(), 4)]);
+}
+
+#[test]
+fn a_literal_takes_the_type_of_the_other_operand() {
+    let b = build(
+        "fn f(a: u8, b: i32) -> bool {\n    let x = 1 + a;\n    let y = b * 2;\n    return x == 3 && y > 4;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.literal_types("f"), ["u8", "i32", "u8", "i32"]);
+}
+
+#[test]
+fn negative_literals_and_ranges() {
+    let b = build("fn f() -> i8 {\n    let a: i8 = -128;\n    return a;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build("fn f() -> i8 {\n    let a: i8 = 128;\n    return a;\n}\n");
+    assert_eq!(b.only_codes(), ["E0405"]);
+    let b = build("fn f() -> u8 {\n    let a: u8 = -1;\n    return a;\n}\n");
+    assert_eq!(b.only_codes(), ["E0405"]);
+    let b = build("fn f() -> i64 {\n    let a = 9223372036854775808;\n    return a;\n}\n");
+    assert_eq!(b.only_codes(), ["E0405"]);
+}
+
+#[test]
+fn a_literal_argument_does_not_decide_a_type_parameter() {
+    // `T` is fixed by `x`; the literal takes `u8`. With only literals it defaults.
+    let b = build(
+        "fn pair[T](a: T, b: T) -> T { return a; }\nfn f(x: u8) -> u8 {\n    let p = pair(3, 4);\n    return pair(x, 5);\n}\nfn g() -> i64 { return pair(1, 2); }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.literal_types("f"), ["i64", "i64", "u8"]);
+    let c = b.calls("g");
+    let ExprRes::Call(_) = &b.body("g").exprs[&c[0].0].res else {
+        panic!("a call")
+    };
+    let Callee::Fn(r) = &c[0].1.callee else {
+        panic!("a function")
+    };
+    assert_eq!(r.args.len(), 1);
+}
+
+#[test]
+fn an_integer_literal_where_a_float_is_expected_is_not_decided() {
+    let b = build("fn f() -> f64 {\n    let x: f64 = 1;\n    return x;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(
+        b.ni().iter().any(|m| m.contains("integer literal")),
+        "{:?}",
+        b.ni()
+    );
+}
+
+// -------------------------------------------------------------- method lookup
+
+const METHODS: &str = "\
+struct Counter { n: i64 }
+impl Counter {
+    fn new() -> Counter { return Counter.{ n: 0 }; }
+    fn bump(self: &mut Counter) { self.n += 1; }
+    fn get(self: &Counter) -> i64 { return self.n; }
+    fn take(self: Counter) -> i64 { return self.n; }
+}
+interface Named { fn name(self: &Self) -> i64; }
+impl Named for Counter { fn name(self: &Counter) -> i64 { return 1; } }
+";
+
+fn with(text: &str) -> B {
+    build(&format!("{METHODS}{text}"))
+}
+
+#[test]
+fn an_inherent_method_and_the_receiver_borrow() {
+    let b = with(
+        "fn f(c: Counter, r: &Counter, m: &mut Counter) -> i64 {\n    var v = Counter.new();\n    v.bump();\n    m.bump();\n    let a = c.get();\n    let b = r.get();\n    let t = v.take();\n    return a + b + t;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let calls = b.calls("f");
+    let recv: Vec<Option<Receiver>> = calls.iter().map(|(_, c)| c.receiver).collect();
+    // `Counter.new()` has no receiver; then bump (var: exclusive), bump (&mut: exclusive
+    // after looking through the borrow), get (value: shared), get (&: shared through the
+    // borrow), take (value).
+    assert_eq!(
+        recv,
+        vec![
+            None,
+            Some(Receiver {
+                derefs: 0,
+                mode: ReceiverMode::Exclusive
+            }),
+            Some(Receiver {
+                derefs: 1,
+                mode: ReceiverMode::Exclusive
+            }),
+            Some(Receiver {
+                derefs: 0,
+                mode: ReceiverMode::Shared
+            }),
+            Some(Receiver {
+                derefs: 1,
+                mode: ReceiverMode::Shared
+            }),
+            Some(Receiver {
+                derefs: 0,
+                mode: ReceiverMode::Value
+            }),
+        ]
+    );
+}
+
+#[test]
+fn an_exclusive_receiver_needs_a_mutable_place() {
+    let b = with("fn f(c: Counter, r: &Counter) {\n    c.bump();\n    r.bump();\n}\n");
+    assert_eq!(
+        b.codes(),
+        vec![("E0610".to_string(), 11), ("E0610".to_string(), 12)]
+    );
+}
+
+#[test]
+fn an_interface_method_is_found_through_the_impl() {
+    let b = with("fn f(c: &Counter) -> i64 {\n    return c.name();\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let calls = b.calls("f");
+    let Callee::Fn(r) = &calls[0].1.callee else {
+        panic!("a function")
+    };
+    let FnSource::Interface { via, .. } = &r.source else {
+        panic!("through an interface")
+    };
+    assert!(matches!(via, InterfaceVia::Impl { .. }));
+}
+
+#[test]
+fn a_builtin_interface_method_on_a_scalar() {
+    let b = build("fn f(a: i64, b: i64) -> bool {\n    return a.cmp(&b) == .less;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let calls = b.calls("f");
+    let Callee::Fn(r) = &calls[0].1.callee else {
+        panic!("a function")
+    };
+    let FnSource::Interface { via, .. } = &r.source else {
+        panic!("through an interface")
+    };
+    assert!(matches!(via, InterfaceVia::Builtin));
+}
+
+#[test]
+fn a_method_through_a_bound() {
+    let b = build(
+        "fn biggest[T: Ord + Copy](a: T, b: T) -> T {\n    if a.cmp(&b) == .less { return b; }\n    return a;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let calls = b.calls("biggest");
+    let Callee::Fn(r) = &calls[0].1.callee else {
+        panic!("a function")
+    };
+    let FnSource::Interface { via, .. } = &r.source else {
+        panic!("through an interface")
+    };
+    assert!(matches!(via, InterfaceVia::Bound));
+}
+
+#[test]
+fn two_interfaces_with_one_method_are_ambiguous() {
+    let b = build(
+        "interface A { fn size(self: &Self) -> i64; }\ninterface B { fn size(self: &Self) -> i64; }\nstruct S { n: i64 }\nimpl A for S { fn size(self: &S) -> i64 { return 1; } }\nimpl B for S { fn size(self: &S) -> i64 { return 2; } }\nfn f(s: &S) -> i64 {\n    return s.size();\n}\nfn g(s: &S) -> i64 {\n    return A.size(s);\n}\n",
+    );
+    assert_eq!(b.codes(), vec![("E0313".to_string(), 7)]);
+}
+
+#[test]
+fn an_inherent_method_wins_over_an_interface_method() {
+    let b = build(
+        "interface A { fn size(self: &Self) -> i64; }\nstruct S { n: i64 }\nimpl A for S { fn size(self: &S) -> i64 { return 1; } }\nimpl S { fn size(self: &S) -> i64 { return 2; } }\nfn f(s: &S) -> i64 {\n    return s.size();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let calls = b.calls("f");
+    let Callee::Fn(r) = &calls[0].1.callee else {
+        panic!("a function")
+    };
+    assert!(matches!(r.source, FnSource::Inherent { .. }));
+}
+
+#[test]
+fn the_bounds_of_an_impl_are_checked_for_the_receiver() {
+    // `impl[K: Hash] Show for Pair[K, K]`: `Pair[Plain]` has no `show` because `Plain`
+    // is not `Hash`.
+    let text = "interface Show { fn show(self: &Self) -> i64; }\nstruct Pair[A, B] { a: A, b: B }\nstruct Plain { n: i64 }\nimpl[K: Hash] Show for Pair[K, K] { fn show(self: &Pair[K, K]) -> i64 { return 1; } }\nfn good(p: &Pair[i64, i64]) -> i64 {\n    return p.show();\n}\nfn bad(p: &Pair[Plain, Plain]) -> i64 {\n    return p.show();\n}\n";
+    let b = build(text);
+    assert_eq!(b.codes(), vec![("E0314".to_string(), 9)]);
+}
+
+#[test]
+fn an_unknown_method_and_a_method_the_bounds_do_not_grant() {
+    let b = with("fn f(c: &Counter) -> i64 {\n    return c.nope();\n}\n");
+    assert_eq!(b.codes(), vec![("E0314".to_string(), 11)]);
+    let b = build("fn f[T: Copy](a: T, b: T) -> bool {\n    return a.eq(&b);\n}\n");
+    assert_eq!(b.only_codes(), ["E0802"]);
+    let b = build("fn f[T](a: T) -> T {\n    return a.nope();\n}\n");
+    assert_eq!(b.only_codes(), ["E0314"]);
+}
+
+// ------------------------------------------------------------------ patterns
+
+fn matches(text: &str) -> Vec<String> {
+    build(text).only_codes()
+}
+
+#[test]
+fn enum_matches_are_exhaustive_when_every_variant_is_covered() {
+    let defs = "enum E { a, b, c: i64 }\n";
+    assert!(
+        matches(&format!(
+            "{defs}fn f(e: E) -> i64 {{ return match e {{ .a => 1, .b => 2, .c(_) => 3, }}; }}\n"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        matches(&format!(
+            "{defs}fn f(e: E) -> i64 {{ return match e {{ .a => 1, .c(_) => 3, }}; }}\n"
+        )),
+        ["E0601"]
+    );
+    assert!(
+        matches(&format!(
+            "{defs}fn f(e: E) -> i64 {{ return match e {{ .a => 1, else => 3, }}; }}\n"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn integer_ranges_are_intervals() {
+    let m = |arms: &str| {
+        matches(&format!(
+            "fn f(n: u8) -> i64 {{ return match n {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(m("0..=127 => 1, 128..=255 => 2,").is_empty());
+    assert_eq!(m("0..=127 => 1, 129..=255 => 2,"), ["E0601"]);
+    assert!(m("0 => 1, 1..255 => 2, 255 => 3,").is_empty());
+    assert_eq!(m("0..=10 => 1, 5..=20 => 2,"), ["E0601"]);
+    // An arm inside an earlier one is unreachable.
+    assert_eq!(m("0..=10 => 1, 5 => 2, else => 3,"), ["E0602"]);
+    // A range that is only partly covered earlier is still reachable.
+    assert!(m("0..=10 => 1, 5..=20 => 2, else => 3,").is_empty());
+}
+
+#[test]
+fn signed_integer_ranges() {
+    let m = |arms: &str| {
+        matches(&format!(
+            "fn f(n: i8) -> i64 {{ return match n {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(m("-128..0 => 1, 0..=127 => 2,").is_empty());
+    assert_eq!(m("-128..0 => 1, 1..=127 => 2,"), ["E0601"]);
+}
+
+#[test]
+fn nested_patterns() {
+    let defs = "enum E { a: ?bool, b }\n";
+    let m = |arms: &str| {
+        matches(&format!(
+            "{defs}fn f(e: E) -> i64 {{ return match e {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(m(".a(.some(true)) => 1, .a(.some(false)) => 2, .a(.none) => 3, .b => 4,").is_empty());
+    assert_eq!(
+        m(".a(.some(true)) => 1, .a(.none) => 3, .b => 4,"),
+        ["E0601"]
+    );
+    assert_eq!(m(".a(_) => 1, .b => 2, .a(.none) => 3,"), ["E0602"]);
+    let t = |arms: &str| {
+        matches(&format!(
+            "fn f(p: (bool, bool)) -> i64 {{ return match p {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(t("(true, _) => 1, (false, true) => 2, (false, false) => 3,").is_empty());
+    assert_eq!(t("(true, _) => 1, (false, true) => 2,"), ["E0601"]);
+}
+
+#[test]
+fn a_guard_makes_its_arm_count_for_nothing() {
+    let m = |arms: &str| {
+        matches(&format!(
+            "fn f(n: i64) -> i64 {{ return match n {{ {arms} }}; }}\n"
+        ))
+    };
+    assert_eq!(m("x if x < 0 => 1, x if x >= 0 => 2,"), ["E0601"]);
+    assert!(m("x if x < 0 => 1, x => 2,").is_empty());
+    // A guarded arm after full coverage is still unreachable.
+    assert_eq!(m("x => 1, y if y < 0 => 2,"), ["E0602"]);
+}
+
+#[test]
+fn a_refutable_pattern_in_let() {
+    assert_eq!(
+        matches("fn f(o: ?i64) -> i64 {\n    let .some(v) = o;\n    return v;\n}\n"),
+        ["E0604"]
+    );
+    assert!(matches("enum One { only: i64 }\nfn f(o: One) -> i64 {\n    let .only(v) = o;\n    return v;\n}\n").is_empty());
+    assert!(matches("fn f(t: (i64, bool)) -> i64 {\n    let (a, b) = t;\n    if b { return a; }\n    return 0;\n}\n").is_empty());
+}
+
+#[test]
+fn binding_modes_follow_the_scrutinee() {
+    let b = build(
+        "struct P { x: i64 }\nenum E { a: P, b }\nfn f(e: &E, m: &mut E, v: E) -> i64 {\n    var t = 0;\n    match e { .a(p) => { t += p.x; } .b => {} }\n    match m { .a(q) => { q.x = 1; } .b => {} }\n    match v { .a(r) => { t += r.x; } .b => {} }\n    return t;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    let mut modes: Vec<(String, BindMode)> = body
+        .locals
+        .iter()
+        .filter(|(l, _)| matches!(b.package().local(**l).kind, hir::LocalKind::Let))
+        .map(|(l, i)| (b.package().local(*l).name.clone(), i.mode))
+        .collect();
+    modes.sort_by(|a, c| a.0.cmp(&c.0));
+    assert_eq!(
+        modes,
+        vec![
+            ("p".to_string(), BindMode::Ref),
+            ("q".to_string(), BindMode::RefMut),
+            ("r".to_string(), BindMode::Move),
+            ("t".to_string(), BindMode::Copy),
+        ]
+    );
+}
+
+// ------------------------------------------------------------------ generics
+
+#[test]
+fn a_type_argument_not_determined_by_the_arguments() {
+    let b = build(
+        "fn zero[T: Num]() -> T { return @zero; }\nfn f() -> i64 {\n    let z = zero();\n    return z;\n}\nfn g() -> i32 { return zero.[i32](); }\n",
+    );
+    assert_eq!(b.codes(), vec![("E0803".to_string(), 3)]);
+}
+
+#[test]
+fn a_bound_that_the_argument_does_not_meet_at_a_call() {
+    let b = build(
+        "struct Buf { n: i64 }\nfn dup[T: Copy](a: T) -> (T, T) { return (a, a); }\nfn f() -> i64 {\n    let p = dup(Buf.{ n: 1 });\n    return p.0.n;\n}\n",
+    );
+    assert_eq!(b.codes(), vec![("E0801".to_string(), 4)]);
+}
+
+#[test]
+fn operators_in_a_generic_body_need_a_bound() {
+    let b = build(
+        "fn f[T: Copy](a: T, b: T) -> T { return a + b; }\nfn g[T: Num](a: T, b: T) -> T { return a + b; }\nfn h[T: Float](a: T, b: T) -> T { return a % b; }\nfn i[T: Int](a: T, b: T) -> T { return a % b; }\n",
+    );
+    assert_eq!(
+        b.codes(),
+        vec![("E0406".to_string(), 3), ("E0802".to_string(), 1)]
+    );
+}
+
+#[test]
+fn zero_and_bits_on_a_type_parameter() {
+    let b = build(
+        "fn f[T: Copy]() -> T { return @zero; }\nfn g[T: Num]() -> T { return @zero; }\nfn h[T: Copy](x: T) -> u32 { return @bits(u32, x); }\n",
+    );
+    assert_eq!(
+        b.codes(),
+        vec![("E0811".to_string(), 1), ("E0811".to_string(), 3)]
+    );
+}
+
+// ------------------------------------------------------------- typed result
+
+#[test]
+fn the_typed_body_records_what_the_source_leaves_implicit() {
+    let b = build(
+        "struct P { x: i64, y: i64 }\nenum E { a, b: P }\nfn f(p: &P, e: E) -> i64 {\n    let q = P.{ y: 2, x: 1 };\n    let k = E.b(q);\n    let z = p.y + q.x;\n    return z;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // Field accesses record how many borrows were looked through.
+    let fields = b.exprs("f", |e| matches!(e.kind, ExprKind::Field { .. }));
+    let body = b.body("f");
+    let ds: Vec<u32> = fields
+        .iter()
+        .filter_map(|e| match &body.exprs[e].res {
+            ExprRes::Field { derefs, .. } => Some(*derefs),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ds, [1, 0]);
+    // The struct literal records the order of its fields.
+    let lits = b.exprs("f", |e| matches!(e.kind, ExprKind::StructLit { .. }));
+    let ExprRes::Struct(s) = &body.exprs[&lits[0]].res else {
+        panic!("a struct literal")
+    };
+    assert_eq!(s.order, [1, 0]);
+    // The variant constructor.
+    let calls = b.calls("f");
+    assert!(matches!(&calls[0].1.callee, Callee::Variant(v) if v.index == 1));
+}
+
+#[test]
+fn try_records_the_conversion() {
+    let b = build(
+        "enum A { bad }\nenum B { a: from A, other }\nfn g() -> i64 ! A { return 1; }\nfn same() -> i64 ! A {\n    return try g();\n}\nfn wrap() -> i64 ! B {\n    return try g();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let get = |name: &str| {
+        let body = b.body(name);
+        let t = b.exprs(name, |e| {
+            matches!(
+                e.kind,
+                ExprKind::Unary {
+                    op: ingot_syntax::ast::UnOp::Try,
+                    ..
+                }
+            )
+        });
+        match &body.exprs[&t[0]].res {
+            ExprRes::Try(i) => i.conversion.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(get("same"), TryConversion::Identity);
+    assert!(matches!(get("wrap"), TryConversion::FromVariant(v) if v.index == 0));
+}
+
+#[test]
+fn a_failed_body_is_marked_and_a_good_one_is_not() {
+    let b = build("fn good() -> i64 { return 1; }\nfn bad() -> i64 { return true; }\n");
+    assert!(!b.body("good").failed);
+    assert!(b.body("bad").failed);
+}
+
+#[test]
+fn a_var_that_is_never_mutated() {
+    let b =
+        build("fn f() -> i64 {\n    var a = 1;\n    var b = 2;\n    b += a;\n    return b;\n}\n");
+    assert_eq!(b.codes(), vec![("E0312".to_string(), 2)]);
+    // A `var` mutated through a method receiver, a borrow or a part.
+    let b = with(
+        "fn f() -> i64 {\n    var c = Counter.new();\n    c.bump();\n    var d = Counter.new();\n    let r = &mut d;\n    r.bump();\n    var e = (1, 2);\n    e.0 = 3;\n    return c.get() + e.0 + d.get();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // A `var` holding a borrow that is only used through it is not mutated.
+    let b = with(
+        "fn f(c: &mut Counter) -> i64 {\n    var r = c;\n    r.bump();\n    return r.get();\n}\n",
+    );
+    assert_eq!(b.codes(), vec![("E0312".to_string(), 11)]);
+}
+
+#[test]
+fn phase_six_errors_are_not_repeated() {
+    let b = build("struct S { x: i64 }\nstruct S { y: i64 }\nfn f() -> i64 { return 1; }\n");
+    assert!(!b.out.diagnostics.is_empty());
+    assert_eq!(b.phase6(), 0);
+    assert!(b.only_codes().is_empty());
+}
+
+// ---------------------------------------------------- closures, errors, the rest
+
+#[test]
+fn a_function_value_fixes_the_parameters_of_its_bound() {
+    let b = build(
+        "fn run[T, U, F: Fn(T) -> U](xs: []T, f: F) -> U {\n    return f(xs[0]);\n}\nfn a(xs: []i64) -> bool {\n    return run(xs, fn [](x: i64) -> bool { return x > 0; });\n}\nfn b(xs: []u8) -> i64 {\n    return run(xs, fn [](x: u8) -> i64 { return x as i64; });\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // A closure whose signature does not match the bound.
+    let b = build(
+        "fn apply[F: Fn(i64) -> i64](f: F, x: i64) -> i64 {\n    return f(x);\n}\nfn a() -> i64 {\n    return apply(fn [](x: i64) -> bool { return true; }, 1);\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E0801"]);
+}
+
+#[test]
+fn a_closure_has_its_own_type_and_the_properties_of_its_captures() {
+    let b = build(
+        "fn f() -> i64 {\n    var total: i64 = 0;\n    let k = 2;\n    let add = fn [k, &mut total](x: i64) { total.* += x * k; };\n    add(1);\n    return total;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    assert_eq!(body.closures.len(), 1);
+    let info = body.closures.values().next().unwrap();
+    assert_eq!(info.captures.len(), 2);
+    assert_eq!(info.captures[0].mode, CaptureMode::ByValue);
+    assert_eq!(info.captures[1].mode, CaptureMode::Exclusive);
+    let props = b.bodies.declarations.props[&info.ty];
+    assert_eq!(props.copy, crate::sigs::Tri::No);
+    assert_eq!(props.view, crate::sigs::Tri::Yes);
+    let calls = b.calls("f");
+    assert!(matches!(
+        &calls[0].1.callee,
+        Callee::Value(ValueCall::Closure(_))
+    ));
+}
+
+#[test]
+fn a_capture_by_exclusive_borrow_needs_a_var() {
+    let b = build(
+        "fn f() -> i64 {\n    let total: i64 = 0;\n    let add = fn [&mut total](x: i64) { total.* += x; };\n    add(1);\n    return total;\n}\n",
+    );
+    assert_eq!(b.codes(), vec![("E0610".to_string(), 3)]);
+}
+
+#[test]
+fn rules_of_the_next_step_are_recorded_not_guessed() {
+    let b = build(
+        "enum E { bad }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 {\n    return try g();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(b.ni().iter().any(|m| m.contains("E0702")), "{:?}", b.ni());
+    assert!(b.body("f").exprs.values().any(|_| true));
+    let b = build("fn f() -> i64 {\n    return unsafe(\"nothing\") { 1 };\n}\n");
+    assert!(b.ni().iter().any(|m| m.contains("E1304")), "{:?}", b.ni());
+    let b = build("enum E { bad }\nfn g() -> i64 ! E { return 1; }\nfn f() {\n    g();\n}\n");
+    assert!(b.ni().iter().any(|m| m.contains("E0701")), "{:?}", b.ni());
+}
+
+#[test]
+fn a_body_that_passes_is_left_for_the_ownership_phases() {
+    let b = build("fn f() -> i64 { return 1; }\n");
+    assert_eq!(b.ni(), [crate::UNCHECKED_OWNERSHIP.to_string()]);
+    let b = build("const c: i64 = 3;\nstatic s: i64 = 4;\n");
+    assert!(b.ni().is_empty(), "{:?}", b.ni());
+    let b = build("fn f() -> i64 { return true; }\n");
+    assert!(b.ni().is_empty(), "{:?}", b.ni());
+}
+
+#[test]
+fn target_values_have_types() {
+    let b =
+        build("fn f() -> bool {\n    return @target.os == .macos && @target.simd_bits > 64;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build("fn f() -> bool {\n    return @target.os == .plan9;\n}\n");
+    assert_eq!(b.only_codes(), ["E0314"]);
+}
+
+#[test]
+fn optionals_and_results_in_patterns() {
+    let m = |arms: &str| {
+        matches(&format!(
+            "fn f(r: ?i64) -> i64 {{ return match r {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(m(".some(v) => v, .none => 0,").is_empty());
+    assert_eq!(m(".some(v) => v,"), ["E0601"]);
+    let m = |arms: &str| {
+        matches(&format!(
+            "fn g() -> i64 ! u8 {{ return 1; }}\nfn f() -> i64 {{ return match g() {{ {arms} }}; }}\n"
+        ))
+    };
+    assert!(m(".ok(v) => v, .err(e) => e as i64,").is_empty());
+    assert_eq!(m(".ok(v) => v,"), ["E0601"]);
+}
+
+#[test]
+fn spawn_gives_a_task_of_the_result_type() {
+    let b = build(
+        "import std.task.Scope;\nfn work(n: i64) -> i64 { return n; }\nfn f() -> i64 {\n    scope s {\n        let t = spawn work(1) in s;\n        return 0;\n    }\n}\n",
+    );
+    // The scope rules are the next step's; the type is decided here.
+    assert!(b.only_codes().is_empty(), "{:?}", b.codes());
+    let body = b.body("f");
+    let spawn = b.exprs("f", |e| matches!(e.kind, ExprKind::Spawn { .. }));
+    assert_eq!(b.display(body.exprs[&spawn[0]].ty), "Task[i64]");
+}
+
+#[test]
+fn variadic_arguments_are_checked() {
+    let b = build(
+        "extern \"c\" {\n    fn printf(fmt: *u8, ...) -> i32;\n}\nfn f(a: u8, b: f32, c: i64, d: bool) -> i32 {\n    return unsafe(\"literal format\") { printf(c\"%d\", a, b, c, d, 1.5) };\n}\n",
+    );
+    assert_eq!(
+        b.codes(),
+        vec![
+            ("E1602".to_string(), 5),
+            ("E1602".to_string(), 5),
+            ("E1602".to_string(), 5)
+        ]
+    );
+}
+
+#[test]
+fn a_match_on_a_type_without_values_is_exhaustive() {
+    assert!(
+        matches("enum Never2 { }\nfn f(n: Never2) -> i64 { return match n { }; }\n").is_empty()
+    );
+}
+
+#[test]
+fn a_literal_operand_does_not_hide_a_missing_bound() {
+    // `a + 1` on an unbounded `T` is the missing bound, not a mismatch of `T` and `i64`.
+    let b =
+        build("fn f[T](a: T) -> T { return a + 1; }\nfn g[T: Num](a: T) -> T { return a + 1; }\n");
+    assert_eq!(b.codes(), vec![("E0802".to_string(), 1)]);
+}

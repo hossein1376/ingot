@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 8
+
+struct Buf { n: i64 }
+
+fn twice[T: Copy](a: T) -> (T, T) {
+    return (a, a);
+}
+
+fn run() -> i64 {
+    let p = twice(Buf.{ n: 1 }); //~ E0801
+    return p.0.n;
+}

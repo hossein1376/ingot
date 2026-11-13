@@ -153,6 +153,9 @@ impl Declarations {
             }
             TyKind::Adt(def, args) => self.adt_layout(ty, def, &args, stack),
             TyKind::Param(_) | TyKind::Projection(..) => Err(LayoutError::Params),
+            TyKind::Closure(..) => Err(LayoutError::Unspecified(
+                "the layout of a closure (the specification gives none)".to_string(),
+            )),
             TyKind::Poison => Err(LayoutError::Poison),
         }
     }

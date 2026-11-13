@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.2, 5.4
+
+import private_construction_bits.lib.Ticket;
+
+fn forge(raw: i32) -> Ticket {
+    return @bits(Ticket, raw); //~ E0315
+}

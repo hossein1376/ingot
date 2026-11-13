@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 7
+
+fn nothing() -> i64 {
+    let r: &i64 = @zero; //~ E0409
+    return r.*;
+}

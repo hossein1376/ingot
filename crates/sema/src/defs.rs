@@ -356,6 +356,10 @@ impl Sema {
             .map(|(n, d)| (n.clone(), *d))
             .collect();
         for (name, def) in declared {
+            // `TargetOs`, `TargetArch` and `TargetCpu` type `@target`; they have no name.
+            if matches!(name.as_str(), "TargetOs" | "TargetArch" | "TargetCpu") {
+                continue;
+            }
             self.modules[0].types.insert(name, def);
         }
     }

@@ -154,7 +154,7 @@ impl<'a> Cx<'a> {
         self.d.types.display(self.sema, ty)
     }
 
-    fn enter(&mut self, def: DefId) -> Cur {
+    pub(crate) fn enter(&mut self, def: DefId) -> Cur {
         let prev = self.cur;
         let parent = self.sema.def(def).parent;
         let container = match self.sema.def(def).kind {

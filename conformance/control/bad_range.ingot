@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 7.1
+
+fn total(a: i32, b: i64) -> i64 {
+    var t: i64 = 0;
+    for i in a..b { //~ E0609
+        t += i as i64;
+    }
+    return t;
+}

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 8
+
+fn blank[T: Copy]() -> T {
+    return @zero; //~ E0811
+}

@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 5.5, 15
+
+struct Cell { x: i64 }
+
+fn read(p: *Cell) -> i64 {
+    return unsafe("p points to a live Cell") { p.x }; //~ E0418
+}

@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 7.2
+
+fn sign(n: i64) -> i64 {
+    return match n { //~ E0601
+        x if x < 0 => -1,
+        0 => 0,
+        x if x > 0 => 1,
+    };
+}

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 8
+
+fn add[T: Copy](a: T, b: T) -> T {
+    return a + b; //~ E0802
+}
