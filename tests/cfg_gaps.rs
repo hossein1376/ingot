@@ -76,3 +76,45 @@ fn moving_linear_field_across_module_is_e1006() {
     let codes: Vec<&str> = analysis.diagnostics.iter().map(|d| d.code).collect();
     assert!(codes.contains(&"E1006"), "codes: {codes:?}");
 }
+
+#[test]
+fn phase10_removes_branch_and_overflow_checks() {
+    let source = r#"
+fn f(x: i64) -> i64 {
+    if x < 100 {
+        return x + 1;
+    }
+    return 0;
+}
+
+fn g(i: i64, xs: []i64) -> i64 {
+    @assert(i >= 0);
+    if i < xs.len {
+        return xs[i];
+    }
+    return 0;
+}
+"#;
+    let analysis = analyze(Source::new("test.ingot", source));
+    assert!(analysis.diagnostics.is_empty());
+    let costs = ingotc::cost::cost_items(&analysis.program);
+    assert!(costs.is_empty(), "surviving cost items: {costs:?}");
+}
+
+#[test]
+fn phase10_removes_dominated_duplicate_check() {
+    let source = r#"
+fn f(xs: []i64, i: i64) -> i64 {
+    let a = xs[i];
+    let b = xs[i];
+    return a + b;
+}
+"#;
+    let analysis = analyze(Source::new("test.ingot", source));
+    assert!(analysis.diagnostics.is_empty());
+    let bounds = ingotc::cost::cost_items(&analysis.program)
+        .into_iter()
+        .filter(|c| c.kind == ingotc::cost::CostKind::Bounds)
+        .count();
+    assert_eq!(bounds, 1);
+}

@@ -60,9 +60,10 @@ performance model.
 * The CFG checker splits linear aggregates per field and checks origin stores at
   the function boundary (E1204/E1205). Its origin sets remain conservative: one
   set per local, as `docs/impl/checker.md` section 9 allows.
-* Phase 10 runs on the CFG and removes counted-loop, `@assert` length, and constant
-  checks. Branch-derived integer ranges and duplicate-check dominance are the next
-  tightening of the same dataflow, not a return to the AST.
+* Phase 10 runs on the CFG and removes counted-loop, `@assert`, branch-range,
+  widening-cast, slice-range, duplicate-check dominance, and constant checks. The
+  deliberate conservative case left is width>1 vector loads, which keep their check
+  until the vector-specific range analysis lands.
 * Kernel bodies are checked for the direct-call, foreign-index and trapping-op
   rules. `exec.simd`, `exec.par` and Metal/Vulkan are not implemented.
 * The evaluator runs tasks sequentially. `par for` and `dispatch` are correct but

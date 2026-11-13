@@ -30,6 +30,8 @@ pub struct Cfg {
     pub len_facts: Vec<LenFact>,
     /// Counted loop facts, applied at the body block.
     pub loop_facts: Vec<LoopFact>,
+    /// Integer range facts from `@assert`, applied after a statement index.
+    pub range_facts: Vec<RangeFact>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +40,15 @@ pub struct LenFact {
     pub after: usize,
     pub base: LocalId,
     pub at_least: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RangeFact {
+    pub block: BlockId,
+    pub after: usize,
+    pub local: LocalId,
+    pub lo: Option<i64>,
+    pub hi: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +128,8 @@ pub struct CheckStmt {
     pub span: Span,
     pub lhs: Option<Operand>,
     pub rhs: Option<Operand>,
+    pub op: Option<BinOp>,
+    pub ty: Option<Type>,
     pub bounds: Option<BoundsCheck>,
 }
 
@@ -124,6 +137,10 @@ pub struct CheckStmt {
 pub struct BoundsCheck {
     pub base: Place,
     pub index: Operand,
+    /// Exclusive upper bound for a slice range, when there is one.
+    pub upper: Option<Operand>,
+    /// Number of elements the access covers.
+    pub width: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,6 +347,7 @@ pub fn lower(
             deferred_statements: HashSet::new(),
             len_facts: Vec::new(),
             loop_facts: Vec::new(),
+            range_facts: Vec::new(),
         },
         current: None,
         current_scope: 0,
@@ -702,6 +720,8 @@ impl<'a> Lower<'a> {
                                 span: *span,
                                 lhs: Some(Operand::Place(dest.clone())),
                                 rhs: Some(rhs.clone()),
+                                op: Some(assign_binop(*op)),
+                                ty: Some(self.place_type(&dest)),
                                 bounds: None,
                             },
                         });
@@ -1662,8 +1682,24 @@ impl<'a> Lower<'a> {
             ExprKind::Index { .. } => Operand::Place(self.lower_place(e)),
             ExprKind::Slice { base, lo, hi, .. } => {
                 let mut place = self.lower_place(base);
-                let _ = self.lower_expr(lo);
-                let _ = self.lower_expr(hi);
+                let lo_op = self.lower_expr(lo);
+                let hi_op = self.lower_expr(hi);
+                self.emit(CfgStmt::Check {
+                    check: CheckStmt {
+                        kind: CheckKind::Bounds,
+                        span: e.span,
+                        lhs: None,
+                        rhs: None,
+                        op: None,
+                        ty: None,
+                        bounds: Some(BoundsCheck {
+                            base: place.clone(),
+                            index: lo_op,
+                            upper: Some(hi_op),
+                            width: 1,
+                        }),
+                    },
+                });
                 place.proj.push(Proj::Index);
                 let ty = self.type_of(e);
                 let dest = self.add_temp(ty, e.span);
@@ -1731,21 +1767,38 @@ impl<'a> Lower<'a> {
                 })
             }
             ExprKind::Binary {
-                op: BinOp::And | BinOp::Or,
+                op: op @ (BinOp::And | BinOp::Or),
                 lhs,
                 rhs,
                 ..
             } => {
                 let dest = self.add_temp(Type::Bool, e.span);
                 let rhs_b = self.new_block();
+                let short_b = self.new_block();
                 let join = self.new_block();
+                let short_value = *op == BinOp::Or;
                 let lhs_op = self.lower_expr(lhs);
+                let (then_b, else_b) = if short_value {
+                    (short_b, rhs_b)
+                } else {
+                    (rhs_b, short_b)
+                };
                 self.terminate(Term::Branch {
                     cond: lhs_op,
-                    then_b: rhs_b,
-                    else_b: join,
+                    then_b,
+                    else_b,
                     span: e.span,
                 });
+                self.set_current(short_b);
+                self.assign_operand(
+                    Place {
+                        local: dest,
+                        proj: Vec::new(),
+                    },
+                    Operand::Const(ConstVal::Bool(short_value)),
+                    e.span,
+                );
+                self.goto(join);
                 self.set_current(rhs_b);
                 let rhs_op = self.lower_expr(rhs);
                 self.assign_operand(
@@ -1788,6 +1841,8 @@ impl<'a> Lower<'a> {
                             span: *op_span,
                             lhs: Some(l.clone()),
                             rhs: Some(r.clone()),
+                            op: Some(*op),
+                            ty: Some(self.type_of(e)),
                             bounds: None,
                         },
                     });
@@ -2079,9 +2134,13 @@ impl<'a> Lower<'a> {
                         span: e.span,
                         lhs: None,
                         rhs: None,
+                        op: None,
+                        ty: None,
                         bounds: Some(BoundsCheck {
                             base: place.clone(),
                             index: idx,
+                            upper: None,
+                            width: 1,
                         }),
                     },
                 });
@@ -2231,8 +2290,24 @@ impl<'a> Lower<'a> {
     ) -> Operand {
         let place = if let ExprKind::Slice { base, lo, hi, .. } = &inner.kind {
             let mut p = self.lower_place(base);
-            let _ = self.lower_expr(lo);
-            let _ = self.lower_expr(hi);
+            let lo_op = self.lower_expr(lo);
+            let hi_op = self.lower_expr(hi);
+            self.emit(CfgStmt::Check {
+                check: CheckStmt {
+                    kind: CheckKind::Bounds,
+                    span,
+                    lhs: None,
+                    rhs: None,
+                    op: None,
+                    ty: None,
+                    bounds: Some(BoundsCheck {
+                        base: p.clone(),
+                        index: lo_op,
+                        upper: Some(hi_op),
+                        width: 1,
+                    }),
+                },
+            });
             p.proj.push(Proj::Index);
             p
         } else {
@@ -2523,16 +2598,25 @@ impl<'a> Lower<'a> {
             "assert" => {
                 if let Some(cond) = args.first() {
                     let _ = self.lower_expr(cond);
-                    if let Some((base, at_least)) = self.len_assertion(cond)
-                        && let Some(block) = self.current
-                    {
+                    if let Some(block) = self.current {
                         let after = self.cfg.blocks[block].stmts.len();
-                        self.cfg.len_facts.push(LenFact {
-                            block,
-                            after,
-                            base,
-                            at_least,
-                        });
+                        if let Some((base, at_least)) = self.len_assertion(cond) {
+                            self.cfg.len_facts.push(LenFact {
+                                block,
+                                after,
+                                base,
+                                at_least,
+                            });
+                        }
+                        for (local, lo, hi) in self.range_assertions(cond) {
+                            self.cfg.range_facts.push(RangeFact {
+                                block,
+                                after,
+                                local,
+                                lo,
+                                hi,
+                            });
+                        }
                     }
                 }
                 Operand::Unit
@@ -3091,6 +3175,59 @@ impl<'a> Lower<'a> {
         Some((base, n))
     }
 
+    fn range_assertions(&self, cond: &Expr) -> Vec<(LocalId, Option<i64>, Option<i64>)> {
+        let mut out = Vec::new();
+        self.collect_range_assertions(cond, &mut out);
+        out
+    }
+
+    fn collect_range_assertions(
+        &self,
+        cond: &Expr,
+        out: &mut Vec<(LocalId, Option<i64>, Option<i64>)>,
+    ) {
+        match &cond.kind {
+            ExprKind::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+                ..
+            } => {
+                self.collect_range_assertions(lhs, out);
+                self.collect_range_assertions(rhs, out);
+            }
+            ExprKind::Binary { op, lhs, rhs, .. } => {
+                let (local_expr, c_expr, local_left) =
+                    match (root_ident_expr(lhs), const_i64_expr(rhs)) {
+                        (Some(_), Some(_)) => (lhs.as_ref(), rhs.as_ref(), true),
+                        _ => match (const_i64_expr(lhs), root_ident_expr(rhs)) {
+                            (Some(_), Some(_)) => (rhs.as_ref(), lhs.as_ref(), false),
+                            _ => return,
+                        },
+                    };
+                let Some(name) = root_ident_expr(local_expr) else {
+                    return;
+                };
+                let Some(local) = self.local_by_name.get(name).copied() else {
+                    return;
+                };
+                let Some(n) = const_i64_expr(c_expr) else {
+                    return;
+                };
+                let lo_hi = match (op, local_left) {
+                    (BinOp::Ge, true) | (BinOp::Le, false) => (Some(n), None),
+                    (BinOp::Gt, true) | (BinOp::Lt, false) => (Some(n + 1), None),
+                    (BinOp::Le, true) | (BinOp::Ge, false) => (None, Some(n)),
+                    (BinOp::Lt, true) | (BinOp::Gt, false) => (None, Some(n - 1)),
+                    (BinOp::Eq, _) => (Some(n), Some(n)),
+                    _ => return,
+                };
+                out.push((local, lo_hi.0, lo_hi.1));
+            }
+            _ => {}
+        }
+    }
+
     fn function_error_type(&self) -> Type {
         self.function.signature_error.clone().unwrap_or(Type::Error)
     }
@@ -3404,6 +3541,28 @@ fn block_uses_name(block: &crate::ast::Block, name: &str) -> bool {
         }
     }
     block.stmts.iter().any(|s| stmt(s, name))
+}
+
+fn root_ident_expr(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Ident(n) if n != "_" => Some(n),
+        ExprKind::Paren(x) => root_ident_expr(x),
+        _ => None,
+    }
+}
+
+fn const_i64_expr(e: &Expr) -> Option<i64> {
+    match &e.kind {
+        ExprKind::Int {
+            value, negative, ..
+        } => Some(if *negative {
+            -(*value as i64)
+        } else {
+            *value as i64
+        }),
+        ExprKind::Paren(x) => const_i64_expr(x),
+        _ => None,
+    }
 }
 
 fn len_root_expr(e: &Expr) -> Option<String> {
