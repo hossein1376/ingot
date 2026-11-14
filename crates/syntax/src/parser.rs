@@ -3335,6 +3335,8 @@ impl<'a> Parser<'a> {
                 | "shuffle"
                 | "mask_bits"
                 | "iota"
+                | "unchecked_load"
+                | "unchecked_narrow"
         );
         if !type_first {
             return None;

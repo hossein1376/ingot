@@ -1,0 +1,16 @@
+//! expect: accept
+//! section: 15
+
+fn write(xs: []mut i64) {
+    unsafe("the index is in bounds") {
+        let p = &mut @unchecked_index(xs, 0);
+        p.* = 1;
+        @unchecked_index(xs, 1) += 2;
+    }
+}
+
+fn read(xs: [4]i64) -> i64 {
+    unsafe("the index is in bounds") {
+        return @unchecked_index(xs, 0);
+    }
+}

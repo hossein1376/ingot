@@ -311,6 +311,7 @@ pub fn name_of(code: &str) -> &'static str {
         "E0419" => "needs_shared_reborrow",
         "E0420" => "array_slice_needs_borrow",
         "E0421" => "value_in_void_return",
+        "E0422" => "bad_format_string",
         "E0501" => "copy_needs_copy_parts",
         "E0502" => "missing_linear",
         "E0503" => "struct_literal_fields",

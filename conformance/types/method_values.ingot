@@ -1,0 +1,38 @@
+//! expect: accept
+//! section: 4.4
+
+struct P { x: i64 }
+
+impl P {
+    fn get(self: &P) -> i64 {
+        return self.x;
+    }
+
+    fn make(x: i64) -> P {
+        return P.{ x: x };
+    }
+
+    fn id[T](x: T) -> T {
+        return x;
+    }
+}
+
+fn by_method(p: &P) -> i64 {
+    let g = P.get;
+    return g(p);
+}
+
+fn by_function() -> P {
+    let m = P.make;
+    return m(1);
+}
+
+fn explicit() -> i64 {
+    let id = P.id.[i64];
+    return id(1);
+}
+
+fn typed(p: &P) -> i64 {
+    let g: fn(&P) -> i64 = P.get;
+    return g(p);
+}

@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 4.4
+
+copy enum Shape { circle: f32, empty }
+
+fn f() -> Shape {
+    return Shape.circle; //~ E0410
+}
+
+fn g() -> Shape {
+    return Shape.empty;
+}

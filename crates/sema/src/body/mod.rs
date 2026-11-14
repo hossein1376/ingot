@@ -19,6 +19,7 @@ mod builtin;
 mod call;
 mod exhaust;
 mod expr;
+mod format;
 mod ops;
 mod pat;
 mod place;
@@ -372,6 +373,7 @@ impl<'c, 'a> Checker<'c, 'a> {
                 res,
                 coerce: None,
                 fn_dyn: None,
+                shared_read: false,
             },
         );
         ty

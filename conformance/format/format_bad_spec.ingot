@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 35
+
+fn f(x: i64, y: f64, s: []u8) {
+    @debug("{:x}", y); //~ E0422
+    @debug("{:b}", y); //~ E0422
+    @debug("{:.2}", x); //~ E0422
+    @debug("{:b}", s); //~ E0422
+}
+
+fn g(w: i64, y: f64) {
+    @format(w, "{:x}", y); //~ E0422
+}

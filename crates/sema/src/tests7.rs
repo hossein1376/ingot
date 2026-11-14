@@ -9,8 +9,9 @@ use ingot_diag::source::{Source, Sources};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::parse;
 
-const STD: [(&str, &str); 13] = [
+const STD: [(&str, &str); 14] = [
     ("", include_str!("../../../std/main.ingot")),
+    ("core", include_str!("../../../std/core.ingot")),
     ("exec", include_str!("../../../std/exec.ingot")),
     ("fmt", include_str!("../../../std/fmt.ingot")),
     ("fs", include_str!("../../../std/fs.ingot")),
@@ -1286,4 +1287,112 @@ fn a_literal_operand_does_not_hide_a_missing_bound() {
     let b =
         build("fn f[T](a: T) -> T { return a + 1; }\nfn g[T: Num](a: T) -> T { return a + 1; }\n");
     assert_eq!(b.codes(), vec![("E0802".to_string(), 1)]);
+}
+
+#[test]
+fn format_arguments_are_shared_reads() {
+    let b = build("fn f(x: i64) { @debug(\"{} {}\", x, x); }\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    let args = b.exprs("f", |e| matches!(e.kind, ExprKind::Path(_)));
+    assert_eq!(args.len(), 2);
+    assert!(args.iter().all(|e| body.exprs[e].shared_read));
+}
+
+#[test]
+fn gather_and_scatter_record_their_memory_checks() {
+    let b = build(
+        "fn f(s: []f32, t: []mut f32, idx: i32x4) {\n    let v = @gather(f32x4, s, idx);\n    @scatter(t, idx, v);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    assert!(
+        body.exprs
+            .values()
+            .any(|i| matches!(i.res, ExprRes::Gather))
+    );
+    assert!(
+        body.exprs
+            .values()
+            .any(|i| matches!(i.res, ExprRes::Scatter))
+    );
+}
+
+#[test]
+fn an_inherent_method_named_as_a_value_is_an_inherent_fn_ref() {
+    let b = build(
+        "struct P { x: i64 }\nimpl P { fn get(self: &P) -> i64 { return self.x; } }\nfn f(p: &P) -> i64 { let g = P.get; return g(p); }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    let fns: Vec<&FnRef> = body
+        .exprs
+        .values()
+        .filter_map(|i| match &i.res {
+            ExprRes::Fn(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fns.iter()
+            .any(|f| matches!(f.source, FnSource::Inherent { .. }))
+    );
+}
+
+#[test]
+fn std_declares_shared_refs_and_take_on_builtin_types() {
+    let b = build(
+        "struct Item { v: i64 }\nfn total(xs: []Item) -> i64 {\n    var t: i64 = 0;\n    for x in xs.refs() { t += x.v; }\n    return t;\n}\nfn g(ys: []mut Item) -> i64 {\n    var t: i64 = 0;\n    for y in ys.shared().refs() { t += y.v; }\n    return t;\n}\nfn f(s: []mut i64, o: &mut ?i64) -> i64 {\n    let a = s.shared();\n    let b = o.take();\n    _ = a;\n    _ = b;\n    return 0;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn unchecked_index_is_a_place() {
+    let b = build(
+        "fn f(xs: []mut i64) {\n    unsafe(\"the indices are in bounds\") {\n        @unchecked_index(xs, 0) = 1;\n        let p = &mut @unchecked_index(xs, 1);\n        p.* = 2;\n    }\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    assert!(
+        body.exprs
+            .values()
+            .any(|i| matches!(i.res, ExprRes::Index { .. }))
+    );
+}
+
+#[test]
+fn zero_takes_no_argument_besides_its_type() {
+    let b = build("fn f() -> i64 { return @zero(i64, 1); }\n");
+    assert_eq!(b.only_codes(), vec!["E0410".to_string()]);
+}
+
+#[test]
+fn a_format_placeholder_after_an_escape_is_reported_at_the_literal() {
+    let b = build("fn f(x: i64) { @debug(\"\\n{:q}\", x); }\n");
+    assert_eq!(b.only_codes(), vec!["E0422".to_string()]);
+    let d = &b.bodies.diagnostics[0];
+    // The literal starts at byte 22 and is 8 bytes long with its quotes.
+    assert_eq!((d.span.start, d.span.end), (22, 30));
+}
+
+#[test]
+fn an_interface_call_types_each_argument_once() {
+    let b = build(
+        "interface Two { fn two(a: &Self, n: i32) -> i32; }\nstruct P { x: i64 }\nimpl Two for P { fn two(a: &P, n: i32) -> i32 { return n; } }\nfn f(p: &P) -> i32 { return Two.two(p, 5); }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    // `5` is typed once, against the parameter: `i32`.
+    let lits = b.exprs("f", |e| matches!(e.kind, ExprKind::Int { .. }));
+    assert_eq!(lits.len(), 1);
+    let i32_ = body.exprs[&lits[0]].ty;
+    assert_eq!(b.display(i32_), "i32");
+}
+
+#[test]
+fn a_math_builtin_on_a_type_parameter_is_not_implemented() {
+    let b = build("fn f[T: Float](x: T) -> T { return @sqrt(x); }\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(b.ni().iter().any(|m| m.contains("on a type parameter")));
 }

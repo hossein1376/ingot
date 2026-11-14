@@ -119,6 +119,9 @@ pub struct ExprInfo {
     /// `&mut dyn FnMut(..)`, when its context expects one and its own type is a borrow
     /// of a closure. The value of `ty` is then the dynamic type.
     pub fn_dyn: Option<FnDynCoercion>,
+    /// The use is a read through a shared borrow, not a move: an argument of `@format`
+    /// or `@debug` (section 35).
+    pub shared_read: bool,
 }
 
 /// A `&T` (`&mut T`) that becomes a `&dyn I` (`&mut dyn I`) because `T` implements
@@ -217,6 +220,11 @@ pub enum ExprRes {
     Borrow(Mutability),
     /// `Spawn`: the type of the task, `Task[R]`, is the expression's type.
     Spawn,
+    /// `@gather(V, s, idx)`: phase 8 inserts the T14 bounds check.
+    Gather,
+    /// `@scatter(s, idx, v)`: phase 8 inserts the T14 bounds check and the T15
+    /// distinctness check.
+    Scatter,
     /// `Dispatch`: see [`DispatchInfo`].
     Dispatch(Box<DispatchInfo>),
 }

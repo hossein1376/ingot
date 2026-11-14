@@ -43,18 +43,19 @@ fn std_resolves_without_a_diagnostic() {
         eprintln!("{}", d.to_human(&analysis.sources));
     }
     assert!(analysis.diagnostics.is_empty());
-    // std has no body, so phases 1 to 6 check all of it except the executors' constants,
-    // whose struct values the constant evaluator does not cover yet. The result says so.
+    // std's bodies are type-checked too (`ingot check std`); ownership is the next
+    // phase. The executors' constants are the only values phase 6 cannot evaluate yet.
     assert_eq!(
         analysis.not_implemented,
         vec![
             "constant evaluation of a value of type `Seq`".to_string(),
             "constant evaluation of a value of type `Simd`".to_string(),
             "constant evaluation of a value of type `Par`".to_string(),
+            ingot_sema::UNCHECKED_OWNERSHIP.to_string(),
         ]
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
-    assert_eq!(analysis.files, 13);
+    assert_eq!(analysis.files, 14);
 }
 
 #[test]

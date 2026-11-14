@@ -1,0 +1,23 @@
+//! expect: accept
+//! section: 35
+
+fn f(x: i64, y: f64, s: []u8) {
+    @debug(
+        "x={} y={:.3} s={:x} hex={:X} bin={:b} oct={:o} w={:5} z={:05} a={:<10} r={:>10}",
+        x,
+        y,
+        s,
+        x,
+        x,
+        x,
+        x,
+        x,
+        x,
+        x
+    );
+    @debug("{{}} {}", x);
+}
+
+fn g(w: i64, x: i64) {
+    @format(w, "value={}", x);
+}

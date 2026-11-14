@@ -1,0 +1,14 @@
+//! expect: accept
+//! section: 26.3
+
+fn gather(s: []f32, idx: i32x4) -> f32x4 {
+    return @gather(f32x4, s, idx);
+}
+
+fn gather64(s: []i64, idx: i64x2) -> i64x2 {
+    return @gather(i64x2, s, idx);
+}
+
+fn scatter(s: []mut f32, idx: i32x4, v: f32x4) {
+    @scatter(s, idx, v);
+}

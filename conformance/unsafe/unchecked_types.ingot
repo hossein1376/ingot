@@ -1,0 +1,24 @@
+//! expect: reject
+//! section: 15
+
+fn f(a: f64, p: i64, xs: []i64) {
+    unsafe("types") {
+        let x = @unchecked_add(a, 1.0); //~ E0401
+        let y = @unchecked_shl(1, 1.0); //~ E0401
+        let z = @slice_from_raw(p, 1); //~ E0401
+        let w = @borrow_from_raw(xs); //~ E0401
+        let v = @unchecked_load(f64x2, xs, 0); //~ E0401
+        _ = x;
+        _ = y;
+        _ = z;
+        _ = w;
+        _ = v;
+    }
+}
+
+fn g(a: [4]i64) {
+    unsafe("an array is sliced by a borrow") {
+        let s = @unchecked_slice(a, 0, 2); //~ E0420
+        _ = s;
+    }
+}

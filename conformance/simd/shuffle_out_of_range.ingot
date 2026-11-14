@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 26.2
+
+fn past_the_end(v: f32x4) -> f32x4 {
+    return @shuffle(v, [4]i32.{ 0, 1, 2, 4 }); //~ E1504
+}
+
+fn negative(v: f32x4) -> f32x4 {
+    return @shuffle(v, [4]i32.{ 0, 1, 2, -1 }); //~ E1504
+}
+
+fn not_constant(v: f32x4, k: i32) -> f32x4 {
+    return @shuffle(v, [4]i32.{ 0, 1, 2, k }); //~ E1504
+}

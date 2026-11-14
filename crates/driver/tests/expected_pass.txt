@@ -118,6 +118,10 @@ errors/try_not_fallible.ingot
 errors/try_not_result.ingot
 errors/unhandled_result.ingot
 errors/unhandled_result_operand.ingot
+format/format_bad_spec.ingot
+format/format_count.ingot
+format/format_malformed.ingot
+format/format_not_literal.ingot
 generics/bound_not_satisfied_at_call.ingot
 generics/cannot_infer_type_argument.ingot
 generics/const_parameter_uppercase.ingot
@@ -197,7 +201,11 @@ packages/bad_module_name/main.ingot
 packages/unknown_target/main.ingot
 simd/bad_lane_index.ingot
 simd/bad_vector_type.ingot
+simd/gather_bad.ingot
 simd/lanes_index.ingot
+simd/lookup_bad.ingot
+simd/shuffle_bad_width.ingot
+simd/shuffle_out_of_range.ingot
 simd/vector_shape_mismatch.ingot
 syntax/block_has_no_value.ingot
 syntax/branch_block_reaches_end.ingot
@@ -226,10 +234,12 @@ types/float_remainder.ingot
 types/index_not_i64.ingot
 types/int_literal_not_exact.ingot
 types/int_vector_plain_arith.ingot
+types/interface_call_cannot_infer.ingot
 types/invalid_operand.ingot
 types/literal_out_of_range.ingot
 types/literal_under_numeric_bound.ingot
 types/lossy_as.ingot
+types/method_value_not_call.ingot
 types/missing_return.ingot
 types/needs_shared_reborrow.ingot
 types/no_implicit_conversion.ingot
@@ -241,6 +251,7 @@ types/static_assert_not_constant.ingot
 types/structural_eq_bounds.ingot
 types/unused_result.ingot
 types/value_in_void_return.ingot
+types/variant_payload_value.ingot
 types/wrong_argument_count.ingot
 types/zero_enum_without_tag_zero.ingot
 unsafe/empty_reason.ingot
@@ -254,6 +265,7 @@ unsafe/needs_unsafe_fn.ingot
 unsafe/needs_unsafe_from_raw.ingot
 unsafe/needs_unsafe_unchecked.ingot
 unsafe/slice_ptr_alone_needs_no_unsafe.ingot
+unsafe/unchecked_types.ingot
 unsafe/unneeded.ingot
 unsafe/unneeded_outer.ingot
 unsafe/unsafe_fn_body_not_unsafe.ingot

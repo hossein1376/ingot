@@ -80,6 +80,13 @@ impl Checker<'_, '_> {
                 let bt = self.ty_of(*base);
                 self.place_through(*base, bt, true)
             }
+            // `@unchecked_index(s, i)` is the place `s[i]` (section 15).
+            ExprKind::Builtin { name, args, .. }
+                if name == "unchecked_index" && args.len() == 2 =>
+            {
+                let bt = self.ty_of(args[0]);
+                self.place_through(args[0], bt, true)
+            }
             ExprKind::Deref { base, .. } => {
                 let bt = self.ty_of(*base);
                 let base_place = self.place(*base);

@@ -495,7 +495,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn unary_arith(&mut self, op: UnOp, t: TypeId, op_span: Span) -> TypeId {
+    pub(crate) fn unary_arith(&mut self, op: UnOp, t: TypeId, op_span: Span) -> TypeId {
         if self.is_poison(t) || self.is_never(t) {
             return self.poison();
         }
@@ -539,11 +539,30 @@ impl Checker<'_, '_> {
             TyKind::Vector(l, _) => {
                 if op == UnOp::BitNot && matches!(l, Lane::Int(_)) {
                     t
+                } else if op == UnOp::Neg && matches!(l, Lane::Float(_)) {
+                    // Unary `-` on a float vector is lane-wise IEEE (section 26.2).
+                    t
+                } else if op == UnOp::NegWrap && matches!(l, Lane::Int(_)) {
+                    t
+                } else if op == UnOp::Neg && matches!(l, Lane::Int(_)) {
+                    // Plain arithmetic is an error on integer vectors (section 26.2).
+                    self.err(
+                        "E0407",
+                        "unary `-` is not defined on an integer vector: write `-%`",
+                        op_span,
+                    );
+                    self.poison()
                 } else {
-                    self.ni(format!(
-                        "unary `{sym}` on a vector (the specification lists only `~` for \
-                         integer vectors)"
-                    ));
+                    let why = match (op, l) {
+                        (UnOp::NegWrap, Lane::Float(_)) => "write `-`",
+                        (UnOp::BitNot, Lane::Float(_)) => "`~` is for integer vectors",
+                        _ => "the operator is not defined for vectors",
+                    };
+                    self.err(
+                        "E0406",
+                        format!("unary `{sym}` on this vector: {why}"),
+                        op_span,
+                    );
                     self.poison()
                 }
             }

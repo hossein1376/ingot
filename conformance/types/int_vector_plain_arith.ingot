@@ -4,3 +4,7 @@
 fn add(a: i32x4, b: i32x4) -> i32x4 {
     return a + b; //~ E0407
 }
+
+fn neg(a: i32x4) -> i32x4 {
+    return -a; //~ E0407
+}

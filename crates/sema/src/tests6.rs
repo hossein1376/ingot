@@ -13,8 +13,9 @@ use ingot_syntax::ast::{BinOp, UnOp};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::parse;
 
-const STD: [(&str, &str); 13] = [
+const STD: [(&str, &str); 14] = [
     ("", include_str!("../../../std/main.ingot")),
+    ("core", include_str!("../../../std/core.ingot")),
     ("exec", include_str!("../../../std/exec.ingot")),
     ("fmt", include_str!("../../../std/fmt.ingot")),
     ("fs", include_str!("../../../std/fs.ingot")),

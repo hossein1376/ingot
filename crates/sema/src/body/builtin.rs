@@ -9,6 +9,7 @@ use crate::sigs::{ItemSig, Tri};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
+use ingot_syntax::ast::UnOp;
 
 /// A builtin that the specification lists as needing `unsafe` (section 15).
 fn unsafe_builtin(name: &str) -> bool {
@@ -39,6 +40,23 @@ impl Checker<'_, '_> {
     ) -> (TypeId, ExprRes) {
         let targ = type_arg.map(|t| self.lower(t));
         let (ty, res_arg) = self.builtin_inner(e, name, targ, args, hint);
+        // `@unchecked_index` is a place (section 15): the typed result says which
+        // borrows the base was looked through.
+        if name == "unchecked_index"
+            && !self.is_poison(ty)
+            && let Some(base) = args.first()
+        {
+            let bt = self.ty_of(*base);
+            let (_, derefs) = self.strip_refs(bt);
+            return (ty, ExprRes::Index { derefs });
+        }
+        if !self.is_poison(ty) {
+            match name {
+                "gather" => return (ty, ExprRes::Gather),
+                "scatter" => return (ty, ExprRes::Scatter),
+                _ => {}
+            }
+        }
         (ty, ExprRes::Builtin { type_arg: res_arg })
     }
 
@@ -48,10 +66,18 @@ impl Checker<'_, '_> {
             return true;
         }
         let span = self.span_of(e);
+        let has_type = matches!(
+            &self.hir.expr(e).kind,
+            ExprKind::Builtin {
+                type_arg: Some(_),
+                ..
+            }
+        );
+        let besides = if has_type { " besides its type" } else { "" };
         self.err(
             "E0410",
             format!(
-                "`@{name}` takes {n} argument(s) besides its type, but {} {} given",
+                "`@{name}` takes {n} argument(s){besides}, but {} {} given",
                 args.len(),
                 if args.len() == 1 { "was" } else { "were" }
             ),
@@ -88,18 +114,14 @@ impl Checker<'_, '_> {
         let poison = self.poison();
         let span = self.span_of(e);
         if unsafe_builtin(name) {
-            let inside = self.requires_unsafe(span, &format!("`@{name}`"));
-            self.blind_args(args);
-            if inside && !self.kernel {
-                // The specification gives no precise signature for these builtins yet.
-                self.ni(format!(
-                    "`@{name}`: the specification does not give its signature precisely"
-                ));
-            }
-            return (poison, targ);
+            self.requires_unsafe(span, &format!("`@{name}`"));
+            return self.unsafe_builtin_typed(e, name, targ, args);
         }
         match name {
             "zero" => {
+                if !self.arity(e, name, args, 0) {
+                    return (poison, None);
+                }
                 let t = targ.or(hint);
                 let Some(t) = t else {
                     self.err(
@@ -115,82 +137,7 @@ impl Checker<'_, '_> {
                 self.zero_check(e, t);
                 (t, Some(t))
             }
-            "narrow" | "wrap" | "sat" => {
-                let t = self.need_type(e, name, targ);
-                if !self.arity(e, name, args, 1) {
-                    return (t.unwrap_or(poison), t);
-                }
-                let x = self.expr(args[0], None);
-                let Some(t) = t else {
-                    return (poison, None);
-                };
-                if self.is_poison(x) || self.is_never(x) {
-                    return (t, Some(t));
-                }
-                let tk = self.kind(t);
-                let xk = self.kind(x);
-                match (&tk, &xk) {
-                    (TyKind::Int(_), TyKind::Int(_)) if name == "wrap" => (t, Some(t)),
-                    (TyKind::Int(_), TyKind::Int(_) | TyKind::Float(_)) if name == "sat" => {
-                        (t, Some(t))
-                    }
-                    (TyKind::Int(_), TyKind::Int(_) | TyKind::Float(_)) if name == "narrow" => {
-                        (t, Some(t))
-                    }
-                    (TyKind::Vector(tl, tn), TyKind::Vector(sl, sn)) if name != "narrow" => {
-                        if tn != sn {
-                            self.err(
-                                "E1503",
-                                format!(
-                                    "`@{name}` needs a vector of `{tn}` lanes, and this one has \
-                                     `{sn}`"
-                                ),
-                                span,
-                            );
-                            return (poison, Some(t));
-                        }
-                        let target_lane = self.lane_ty(*tl);
-                        let source_lane = self.lane_ty(*sl);
-                        let (tky, sky) = (self.kind(target_lane), self.kind(source_lane));
-                        let ok = matches!(tky, TyKind::Int(_))
-                            && match name {
-                                "wrap" => matches!(sky, TyKind::Int(_)),
-                                _ => matches!(sky, TyKind::Int(_) | TyKind::Float(_)),
-                            };
-                        if ok {
-                            (t, Some(t))
-                        } else {
-                            self.err(
-                                "E0401",
-                                format!("`@{name}` is not defined between these lane types"),
-                                span,
-                            );
-                            (poison, Some(t))
-                        }
-                    }
-                    _ => {
-                        if matches!(tk, TyKind::Vector(..) | TyKind::Mask(_) | TyKind::Param(_))
-                            || matches!(xk, TyKind::Vector(..) | TyKind::Mask(_) | TyKind::Param(_))
-                        {
-                            self.ni(format!(
-                                "`@{name}` between a vector and a non-vector, a mask or a type \
-                                 parameter"
-                            ));
-                            (poison, Some(t))
-                        } else if !matches!(tk, TyKind::Int(_)) {
-                            self.builtin_type_error(e, name, "an integer type", t);
-                            (poison, Some(t))
-                        } else {
-                            let want = match (name, xk) {
-                                ("wrap", _) => "an integer",
-                                _ => "an integer or a float",
-                            };
-                            self.builtin_type_error(e, name, want, x);
-                            (poison, Some(t))
-                        }
-                    }
-                }
-            }
+            "narrow" | "wrap" | "sat" => self.narrow_wrap_sat(e, name, targ, args),
             "nearest" => {
                 let t = self.need_type(e, name, targ);
                 if !self.arity(e, name, args, 1) {
@@ -486,10 +433,21 @@ impl Checker<'_, '_> {
                 (self.void(), None)
             }
             "format" => {
-                self.blind_args(args);
+                if args.len() < 2 {
+                    self.arity(e, name, args, 2);
+                    return (poison, None);
+                }
+                // The writer's type is not specified (a known gap); its own errors are
+                // still reported.
+                self.expr(args[0], None);
+                let values = &args[2..];
+                for &a in values {
+                    self.expr(a, None);
+                }
+                self.format_string(args[1], values, "format");
                 self.ni(
-                    "`@format(writer, \"..\", args)`: the error type of the writer, and so the \
-                     type of the call, is not specified (section 35)",
+                    "`@format`: the type of the call (which writer and error) is a known gap \
+                     (the builtin reference, pipeline §11)",
                 );
                 (poison, None)
             }
@@ -498,10 +456,11 @@ impl Checker<'_, '_> {
                     self.arity(e, name, args, 1);
                     return (self.void(), None);
                 }
-                let bytes = self.bytes_ty();
-                self.expect(args[0], bytes);
-                self.blind_args(&args[1..]);
-                self.ni("`@debug`: checking the format string against the arguments (the format syntax is not specified)");
+                let values = &args[1..];
+                for &a in values {
+                    self.expr(a, None);
+                }
+                self.format_string(args[0], values, "debug");
                 (self.void(), None)
             }
             "test_env" => {
@@ -527,9 +486,406 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// `@narrow`, `@wrap` and `@sat`, and the unchecked `@unchecked_narrow`.
+    fn narrow_wrap_sat(
+        &mut self,
+        e: ExprId,
+        name: &str,
+        targ: Option<TypeId>,
+        args: &[ExprId],
+    ) -> (TypeId, Option<TypeId>) {
+        let poison = self.poison();
+        let span = self.span_of(e);
+        let is_narrow = matches!(name, "narrow" | "unchecked_narrow");
+
+        let t = self.need_type(e, name, targ);
+        if !self.arity(e, name, args, 1) {
+            return (t.unwrap_or(poison), t);
+        }
+        let x = self.expr(args[0], None);
+        let Some(t) = t else {
+            return (poison, None);
+        };
+        if self.is_poison(x) || self.is_never(x) {
+            return (t, Some(t));
+        }
+        let tk = self.kind(t);
+        let xk = self.kind(x);
+        match (&tk, &xk) {
+            (TyKind::Int(_), TyKind::Int(_)) if name == "wrap" => (t, Some(t)),
+            (TyKind::Int(_), TyKind::Int(_) | TyKind::Float(_)) if name == "sat" => (t, Some(t)),
+            (TyKind::Int(_), TyKind::Int(_) | TyKind::Float(_)) if is_narrow => (t, Some(t)),
+            (TyKind::Vector(tl, tn), TyKind::Vector(sl, sn)) if !is_narrow => {
+                if tn != sn {
+                    self.err(
+                        "E1503",
+                        format!(
+                            "`@{name}` needs a vector of `{tn}` lanes, and this one has \
+                                     `{sn}`"
+                        ),
+                        span,
+                    );
+                    return (poison, Some(t));
+                }
+                let target_lane = self.lane_ty(*tl);
+                let source_lane = self.lane_ty(*sl);
+                let (tky, sky) = (self.kind(target_lane), self.kind(source_lane));
+                let ok = matches!(tky, TyKind::Int(_))
+                    && match name {
+                        "wrap" => matches!(sky, TyKind::Int(_)),
+                        _ => matches!(sky, TyKind::Int(_) | TyKind::Float(_)),
+                    };
+                if ok {
+                    (t, Some(t))
+                } else {
+                    self.err(
+                        "E0401",
+                        format!("`@{name}` is not defined between these lane types"),
+                        span,
+                    );
+                    (poison, Some(t))
+                }
+            }
+            _ => {
+                if matches!(tk, TyKind::Vector(..) | TyKind::Mask(_) | TyKind::Param(_))
+                    || matches!(xk, TyKind::Vector(..) | TyKind::Mask(_) | TyKind::Param(_))
+                {
+                    self.ni(format!(
+                        "`@{name}` between a vector and a non-vector, a mask or a type \
+                                 parameter"
+                    ));
+                    (poison, Some(t))
+                } else if !matches!(tk, TyKind::Int(_)) {
+                    self.builtin_type_error(e, name, "an integer type", t);
+                    (poison, Some(t))
+                } else {
+                    let want = match (name, xk) {
+                        ("wrap", _) => "an integer",
+                        _ => "an integer or a float",
+                    };
+                    self.builtin_type_error(e, name, want, x);
+                    (poison, Some(t))
+                }
+            }
+        }
+    }
+
+    /// `@load` and `@load_tail`, and the unchecked `@unchecked_load`.
+    fn load_builtin(
+        &mut self,
+        e: ExprId,
+        name: &str,
+        targ: Option<TypeId>,
+        args: &[ExprId],
+    ) -> (TypeId, Option<TypeId>) {
+        let poison = self.poison();
+
+        let t = self.need_type(e, name, targ);
+        if !self.arity(e, name, args, 2) {
+            return (t.unwrap_or(poison), t);
+        }
+        let s = self.expr(args[0], None);
+        self.index_operand(args[1]);
+        match (t.map(|t| (t, self.kind(t))), self.kind(s)) {
+            (Some((t, TyKind::Vector(l, _))), TyKind::Slice(_, el)) => {
+                let le = self.lane_ty(l);
+                if el != le {
+                    let want = self.slice_of(le, false);
+                    self.mismatch(args[0], s, want);
+                    return (poison, Some(t));
+                }
+                (t, Some(t))
+            }
+            (_, TyKind::Poison) | (None, _) => (poison, t),
+            (Some((t, _)), _) => {
+                self.builtin_type_error(e, name, "a vector type and a slice", t);
+                (poison, Some(t))
+            }
+        }
+    }
+
+    /// `@store` and `@store_tail`, and the unchecked `@unchecked_store`.
+    fn store_builtin(
+        &mut self,
+        e: ExprId,
+        name: &str,
+        args: &[ExprId],
+    ) -> (TypeId, Option<TypeId>) {
+        if !self.arity(e, name, args, 3) {
+            return (self.void(), None);
+        }
+        let s = self.expr(args[0], None);
+        self.index_operand(args[1]);
+        let v = self.expr(args[2], None);
+        match (self.kind(s), self.kind(v)) {
+            (TyKind::Slice(Mutability::Mut, el), TyKind::Vector(l, _)) => {
+                let le = self.lane_ty(l);
+                if el != le {
+                    let want = self.slice_of(le, true);
+                    self.mismatch(args[0], s, want);
+                }
+            }
+            (TyKind::Poison, _) | (_, TyKind::Poison) => {}
+            _ => {
+                let n = self.name(s);
+                self.err(
+                    "E0401",
+                    format!("`@{name}` needs a `[]mut` slice and a vector, not `{n}`"),
+                    self.span_of(e),
+                );
+            }
+        }
+        (self.void(), None)
+    }
+
     fn bytes_ty(&mut self) -> TypeId {
         let u8_ = self.mk(TyKind::Int(IntTy::U8));
         self.mk(TyKind::Slice(Mutability::Shared, u8_))
+    }
+
+    /// The `unsafe` builtins of section 15. The caller has already reported E1301 when
+    /// the call is outside an `unsafe` block; the arguments are typed all the same, so
+    /// their own errors are reported.
+    fn unsafe_builtin_typed(
+        &mut self,
+        e: ExprId,
+        name: &str,
+        targ: Option<TypeId>,
+        args: &[ExprId],
+    ) -> (TypeId, Option<TypeId>) {
+        let poison = self.poison();
+        match name {
+            "uninit" => {
+                let t = self.need_type(e, name, targ);
+                if !self.arity(e, name, args, 0) {
+                    return (t.unwrap_or(poison), t);
+                }
+                (t.unwrap_or(poison), t)
+            }
+            "assume" => {
+                if self.arity(e, name, args, 1) {
+                    self.cond(args[0]);
+                }
+                (self.void(), None)
+            }
+            "unchecked_index" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let bt = self.expr(args[0], None);
+                self.index_operand(args[1]);
+                if self.is_poison(bt) || self.is_never(bt) {
+                    return (poison, None);
+                }
+                let (t, _) = self.strip_refs(bt);
+                match self.kind(t) {
+                    TyKind::Array(el, _) | TyKind::Slice(_, el) => (el, None),
+                    TyKind::Poison => (poison, None),
+                    _ => {
+                        let n = self.name(t);
+                        let span = self.span_of(e);
+                        self.err(
+                            "E0416",
+                            format!("`{n}` cannot be indexed by `@unchecked_index`: only arrays and slices can"),
+                            span,
+                        );
+                        (poison, None)
+                    }
+                }
+            }
+            "unchecked_slice" => {
+                if !self.arity(e, name, args, 3) {
+                    return (poison, None);
+                }
+                let bt = self.expr(args[0], None);
+                self.index_operand(args[1]);
+                self.index_operand(args[2]);
+                if self.is_poison(bt) || self.is_never(bt) {
+                    return (poison, None);
+                }
+                let (t, _) = self.strip_refs(bt);
+                match self.kind(t) {
+                    TyKind::Slice(m, el) => (self.mk(TyKind::Slice(m, el)), None),
+                    // As `a[lo..hi]` on an array (section 5.5): slicing an array is a
+                    // borrow, written `&a[..]` or `&mut a[..]`.
+                    TyKind::Array(..) => {
+                        let span = self.span_of(args[0]);
+                        self.err(
+                            "E0420",
+                            "`@unchecked_slice` takes a slice; a slice of an array is a borrow: \
+                             pass `&a[..]` or `&mut a[..]`",
+                            span,
+                        );
+                        (poison, None)
+                    }
+                    TyKind::Poison => (poison, None),
+                    _ => {
+                        let n = self.name(t);
+                        let span = self.span_of(e);
+                        self.err(
+                            "E0416",
+                            format!("`{n}` cannot be sliced: only arrays and slices can"),
+                            span,
+                        );
+                        (poison, None)
+                    }
+                }
+            }
+            "unchecked_add" | "unchecked_sub" | "unchecked_mul" | "unchecked_div"
+            | "unchecked_rem" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let (a, b) = self.operands(args[0], args[1], None);
+                if self.is_poison(a) || self.is_poison(b) {
+                    return (poison, None);
+                }
+                if !self.int_operand(e, name, a) || !self.int_operand(e, name, b) {
+                    return (poison, None);
+                }
+                if a != b {
+                    self.mismatch(args[1], b, a);
+                    return (poison, None);
+                }
+                (a, None)
+            }
+            "unchecked_neg" => {
+                if !self.arity(e, name, args, 1) {
+                    return (poison, None);
+                }
+                let x = self.expr(args[0], None);
+                if self.is_poison(x) || self.is_never(x) {
+                    return (poison, None);
+                }
+                if !self.int_operand(e, name, x) {
+                    return (poison, None);
+                }
+                let span = self.span_of(e);
+                let t = self.unary_arith(UnOp::Neg, x, span);
+                (t, None)
+            }
+            "unchecked_shl" | "unchecked_shr" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let x = self.expr(args[0], None);
+                let n = self.expr(args[1], None);
+                if self.is_poison(x) || self.is_poison(n) {
+                    return (poison, None);
+                }
+                if !self.int_operand(e, name, x) || !self.int_operand(e, name, n) {
+                    return (poison, None);
+                }
+                (x, None)
+            }
+            "slice_from_raw" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let p = self.expr(args[0], None);
+                self.index_operand(args[1]);
+                match self.kind(p) {
+                    TyKind::RawPtr(m, t) => (self.mk(TyKind::Slice(m, t)), None),
+                    TyKind::Poison => (poison, None),
+                    _ => {
+                        self.builtin_type_error(e, name, "a raw pointer", p);
+                        (poison, None)
+                    }
+                }
+            }
+            "borrow_from_raw" => {
+                if !self.arity(e, name, args, 1) {
+                    return (poison, None);
+                }
+                let p = self.expr(args[0], None);
+                match self.kind(p) {
+                    TyKind::RawPtr(m, t) => (self.mk(TyKind::Ref(m, t)), None),
+                    TyKind::Poison => (poison, None),
+                    _ => {
+                        self.builtin_type_error(e, name, "a raw pointer", p);
+                        (poison, None)
+                    }
+                }
+            }
+            // `unchecked_narrow`, `unchecked_load` and `unchecked_store` share the
+            // checking of their checked forms.
+            _ => self.checked_form_of_unsafe(e, name, targ, args),
+        }
+    }
+
+    /// An `unsafe` builtin whose checked form already has a signature: `narrow`, `load`
+    /// or `store`.
+    fn checked_form_of_unsafe(
+        &mut self,
+        e: ExprId,
+        name: &str,
+        targ: Option<TypeId>,
+        args: &[ExprId],
+    ) -> (TypeId, Option<TypeId>) {
+        let checked = match name {
+            "unchecked_narrow" => "narrow",
+            "unchecked_load" => "load",
+            "unchecked_store" => "store",
+            _ => {
+                // The list of `unsafe` builtins is closed (section 15).
+                self.blind_args(args);
+                self.ni(format!("`@{name}`: the specification gives no signature"));
+                return (self.poison(), targ);
+            }
+        };
+        match checked {
+            "narrow" => self.narrow_wrap_sat(e, name, targ, args),
+            "load" => self.load_builtin(e, name, targ, args),
+            _ => self.store_builtin(e, name, args),
+        }
+    }
+
+    /// Whether `t` is an integer type (a type parameter granted only integers counts).
+    fn int_operand(&mut self, e: ExprId, name: &str, t: TypeId) -> bool {
+        if self.is_poison(t) || self.is_never(t) {
+            return false;
+        }
+        if matches!(self.kind(t), TyKind::Int(_)) {
+            return true;
+        }
+        if matches!(self.kind(t), TyKind::Param(_))
+            && self.poss(t).verdict((true, true, false)) == super::ops::Verdict::Ok
+        {
+            return true;
+        }
+        self.builtin_type_error(e, name, "an integer", t);
+        false
+    }
+
+    /// The `idx` of `@gather`/`@scatter`: `i32xN` or `i64xN`, with the lane count of
+    /// the vector. E1503 for a different lane count, E0401 otherwise.
+    fn index_vector(&mut self, idx: ExprId, t: TypeId, lanes: u32) -> bool {
+        match self.kind(t) {
+            TyKind::Vector(Lane::Int(IntTy::I32 | IntTy::I64), n) => {
+                if n == lanes {
+                    true
+                } else {
+                    self.err(
+                        "E1503",
+                        format!(
+                            "this index vector has {n} lanes; `@gather` and `@scatter` need \
+                             {lanes}"
+                        ),
+                        self.span_of(idx),
+                    );
+                    false
+                }
+            }
+            _ => {
+                let n = self.name(t);
+                self.err(
+                    "E0401",
+                    format!("the index must be `i32xN` or `i64xN`, not `{n}`"),
+                    self.span_of(idx),
+                );
+                false
+            }
+        }
     }
 
     fn builtin_type_error(&mut self, e: ExprId, name: &str, want: &str, got: TypeId) {
@@ -656,7 +1012,13 @@ impl Checker<'_, '_> {
 
     fn bits_check(&mut self, e: ExprId, to: TypeId, from: TypeId) {
         let span = self.span_of(e);
-        let mentions_param = |this: &Self, t: TypeId| this.cx.d.types.has_params(t);
+        // A pointer is a fixed-size value whatever it points at.
+        let mentions_param = |this: &Self, t: TypeId| {
+            !matches!(
+                this.kind(t),
+                TyKind::RawPtr(..) | TyKind::Ref(..) | TyKind::FnPtr(_)
+            ) && this.cx.d.types.has_params(t)
+        };
         if mentions_param(self, to) || mentions_param(self, from) {
             self.err(
                 "E0811",
@@ -977,8 +1339,7 @@ impl Checker<'_, '_> {
                 {
                     self.expr(args[2], None);
                     self.ni(format!(
-                        "`@{name}` on an integer vector (the specification gives it for integer \
-                         types)"
+                        "`@{name}` on an integer vector (the builtin reference, pipeline §11)"
                     ));
                     return (poison, None);
                 }
@@ -994,8 +1355,8 @@ impl Checker<'_, '_> {
                 if !matches!(self.kind(a), TyKind::Int(_)) {
                     if matches!(self.kind(a), TyKind::Vector(..)) {
                         self.ni(format!(
-                            "`@{name}` on an integer vector (the specification gives it for \
-                             integer types)"
+                            "`@{name}` on an integer vector (the builtin reference, pipeline \
+                             §11)"
                         ));
                     } else {
                         self.builtin_type_error(e, name, "integers", a);
@@ -1003,6 +1364,219 @@ impl Checker<'_, '_> {
                     return (poison, None);
                 }
                 (a, None)
+            }
+            "shuffle" => {
+                if args.len() != 2 && args.len() != 3 {
+                    self.arity(e, name, args, 2);
+                    return (poison, None);
+                }
+                let two = args.len() == 3;
+                let a = self.expr(args[0], None);
+                let b = if two {
+                    Some(self.expr(args[1], Some(a)))
+                } else {
+                    None
+                };
+                if self.is_poison(a) || b.is_some_and(|b| self.is_poison(b)) {
+                    return (poison, None);
+                }
+                let (lane, lanes) = match self.kind(a) {
+                    TyKind::Vector(l, n) => (l, n),
+                    _ => {
+                        self.builtin_type_error(e, name, "a vector", a);
+                        return (poison, None);
+                    }
+                };
+                if let Some(b) = b
+                    && b != a
+                {
+                    self.mismatch(args[1], b, a);
+                    return (poison, None);
+                }
+                let idx = args[args.len() - 1];
+                let it = self.expr(idx, None);
+                if self.is_poison(it) {
+                    return (poison, None);
+                }
+                let (m, elems) = match self.kind(it) {
+                    TyKind::Array(el, len) if matches!(self.kind(el), TyKind::Int(IntTy::I32)) => {
+                        match len.as_len() {
+                            Some(n) => match &self.hir.expr(self.unparen(idx)).kind {
+                                ExprKind::ArrayLit { elems, .. } => (n, elems.clone()),
+                                _ => {
+                                    self.err(
+                                        "E1504",
+                                        "the index of `@shuffle` must be a constant `[M]i32` \
+                                         array literal",
+                                        self.span_of(idx),
+                                    );
+                                    return (poison, None);
+                                }
+                            },
+                            None => {
+                                self.ni("a `@shuffle` index whose length depends on a generic parameter");
+                                return (poison, None);
+                            }
+                        }
+                    }
+                    TyKind::Poison => return (poison, None),
+                    _ => {
+                        self.builtin_type_error(e, name, "a constant `[M]i32` array", it);
+                        return (poison, None);
+                    }
+                };
+                let limit = if two {
+                    i128::from(lanes) * 2
+                } else {
+                    i128::from(lanes)
+                };
+                let mut bad = false;
+                for x in elems {
+                    if !crate::consteval::runtime_reads(self.hir, self.cx.sema, x).is_empty() {
+                        bad = true;
+                        break;
+                    }
+                    match self.cx.eval_expr(
+                        self.pkg,
+                        self.file,
+                        x,
+                        Some(crate::consteval::ValTy::Int(IntTy::I32)),
+                    ) {
+                        Ok(crate::ty::ConstValue::Int { value, .. })
+                            if value >= 0 && value < limit => {}
+                        Ok(_) | Err(crate::consteval::Fail::OutOfRange(_)) => {
+                            bad = true;
+                            break;
+                        }
+                        Err(crate::consteval::Fail::Reported) => {
+                            self.errors += 1;
+                            return (poison, None);
+                        }
+                        Err(crate::consteval::Fail::NotImplemented(_))
+                        | Err(crate::consteval::Fail::Generic) => {
+                            bad = true;
+                            break;
+                        }
+                    }
+                }
+                if bad {
+                    self.err(
+                        "E1504",
+                        format!("every index of `@shuffle` is a constant in `0..{limit}`"),
+                        self.span_of(idx),
+                    );
+                    return (poison, None);
+                }
+                let m = u32::try_from(m).unwrap_or(0);
+                let bits = lane.bits() * m;
+                if ![128, 256, 512].contains(&bits) {
+                    self.err(
+                        "E1501",
+                        format!(
+                            "`{}x{m}` is {bits} bits wide: a vector is 128, 256 or 512 bits",
+                            lane.name()
+                        ),
+                        self.span_of(e),
+                    );
+                    return (poison, None);
+                }
+                (self.mk(TyKind::Vector(lane, m)), None)
+            }
+            "lookup" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let table = self.expr(args[0], None);
+                let idx = self.expr(args[1], None);
+                if self.is_poison(table) || self.is_poison(idx) {
+                    return (poison, None);
+                }
+                let u8_table = matches!(self.kind(table), TyKind::Vector(Lane::Int(IntTy::U8), _));
+                if !u8_table {
+                    self.builtin_type_error(e, name, "a `u8xN` table", table);
+                    return (poison, None);
+                }
+                match self.kind(idx) {
+                    TyKind::Vector(Lane::Int(IntTy::U8), _) => (idx, None),
+                    _ => {
+                        self.builtin_type_error(e, name, "a `u8xM` index vector", idx);
+                        (poison, None)
+                    }
+                }
+            }
+            "gather" => {
+                let v = self.need_type(e, name, targ);
+                if !self.arity(e, name, args, 2) {
+                    return (v.unwrap_or(poison), v);
+                }
+                let s = self.expr(args[0], None);
+                let idx = self.expr(args[1], None);
+                let Some(v) = v else {
+                    return (poison, None);
+                };
+                if self.is_poison(s) || self.is_poison(idx) {
+                    return (poison, Some(v));
+                }
+                let (lane, lanes) = match self.kind(v) {
+                    TyKind::Vector(l, n) => (l, n),
+                    _ => {
+                        self.builtin_type_error(e, name, "a vector type", v);
+                        return (poison, Some(v));
+                    }
+                };
+                let el = self.lane_ty(lane);
+                match self.kind(s) {
+                    TyKind::Slice(_, se) if se == el => {}
+                    TyKind::Poison => return (poison, Some(v)),
+                    _ => {
+                        let want = self.slice_of(el, false);
+                        self.mismatch(args[0], s, want);
+                        return (poison, Some(v));
+                    }
+                }
+                if !self.index_vector(args[1], idx, lanes) {
+                    return (poison, Some(v));
+                }
+                (v, Some(v))
+            }
+            "scatter" => {
+                if !self.arity(e, name, args, 3) {
+                    return (self.void(), None);
+                }
+                let s = self.expr(args[0], None);
+                let idx = self.expr(args[1], None);
+                let v = self.expr(args[2], None);
+                if self.is_poison(s) || self.is_poison(idx) || self.is_poison(v) {
+                    return (self.void(), None);
+                }
+                let (lane, lanes) = match self.kind(v) {
+                    TyKind::Vector(l, n) => (l, n),
+                    _ => {
+                        self.builtin_type_error(e, name, "a vector", v);
+                        return (self.void(), None);
+                    }
+                };
+                let el = self.lane_ty(lane);
+                match self.kind(s) {
+                    TyKind::Slice(Mutability::Mut, se) if se == el => {}
+                    TyKind::Poison => return (self.void(), None),
+                    _ => {
+                        let n = self.name(s);
+                        self.err(
+                            "E0401",
+                            format!(
+                                "`@scatter` needs a `[]mut {}` slice, not `{n}`",
+                                self.name(el)
+                            ),
+                            self.span_of(e),
+                        );
+                        return (self.void(), None);
+                    }
+                }
+                if !self.index_vector(args[1], idx, lanes) {
+                    return (self.void(), None);
+                }
+                (self.void(), None)
             }
             "fma" | "sqrt" | "abs" | "min" | "max" | "floor" | "ceil" | "round" | "rem" => {
                 let n = match name {
@@ -1027,16 +1601,30 @@ impl Checker<'_, '_> {
                 if !ok {
                     return (poison, None);
                 }
-                let scalar_float = matches!(self.kind(first), TyKind::Float(_));
-                let valid = match (name, self.kind(first)) {
-                    ("fma" | "rem", TyKind::Float(_)) => true,
-                    (_, TyKind::Vector(..)) => name != "rem",
+                let kind = self.kind(first);
+                let valid = match (&kind, name) {
+                    // Every one of these is defined on a float scalar and on a float
+                    // vector (section 26.2); `@rem` is the float remainder (section 3).
+                    (TyKind::Float(_), _) => true,
+                    (TyKind::Vector(Lane::Float(_), _), _) => name != "rem",
+                    (TyKind::Vector(..), _) => {
+                        self.ni(format!(
+                            "`@{name}` on an integer vector (the builtin reference, \
+                             pipeline §11)"
+                        ));
+                        return (poison, None);
+                    }
                     _ => false,
                 };
                 if !valid {
-                    if scalar_float {
+                    if matches!(kind, TyKind::Int(_)) {
                         self.ni(format!(
-                            "`@{name}` on a scalar (the specification gives it for vectors)"
+                            "`@{name}` on an integer (the builtin reference, pipeline §11)"
+                        ));
+                    } else if matches!(kind, TyKind::Param(_)) {
+                        // Which bounds grant these is the builtin reference's to say.
+                        self.ni(format!(
+                            "`@{name}` on a type parameter (the builtin reference, pipeline §11)"
                         ));
                     } else {
                         let n2 = self.name(first);
@@ -1062,8 +1650,7 @@ impl Checker<'_, '_> {
                 let (xk, nk) = (self.kind(x), self.kind(n));
                 if matches!(xk, TyKind::Vector(..)) || matches!(nk, TyKind::Vector(..)) {
                     self.ni(format!(
-                        "`@{name}` on an integer vector (the specification gives it for \
-                         integer types)"
+                        "`@{name}` on an integer vector (the builtin reference, pipeline §11)"
                     ));
                     return (poison, None);
                 }
@@ -1096,57 +1683,8 @@ impl Checker<'_, '_> {
                     }
                 }
             }
-            "load" | "load_tail" => {
-                let t = self.need_type(e, name, targ);
-                if !self.arity(e, name, args, 2) {
-                    return (t.unwrap_or(poison), t);
-                }
-                let s = self.expr(args[0], None);
-                self.index_operand(args[1]);
-                match (t.map(|t| (t, self.kind(t))), self.kind(s)) {
-                    (Some((t, TyKind::Vector(l, _))), TyKind::Slice(_, el)) => {
-                        let le = self.lane_ty(l);
-                        if el != le {
-                            let want = self.slice_of(le, false);
-                            self.mismatch(args[0], s, want);
-                            return (poison, Some(t));
-                        }
-                        (t, Some(t))
-                    }
-                    (_, TyKind::Poison) | (None, _) => (poison, t),
-                    (Some((t, _)), _) => {
-                        self.builtin_type_error(e, name, "a vector type and a slice", t);
-                        (poison, Some(t))
-                    }
-                }
-            }
-            "store" | "store_tail" => {
-                if !self.arity(e, name, args, 3) {
-                    return (self.void(), None);
-                }
-                let s = self.expr(args[0], None);
-                self.index_operand(args[1]);
-                let v = self.expr(args[2], None);
-                match (self.kind(s), self.kind(v)) {
-                    (TyKind::Slice(Mutability::Mut, el), TyKind::Vector(l, _)) => {
-                        let le = self.lane_ty(l);
-                        if el != le {
-                            let want = self.slice_of(le, true);
-                            self.mismatch(args[0], s, want);
-                        }
-                    }
-                    (TyKind::Poison, _) | (_, TyKind::Poison) => {}
-                    _ => {
-                        let n = self.name(s);
-                        self.err(
-                            "E0401",
-                            format!("`@{name}` needs a `[]mut` slice and a vector, not `{n}`"),
-                            self.span_of(e),
-                        );
-                    }
-                }
-                (self.void(), None)
-            }
+            "load" | "load_tail" => self.load_builtin(e, name, targ, args),
+            "store" | "store_tail" => self.store_builtin(e, name, args),
             "insert" => {
                 if !self.arity(e, name, args, 3) {
                     return (poison, None);

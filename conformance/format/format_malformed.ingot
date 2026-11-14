@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 35
+
+fn f(x: i64) {
+    @debug("{:z}", x); //~ E0422
+    @debug("}", x); //~ E0422
+    @debug("{", x); //~ E0422
+    @debug("{:.}", x); //~ E0422
+}

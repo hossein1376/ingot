@@ -6,6 +6,7 @@ use crate::defs::{Builtin, DefId, DefKind};
 use crate::hir::{self, ExprId, ExprKind, Handler, Res};
 use crate::resolve::unique_near;
 use crate::sigs::*;
+use crate::traits::{MethodCandidate, MethodSource};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
@@ -532,6 +533,18 @@ impl Checker<'_, '_> {
         d: DefId,
         explicit: Vec<GenericArg>,
     ) -> (TypeId, ExprRes) {
+        self.fn_value_with(e, d, explicit, FnSource::Free, Subst::new())
+    }
+
+    /// A function named as a value, from a `fn` item or an inherent method of a type.
+    fn fn_value_with(
+        &mut self,
+        e: ExprId,
+        d: DefId,
+        explicit: Vec<GenericArg>,
+        source: FnSource,
+        base: Subst,
+    ) -> (TypeId, ExprRes) {
         let Some(sig) = self.fn_sig(d) else {
             return (self.poison(), ExprRes::None);
         };
@@ -568,7 +581,7 @@ impl Checker<'_, '_> {
             self.ni("a variadic function used as a value");
             return (self.poison(), ExprRes::None);
         }
-        let mut s = Subst::new();
+        let mut s = base;
         let mut args = Vec::new();
         for (g, arg) in generics.iter().zip(&explicit) {
             match (g.is_const, arg) {
@@ -638,7 +651,7 @@ impl Checker<'_, '_> {
             ExprRes::Fn(FnRef {
                 def: d,
                 args,
-                source: FnSource::Free,
+                source,
             }),
         )
     }
@@ -670,6 +683,17 @@ impl Checker<'_, '_> {
                 return (self.poison(), ExprRes::None);
             };
             let (ty, res) = self.fn_value(e, d, lowered);
+            self.set(b, ty, res.clone());
+            return (ty, res);
+        }
+        if let ExprKind::Field {
+            base: tb,
+            name,
+            name_span,
+        } = &self.hir.expr(b).kind
+            && let Some(t) = self.type_of_path_expr(*tb)
+        {
+            let (ty, res) = self.type_member_with(b, t, name, *name_span, Some(args));
             self.set(b, ty, res.clone());
             return (ty, res);
         }
@@ -788,6 +812,9 @@ impl Checker<'_, '_> {
                 };
                 let Some((index, f)) = sig.fields.iter().enumerate().find(|(_, f)| f.name == name)
                 else {
+                    if self.method_without_call(t, name, name_span) {
+                        return (self.poison(), ExprRes::None);
+                    }
                     let names: Vec<String> = sig.fields.iter().map(|f| f.name.clone()).collect();
                     self.unknown_member(name, name_span, &names, t);
                     return (self.poison(), ExprRes::None);
@@ -822,6 +849,9 @@ impl Checker<'_, '_> {
                     ExprRes::SlicePtr { derefs },
                 ),
                 _ => {
+                    if self.method_without_call(t, name, name_span) {
+                        return (self.poison(), ExprRes::None);
+                    }
                     let cands = vec!["len".to_string(), "ptr".to_string()];
                     self.unknown_member(name, name_span, &cands, t);
                     (self.poison(), ExprRes::None)
@@ -832,10 +862,28 @@ impl Checker<'_, '_> {
             }
             TyKind::Poison => (self.poison(), ExprRes::None),
             _ => {
+                if self.method_without_call(t, name, name_span) {
+                    return (self.poison(), ExprRes::None);
+                }
                 self.unknown_member(name, name_span, &[], t);
                 (self.poison(), ExprRes::None)
             }
         }
+    }
+
+    /// `value.method` without a call: E0314, with the message saying to write a
+    /// closure (section 4.4).
+    fn method_without_call(&mut self, t: TypeId, name: &str, name_span: Span) -> bool {
+        if self.cx.d.method_candidates(t, name).is_empty() {
+            return false;
+        }
+        let tname = self.name(t);
+        self.err(
+            "E0314",
+            format!("`{name}` is a method of `{tname}`, not a value; write a closure"),
+            name_span,
+        );
+        true
     }
 
     fn tuple_field(&mut self, e: ExprId, base: ExprId, index: u64) -> (TypeId, ExprRes) {
@@ -1129,15 +1177,40 @@ impl Checker<'_, '_> {
         name: &str,
         name_span: Span,
     ) -> (TypeId, ExprRes) {
+        self.type_member_with(e, t, name, name_span, None)
+    }
+
+    /// The same, with explicit generic arguments (`Type.name.[..]`).
+    fn type_member_with(
+        &mut self,
+        e: ExprId,
+        t: TypeId,
+        name: &str,
+        name_span: Span,
+        explicit: Option<&[hir::GenericArg]>,
+    ) -> (TypeId, ExprRes) {
         let _ = e;
         if self.is_poison(t) {
             return (self.poison(), ExprRes::None);
         }
         if let Some(v) = self.variant_named(t, name) {
+            if explicit.is_some() {
+                let tname = self.name(t);
+                self.err(
+                    "E0805",
+                    format!("`{tname}.{name}` is not a function and takes no type arguments"),
+                    name_span,
+                );
+                return (self.poison(), ExprRes::None);
+            }
             return match v.payload {
                 None => (v.enum_ty, ExprRes::Variant(v)),
                 Some(_) => {
-                    self.ni("a variant with a payload named without a call (`Type.variant` as a function value)");
+                    self.err(
+                        "E0410",
+                        "a variant with a payload is not a function value; write `T.variant(..)`",
+                        name_span,
+                    );
                     (self.poison(), ExprRes::None)
                 }
             };
@@ -1148,12 +1221,24 @@ impl Checker<'_, '_> {
                 continue;
             };
             if let Some(&c) = sig.consts.get(name) {
+                if explicit.is_some() {
+                    let tname = self.name(t);
+                    self.err(
+                        "E0805",
+                        format!("`{tname}.{name}` is not a function and takes no type arguments"),
+                        name_span,
+                    );
+                    return (self.poison(), ExprRes::None);
+                }
                 self.cx.ensure_sig(c);
                 if let Some(ItemSig::Const(cs)) = self.cx.d.items.get(&c).cloned() {
                     let ty = self.cx.d.instantiate(cs.ty, &m.subst);
                     return (ty, ExprRes::Const(c));
                 }
             }
+        }
+        if let Some(v) = self.inherent_method_value(e, t, name, explicit) {
+            return v;
         }
         let cands = self.cx.d.method_candidates(t, name);
         if !cands.is_empty() {
@@ -1162,6 +1247,42 @@ impl Checker<'_, '_> {
         }
         self.unknown_function(t, name, name_span);
         (self.poison(), ExprRes::None)
+    }
+
+    /// `T.name` naming an inherent function or method: a `fn` value whose first
+    /// parameter is `self` when the function is a method (section 4.4).
+    fn inherent_method_value(
+        &mut self,
+        e: ExprId,
+        t: TypeId,
+        name: &str,
+        explicit: Option<&[hir::GenericArg]>,
+    ) -> Option<(TypeId, ExprRes)> {
+        let mut found = None;
+        for m in self.cx.d.inherent_impls(t) {
+            let Some(sig) = self.cx.d.impl_sig(m.impl_def).cloned() else {
+                continue;
+            };
+            if let Some(&method) = sig.methods.get(name) {
+                found = Some((method, m));
+                break;
+            }
+        }
+        let (method, m) = found?;
+        self.cx.ensure_sig(method);
+        let c = MethodCandidate {
+            method,
+            source: MethodSource::Inherent(m),
+        };
+        let (source, subst, _) = self.fn_ref_from(&c, t);
+        let explicit = match explicit {
+            Some(args) => match self.lower_explicit_args(args, method) {
+                Some(v) => v,
+                None => return Some((self.poison(), ExprRes::None)),
+            },
+            None => Vec::new(),
+        };
+        Some(self.fn_value_with(e, method, explicit, source, subst))
     }
 
     /// `Type.name` or `value.name(..)` found nothing. A type the language or the

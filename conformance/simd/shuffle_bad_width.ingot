@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 26.2
+
+fn narrow(v: u8x16) {
+    let x = @shuffle(v, [3]i32.{ 0, 1, 2 }); //~ E1501
+    _ = x;
+}

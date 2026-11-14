@@ -1049,16 +1049,6 @@ impl Checker<'_, '_> {
             self.unknown_function(t0, name, name_span);
             return;
         }
-        // The specification names these functions of slices and optionals (sections 5.5,
-        // 7.1 and 11) without a signature.
-        if matches!(self.kind(t0), TyKind::Slice(..) | TyKind::Optional(_))
-            && matches!(name, "shared" | "refs" | "take")
-        {
-            self.ni(format!(
-                "`.{name}()`: the specification names it but gives no signature"
-            ));
-            return;
-        }
         let names = self.method_names(t0);
         self.unknown_member(name, name_span, &names, t0);
     }
@@ -1533,8 +1523,17 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         };
-        if !sig.is_method() || args.is_empty() {
-            self.ni("a call `I.name(..)` of an interface function that takes no `self`");
+        if !sig.is_method() {
+            return self.interface_call_without_self(
+                e, callee, iface, m, &sig, name_span, args, args_span, &isig,
+            );
+        }
+        if args.is_empty() {
+            self.err(
+                "E0410",
+                format!("`{name}` is a method and needs a value of `Self` first"),
+                name_span,
+            );
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         }
@@ -1611,6 +1610,161 @@ impl Checker<'_, '_> {
         };
         let mut known = BTreeMap::new();
         known.insert(0, first);
+        let target = CallTarget {
+            def: func,
+            sig: fsig.clone(),
+            subst,
+            extra_binders: Vec::new(),
+            skip: 0,
+            explicit: Vec::new(),
+            explicit_span: None,
+        };
+        let site = CallSite {
+            args,
+            args_span,
+            name_span,
+            known,
+        };
+        let Some(r) = self.apply_call(&target, &site) else {
+            return (self.poison(), ExprRes::None);
+        };
+        let fnref = FnRef {
+            def: func,
+            args: r.fn_args.clone(),
+            source: FnSource::Interface {
+                interface: iface,
+                interface_args: iargs,
+                self_ty,
+                via: source,
+            },
+        };
+        let sigty = self.callee_type(&fsig, &r.subst);
+        self.set(callee, sigty, ExprRes::Fn(fnref.clone()));
+        (
+            r.ty,
+            ExprRes::Call(Box::new(CallInfo {
+                callee: Callee::Fn(fnref),
+                receiver: None,
+                mode: None,
+            })),
+        )
+    }
+
+    /// `I.name(args)` for an interface function without `self`: `Self` must be
+    /// determined by the argument types, or E0803 (section 4.4).
+    #[allow(clippy::too_many_arguments)]
+    fn interface_call_without_self(
+        &mut self,
+        e: ExprId,
+        callee: ExprId,
+        iface: DefId,
+        m: DefId,
+        sig: &FnSig,
+        name_span: Span,
+        args: &[ExprId],
+        args_span: Span,
+        isig: &crate::sigs::InterfaceSig,
+    ) -> (TypeId, ExprRes) {
+        let _ = e;
+        let mut binders = vec![isig.self_def];
+        binders.extend(self.cx.d.generics_of(iface).iter().map(|g| g.def));
+        let binder_set: BTreeSet<DefId> = binders.iter().copied().collect();
+        // Only the arguments whose parameter mentions `Self` or the interface's
+        // generics are typed here, once; `apply_call` types the rest with their
+        // parameter types as hints.
+        let mut known = BTreeMap::new();
+        let mut s = Subst::new();
+        let mut poisoned = false;
+        for (i, (p, &a)) in sig.params.iter().zip(args).enumerate() {
+            if !self.mentions(p.ty, &binder_set) {
+                continue;
+            }
+            let t = self.expr(a, None);
+            poisoned |= self.is_poison(t);
+            known.insert(i, t);
+            // A parameter that also mentions the function's own generics is finished
+            // by `apply_call`.
+            let _ = self.cx.d.match_ty(p.ty, t, &binders, &mut s);
+        }
+        let blind_rest = |this: &mut Self, known: &BTreeMap<usize, TypeId>| {
+            for (i, &a) in args.iter().enumerate() {
+                if !known.contains_key(&i) {
+                    this.blind_expr(a);
+                }
+            }
+        };
+        if poisoned {
+            blind_rest(self, &known);
+            return (self.poison(), ExprRes::None);
+        }
+        let Some(GenericArg::Ty(self_ty)) = s.get(isig.self_def).cloned() else {
+            blind_rest(self, &known);
+            let iname = self.cx.sema.def(iface).name.clone();
+            self.err(
+                "E0803",
+                format!(
+                    "cannot infer `Self` for `{iname}.{}` from the argument types; write `T.{}(..)`",
+                    sig.name, sig.name
+                ),
+                name_span,
+            );
+            return (self.poison(), ExprRes::None);
+        };
+        let mut iargs: Vec<GenericArg> = Vec::new();
+        for g in self.cx.d.generics_of(iface).to_vec() {
+            let Some(a) = s.get(g.def).cloned() else {
+                blind_rest(self, &known);
+                let iname = self.cx.sema.def(iface).name.clone();
+                self.err(
+                    "E0803",
+                    format!(
+                        "the type argument(s) of `{iname}.{}` are not determined by the argument types; write `T.{}(..)`",
+                        sig.name, sig.name
+                    ),
+                    name_span,
+                );
+                return (self.poison(), ExprRes::None);
+            };
+            iargs.push(a);
+        }
+        let Some(source) = self.resolve_interface(self_ty, iface, &iargs) else {
+            blind_rest(self, &known);
+            let tn = self.name(self_ty);
+            let iname = self.cx.sema.def(iface).name.clone();
+            // At the first argument that determined `Self`.
+            let at = known
+                .keys()
+                .next()
+                .map_or(name_span, |&i| self.span_of(args[i]));
+            self.err("E0801", format!("`{tn}` does not implement `{iname}`"), at);
+            return (self.poison(), ExprRes::None);
+        };
+        let (func, subst) = match &source {
+            InterfaceVia::Impl { impl_def, .. } => {
+                let own = self
+                    .cx
+                    .d
+                    .impl_sig(*impl_def)
+                    .and_then(|i| i.methods.get(&sig.name).copied());
+                match own {
+                    Some(f) => {
+                        let ms = self
+                            .cx
+                            .d
+                            .match_impl(*impl_def, self_ty)
+                            .map(|m| m.subst)
+                            .unwrap_or_default();
+                        (f, ms)
+                    }
+                    None => (m, self.iface_subst(iface, &iargs, self_ty)),
+                }
+            }
+            _ => (m, self.iface_subst(iface, &iargs, self_ty)),
+        };
+        let Some(fsig) = self.fn_sig(func) else {
+            blind_rest(self, &known);
+            return (self.poison(), ExprRes::None);
+        };
         let target = CallTarget {
             def: func,
             sig: fsig.clone(),
