@@ -114,6 +114,76 @@ package. It is written only as far as conformance tests and programs need it, an
 with APIs that spec §35 describes. Nothing in `std` is hard-coded in the compiler except
 the entry points of pipeline §8.
 
+## Data model of `ingot-cfg`
+
+**One CFG per body.** `CfgKey { owner: DefId, body: Item | Closure(ExprId) | ParFor(StmtId) }`
+names a function or test body, a closure body, or a `par for` body. `Cfgs` holds them in
+a deterministic order (item bodies first, then the closures and `par for` bodies they
+contain, in source order). A key has exactly one CFG: a closure or `par for` inside a
+deferred block, which is copied to every exit, is lowered once and every copy names that
+CFG. A body phase 7 marked `failed` is not lowered. A construct phase 8 cannot lower yet
+is recorded as `lowering: <what>` and the body's CFG is dropped; at S5 there are none in
+the suite. An expression that reaches lowering and yields no value is such a construct,
+never a silent drop.
+
+**Locals.** `CfgLocal { kind: Param | User | Temp | Scope, name, source: Option<LocalId>,
+ty, ty_name, span }`. A user local keeps the HIR `LocalId`; a temporary has no name.
+Every local has an explicit `StorageStart` and `StorageEnd` on every path. The one
+implicit end is the temporary that holds a `return`/`fail` value: it must survive the
+cleanup, so its storage ends at the `Return` terminator itself (`Return.end`). Header
+temporaries of a loop are started in the head each iteration and ended at each
+iteration's end; a `for` iterand and a scope local live for the whole statement.
+
+**Places.** `Place { base: Local | Static, proj: [Field { index, name } | TupleField |
+Index(Operand) | Deref | Payload { variant }] }`. The index operand is kept for check
+removal and code generation; the ownership checker ignores it. A place rooted at a
+`Static` takes no loans.
+
+**Statements.** `StorageStart/End`, `Assign { place, value }`, `Cancel(s)`,
+`Abandon(dest)`, `Check(Check)` and `Use(operand)` (a no-op read for liveness).
+`Abandon` is the one addition to pipeline section 5's list: it says an unchosen
+`select` arm's result storage holds no value, so the checker does not report the linear
+result as leaked.
+
+**Checks.** `Check { kind, place, lo, hi, operands, places, ty, span }` with kinds
+`Bounds(Index | Slice | Vector { width, tail })`, `Overflow`, `Division`, `Shift`,
+`Narrow`, `Gather`, `ScatterDistinct` and `DispatchCover`. `place` is the container
+whose `len` matters, `lo`/`hi` the index or range, `width` the lane count of a vector
+access, and the trap code follows the catalog (`check_trap`).
+
+**Rvalues.** a copy or move of a place, a constant, unary and binary operations, a
+borrow or the implicit two-phase reborrow of a `&mut`/`[]mut` place, an aggregate
+(struct, tuple, array, enum variant, closure captures), a cast (including the `&dyn`
+coercion record), the discriminant of an enum, `.len`/`.ptr` of a slice, a slice of a
+slice or an array, one `&mut` element of a `[]mut T` loop, and one `Builtin` value with
+its name, type argument and operands. A builtin that takes a place (`@replace`,
+`@swap`, `@unchecked_index`, `@unchecked_slice`, the memory builtins) keeps it as a
+`BuiltinArg::Place`.
+
+**Terminators.** `Goto`, `Branch`, `Switch` on an enum tag, `Return { value, is_error }`
+(the error exits of `fail` and a propagating `try`), `Call` (callee, arguments,
+destination, continuation), `Trap`, and the concurrency terminators `Spawn`,
+`ScopeWait`, `Select` (one successor per arm, each with the operation's call and result
+place), `ParFor` (body CFG, captures as shared borrows whose record the body receives
+as a tuple of borrows by value, iterand or range, grain) and
+`Dispatch` (kernel, executor, range, inputs and outputs with their borrow kind).
+`Unreachable` ends a block no path reaches. `Return` also names the temporary whose
+storage it ends (`end`), so a checker ends it after reading the value.
+
+**Dump and validator.** `dump::dump` prints every CFG as the deterministic text its
+module documents: named locals, spans, trap codes, `(error)` returns, and
+`[defer L:C exit L:C]` on each copied deferred statement. `validate::validate_all`
+checks block targets, declared locals, and that the storage start and end of every local
+are paired on every path and every local a statement or terminator uses is inside its
+storage; the golden runner and the two conformance sweeps run it.
+
+**Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
+registration order, to every exit of their block, tagged with the defer and the exit;
+after that no `defer` exists. Assignment evaluates the target's indices, then the value,
+then the target's checks, then the store; a compound assignment reads the place after
+the value by the same rule. A `scope` lowers to storage start, body, the body's deferred
+code and storage ends, `cancel(s)` on an error exit, `scope_wait(s)`, storage end.
+
 ## Steps
 
 Each step ends with `scripts/verify.sh` passing and the reviewer having read the full
@@ -130,7 +200,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S4b | relay | Kernels and `dispatch` (E1510–E1519), after the `Idx`/`Grid` members are specified | done (e88296d) |
 | S4c | relay | The spec review (`228062e`) in phases 1–7: holes H1–H5, lowercase constant generics, open slice bounds, diverging branch blocks, closure bounds, kernel helpers instead of phase 7k, and the smaller rule changes | done (0562994) |
 | S4d | relay | The rest of `228062e` in phase 7: builtin signatures (SIMD, `unsafe`), format strings (E0422), function values, `I.name(..)`, `std`'s inherent impls on built-in types | done (93f6a05) |
-| S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | dumps for every lowering rule; every accept test's bodies lower |
+| S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | done (dumps for every lowering rule; every accept test's bodies lower) |
 | S5b | relay | Constant evaluation of function calls over the CFG (E0806–E0808) | `arith/*` constant tests |
 | S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
 | S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |

@@ -1,0 +1,52 @@
+// scope and spawn: statement and expression forms, a scope wait on every exit
+
+fn bump(p: &mut i64) {
+    p.* += 1;
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn f(n: i64) {
+    var total: i64 = 0;
+    var other: i64 = n;
+    scope s {
+        spawn bump(&mut total) in s;
+        let h = spawn add(n, 1) in s;
+        @forget(h);
+        defer { other += 1; }
+        if n < 0 {
+            return;
+        }
+        other += add(n, 2);
+    }
+    total += 1;
+}
+
+enum E { bad }
+
+fn g(n: i64) -> i64 ! E {
+    var total: i64 = 0;
+    scope s {
+        spawn bump(&mut total) in s;
+        if n < 0 {
+            fail .bad;
+        }
+    }
+    return total;
+}
+
+fn h(n: i64) {
+    var total: i64 = 0;
+    var count: i64 = 0;
+    while total < n {
+        scope s {
+            spawn bump(&mut total) in s;
+            count += 1;
+            if count > 2 {
+                break;
+            }
+        }
+    }
+}

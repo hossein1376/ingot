@@ -2,10 +2,10 @@
 //!
 //! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
 //! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
-//! layouts) and 7 (type-checking bodies) run. Phases 8 to 10 do not exist yet. A package
-//! with a body that passes phase 7, or with a constant that phase 6 cannot evaluate, is
-//! not accepted: `Analysis` says so in `not_implemented`, and the command line exits
-//! with status 2 instead of 0.
+//! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phases 9 and 10 do
+//! not exist yet. A package with a body that passes phase 7, or with a constant that
+//! phase 6 cannot evaluate, is not accepted: `Analysis` says so in `not_implemented`,
+//! and the command line exits with status 2 instead of 0.
 
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
@@ -21,7 +21,7 @@ use std::path::Path;
 pub const UNCHECKED: &str = ingot_sema::UNCHECKED_BODIES;
 
 /// What the pipeline does not do yet for a body that passed phase 7.
-pub const UNCHECKED_OWNERSHIP: &str = ingot_sema::UNCHECKED_OWNERSHIP;
+pub const UNCHECKED_OWNERSHIP: &str = ingot_cfg::UNCHECKED_OWNERSHIP;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -50,6 +50,9 @@ pub struct Analysis {
     /// The number of `.ingot` files of the checked package (not the standard
     /// library's).
     pub files: usize,
+    /// Phase 8's CFGs for the checked package, one per function and test body and one
+    /// per closure and `par for` body.
+    pub cfgs: ingot_cfg::Cfgs,
 }
 
 impl Analysis {
@@ -136,6 +139,7 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         modules: user.modules,
     });
 
+    let mut cfgs = ingot_cfg::Cfgs::default();
     // With dependencies the imports of their packages cannot be resolved, and
     // reporting every one of them as unresolved would be wrong: stop at what is known.
     if !package.manifest_failed && package.not_implemented.is_empty() {
@@ -144,7 +148,17 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         // anything later; nothing in a body is looked at.
         let declarations = ingot_sema::check_declarations(&all, &output, &target, std_count);
         // Phase 7 checks the bodies of the package against those signatures.
-        let bodies = ingot_sema::check_bodies(&all, &output, declarations, &target, std_count);
+        let mut bodies = ingot_sema::check_bodies(&all, &output, declarations, &target, std_count);
+        // Phase 8 lowers every body phase 7 accepted.
+        let lowered = ingot_cfg::lower_package(
+            &all,
+            &output.sema,
+            &output.packages,
+            &mut bodies.declarations,
+            &bodies.bodies,
+        );
+        let lowered_not_implemented = lowered.not_implemented;
+        cfgs = lowered.cfgs;
         diagnostics.extend(output.diagnostics);
         diagnostics.extend(bodies.declarations.diagnostics);
         diagnostics.extend(bodies.diagnostics);
@@ -169,6 +183,16 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
                 .filter(|m| m != UNCHECKED),
         );
         not_implemented.extend(bodies.not_implemented);
+        not_implemented.extend(lowered_not_implemented);
+        if bodies.bodies.bodies.values().any(|b| {
+            !b.failed
+                && matches!(
+                    b.kind,
+                    ingot_sema::typed::BodyKind::Fn | ingot_sema::typed::BodyKind::Test
+                )
+        }) {
+            not_implemented.push(UNCHECKED_OWNERSHIP.to_string());
+        }
     }
     not_implemented.dedup();
     sort_diagnostics(&mut diagnostics);
@@ -183,6 +207,7 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         not_implemented,
         target: options.target.clone(),
         files,
+        cfgs,
     })
 }
 

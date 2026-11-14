@@ -1,0 +1,61 @@
+// calls, method receivers, a return value and an index check
+
+copy struct Point { pub x: i64, pub y: i64 }
+
+impl Point {
+    fn sum(self: &Point) -> i64 { return self.x + self.y; }
+    fn shift(self: &mut Point, d: i64) { self.x += d; }
+}
+
+copy struct Pair { a: i64, b: i64 }
+
+impl Pair {
+    fn total(self: Pair) -> i64 { return self.a + self.b; }
+}
+
+fn add(a: i64, b: i64) -> i64 { return a + b; }
+
+fn f(xs: []i64, p: &mut Point) -> i64 {
+    let i: i64 = 1;
+    let v = xs[i];
+    p.shift(2);
+    return add(v, p.sum());
+}
+
+fn head(xs: []mut i64) -> i64 {
+    return xs[0];
+}
+
+fn bump(p: &mut i64) {
+    p.* += 1;
+}
+
+fn receivers(p: Pair, ys: []mut i64) -> i64 {
+    var y: i64 = 0;
+    let total = p.total();
+    bump(&mut y);
+    let h = head(ys);
+    return total + y + h;
+}
+
+fn id(xs: []i64) -> []i64 {
+    return xs;
+}
+
+fn slice_values(xs: []i64) -> i64 {
+    let n = id(xs).len;
+    let s = id(xs)[0..1];
+    return n + s.len;
+}
+
+fn method_values(p: &Point) -> i64 {
+    let g = Point.sum;
+    return g(p);
+}
+
+fn make_pair(a: i64) -> Pair { return Pair.{ a: a, b: 1 }; }
+
+// A by-value receiver that is not a place is evaluated into a temporary.
+fn rvalue_receiver(a: i64) -> i64 {
+    return make_pair(a).total();
+}

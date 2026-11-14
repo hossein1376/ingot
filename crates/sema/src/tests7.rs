@@ -1212,8 +1212,10 @@ fn the_rules_of_this_step_are_errors() {
 
 #[test]
 fn a_body_that_passes_is_left_for_the_ownership_phases() {
+    // Phase 7 leaves every body it checked to phase 8; that phase's own message is
+    // recorded by `ingot-cfg`, not here.
     let b = build("fn f() -> i64 { return 1; }\n");
-    assert_eq!(b.ni(), [crate::UNCHECKED_OWNERSHIP.to_string()]);
+    assert!(b.ni().is_empty(), "{:?}", b.ni());
     let b = build("const c: i64 = 3;\nstatic s: i64 = 4;\n");
     assert!(b.ni().is_empty(), "{:?}", b.ni());
     let b = build("fn f() -> i64 { return true; }\n");

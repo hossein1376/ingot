@@ -1995,7 +1995,7 @@ impl Checker<'_, '_> {
     ) -> (TypeId, ExprRes) {
         let _ = e;
         if !self.kernel {
-            self.ni("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
+            self.ni_unchecked("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
         }
         let ct = self.expr(call, None);
         let st = self.expr(scope, None);

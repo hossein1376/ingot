@@ -1,0 +1,45 @@
+// par for over a range and a slice with a capture, and select with and without else
+
+struct Sig { v: i64 }
+
+impl Sig {
+    waitable fn wait(self: &Sig) -> i64 {
+        return self.v;
+    }
+}
+
+fn scale(xs: []mut i64, k: i64) {
+    par for x in xs {
+        x.* += k;
+    }
+}
+
+fn scan(n: i64, k: i64) {
+    par for i in 0..n {
+        if i == k {
+            @panic("hit");
+        }
+    }
+}
+
+fn pick(sig: &Sig) -> i64 {
+    select {
+        v = sig.wait() => {
+            return v;
+        }
+        else => {
+            return 0;
+        }
+    }
+}
+
+fn only(sig: &Sig) -> i64 {
+    select {
+        v = sig.wait() => {
+            return v;
+        }
+        w = sig.wait() => {
+            return w + 1;
+        }
+    }
+}

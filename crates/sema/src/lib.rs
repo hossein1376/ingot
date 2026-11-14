@@ -169,10 +169,6 @@ fn scrub_builtin(diags: Vec<Diagnostic>, internal: &mut Vec<String>) -> Vec<Diag
 /// ([`check_bodies`]) does it, so the driver drops this entry once phase 7 has run.
 pub const UNCHECKED_BODIES: &str = "type checking of function bodies (pipeline phases 7 to 10)";
 
-/// What is left after phase 7 for a body that passed it: phases 8 to 10 do not exist yet.
-pub const UNCHECKED_OWNERSHIP: &str =
-    "ownership checking and check removal (pipeline phases 8 to 10)";
-
 /// Run phase 6 for every package of `resolved`. `checked` is the index of the package
 /// the command is about (the last one): the parts of the language that are not
 /// implemented are reported for it only, since an unimplemented part of the standard
@@ -197,7 +193,7 @@ pub struct BodyOutput {
     pub bodies: typed::Bodies,
     /// The diagnostics of phase 7 only (those of phase 6 stay in `declarations`).
     pub diagnostics: Vec<Diagnostic>,
-    /// What phase 7 did not implement, and [`UNCHECKED_OWNERSHIP`] when a body passed it.
+    /// What phase 7 did not implement.
     pub not_implemented: Vec<String>,
 }
 
@@ -224,15 +220,6 @@ pub fn check_bodies(
     let mut bodies = cx.check_bodies();
     cx.check_kernel_bodies(&mut bodies);
     cx.check_helper_cycles(&mut bodies);
-    // Only function and test bodies become CFGs; the initializer of a constant or static
-    // is typed here and evaluated by constant evaluation.
-    if bodies
-        .bodies
-        .values()
-        .any(|b| !b.failed && matches!(b.kind, typed::BodyKind::Fn | typed::BodyKind::Test))
-    {
-        cx.ni(UNCHECKED_OWNERSHIP);
-    }
     let mut d = cx.d;
     let mut not_implemented = std::mem::take(&mut d.not_implemented);
     let mut seen = std::collections::BTreeSet::new();

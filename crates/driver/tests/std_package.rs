@@ -51,7 +51,7 @@ fn std_resolves_without_a_diagnostic() {
             "constant evaluation of a value of type `Seq`".to_string(),
             "constant evaluation of a value of type `Simd`".to_string(),
             "constant evaluation of a value of type `Par`".to_string(),
-            ingot_sema::UNCHECKED_OWNERSHIP.to_string(),
+            ingot_cfg::UNCHECKED_OWNERSHIP.to_string(),
         ]
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));

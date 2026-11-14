@@ -1,0 +1,66 @@
+// match: tags, literals, ranges, guards, alternatives, and each binding mode
+
+copy struct Rect { w: i64, h: i64 }
+copy enum Shape { circle: i64, rect: Rect, empty }
+
+fn classify(x: i64) -> i64 {
+    return match x {
+        0 => 10,
+        1..=9 => 20,
+        10..20 => 30,
+        20 | 21 => 35,
+        _ => 40,
+    };
+}
+
+fn area(s: Shape) -> i64 {
+    match s {
+        .circle(r) if r > 3 => { return r; }
+        .circle(r) => { return r + 1; }
+        .rect(q) => {
+            let Rect.{ w, h } = q;
+            return w * h;
+        }
+        .empty => { return 0; }
+    }
+}
+
+fn peek(s: &Shape) -> i64 {
+    return match s {
+        .circle(r) => r.*,
+        .rect(q) => q.w + q.h,
+        .empty => 0,
+    };
+}
+
+fn bump(s: &mut Rect) {
+    match s {
+        Rect.{ w, h } => {
+            w.* += 1;
+            h.* += 2;
+        }
+    }
+}
+
+fn choose(o: ?i64, d: i64) -> i64 {
+    if let .some(v) = o {
+        return v;
+    }
+    return d;
+}
+
+struct M { v: i64 }
+enum H { m: M, none }
+
+fn take(h: H) -> i64 {
+    match h {
+        .m(x) => { return x.v; }
+        .none => { return 0; }
+    }
+}
+
+copy enum Color: u8 { red, green }
+
+fn color() -> Color {
+    return Color.green;
+}

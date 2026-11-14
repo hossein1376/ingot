@@ -1,0 +1,82 @@
+// every for form: a range, a Copy slice, a []mut slice, an array value and an Iter
+
+copy enum Step { one }
+
+struct M { v: i64 }
+
+fn range_loops(n: i64) -> i64 {
+    var total: i64 = 0;
+    for i in 0..n {
+        total += i;
+    }
+    for i in 0..=n {
+        total += i;
+    }
+    for i in 0..n step 2 {
+        total += i;
+    }
+    return total;
+}
+
+fn slices(xs: []i64, ys: []mut i64) -> i64 {
+    var total: i64 = 0;
+    for x in xs {
+        total += x;
+    }
+    for y in ys {
+        y.* += 1;
+        total += y.*;
+    }
+    for i, x in xs {
+        total += i + x;
+    }
+    return total;
+}
+
+fn arrays() -> i64 {
+    let xs: [3]i64 = [3]i64.{ 1, 2, 3 };
+    var total: i64 = 0;
+    for x in xs {
+        total += x;
+    }
+    let ms: [2]M = [2]M.{ M.{ v: 1 }, M.{ v: 2 } };
+    for m in ms {
+        total += m.v;
+    }
+    return total;
+}
+
+struct Counter { n: i64 }
+
+impl Iter for Counter {
+    type Item = i64;
+    fn next(self: &mut Counter) -> ?i64 {
+        if self.n >= 3 { return .none; }
+        self.n += 1;
+        return .some(self.n);
+    }
+}
+
+fn iterate() -> i64 {
+    let c = Counter.{ n: 0 };
+    var d = Counter.{ n: 0 };
+    var total: i64 = 0;
+    for v in c {
+        total += v;
+    }
+    while let .some(v) = d.next() {
+        total += v;
+    }
+    return total;
+}
+
+fn edges(lo: u8) -> u8 {
+    var total: u8 = 0;
+    for i in lo..=255 {
+        total = total +% i;
+    }
+    for i in lo..255 step 16 {
+        total = total +% i;
+    }
+    return total;
+}

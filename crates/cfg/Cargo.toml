@@ -1,0 +1,15 @@
+[package]
+name = "ingot-cfg"
+version = "0.1.0"
+edition = "2024"
+description = "The control-flow graph of Ingot: phase 8 lowering, its dump, and its structural validator"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_cfg"
+path = "src/lib.rs"
+
+[dependencies]
+ingot-diag = { path = "../diag" }
+ingot-sema = { path = "../sema" }
+ingot-syntax = { path = "../syntax" }

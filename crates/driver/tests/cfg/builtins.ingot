@@ -1,0 +1,84 @@
+// value builtins, the memory builtins with their checks, and the traps
+import std.fmt.Formatter;
+
+fn simd(xs: []f32, out: []mut f32, n: i64) -> f32 {
+    let acc = @splat(f32x4, 0.0);
+    var i: i64 = 0;
+    while i + 4 <= n {
+        let v = @load(f32x4, xs, i);
+        let m = v > @splat(f32x4, 0.0);
+        let w = @select(m, v, @splat(f32x4, 0.0));
+        @store(out, i, w);
+        i += 4;
+    }
+    let tail = @load_tail(f32x4, xs, i);
+    @store_tail(out, i, tail);
+    return @reduce_add(acc) + @reduce_add(tail);
+}
+
+fn numbers(x: i64, y: i64) -> i64 {
+    let one: f32 = 1;
+    let half: f64 = 0.5;
+    @debug("one {} half {}", one, half);
+    let a = @wrap(i8, x);
+    let b = @sat(u8, y);
+    let c = @narrow(i8, x);
+    let d = @div_or(x, y, 0);
+    let e = @rem_or(x, y, 0);
+    let f = @shl(x, y);
+    let g = @shr(x, y);
+    let h = @lanes(i64x2);
+    let i = x / y;
+    let j = x % y;
+    let k = x << y;
+    let l = x >> y;
+    return a as i64 + b as i64 + c as i64 + d + e + f + g + h + i + j + k + l;
+}
+
+fn swapping(x: i64, y: i64) -> i64 {
+    var a = x;
+    var b = y;
+    let old = @replace(&mut a, b);
+    @swap(&mut a, &mut b);
+    @forget(old);
+    return a + b;
+}
+
+fn traps(x: i64) -> i64 {
+    if x < 0 {
+        @panic("negative");
+    }
+    @assert(x > 0, "not positive");
+    if x == 0 {
+        @unreachable();
+    }
+    return x;
+}
+
+fn gather(xs: []f32, idx: i32x4, out: []mut f32) {
+    let v = @gather(f32x4, xs, idx);
+    @scatter(out, idx, v);
+}
+
+fn unchecked_memory(xs: []f32, out: []mut f32, i: i64) {
+    unsafe("unchecked memory") {
+        let v = @unchecked_load(f32x4, xs, i);
+        @unchecked_store(out, i, v);
+    }
+}
+
+fn array_slice(a: [4]i64, lo: i64, hi: i64) -> i64 {
+    let s: []i64 = &a[lo..hi];
+    return s[0];
+}
+
+struct Shown { v: i64 }
+
+impl Format for Shown {
+    fn format(self: &Shown, out: &mut Formatter) {
+    }
+}
+
+fn debug_borrow(s: Shown) {
+    @debug("{}", s);
+}
