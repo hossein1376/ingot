@@ -23,8 +23,11 @@ Section 33 of the specification lists the commands. This file fixes their output
 * **Compatibility.** `protocol` is 1. Within a protocol version, fields are added but
   never removed, renamed or given another type. Consumers must ignore unknown fields.
 * **Paths** are relative to the package root and use `/` on every system. When `PATH`
-  is a single file, that file is a package of its own whose root is the directory
-  containing it, so its paths are bare file names.
+  is a single file inside a package (an `ingot.toml` in its directory or an ancestor),
+  the package is checked and only the diagnostics of that file are printed; paths stay
+  relative to the package root. A file with no manifest above it is a package of its
+  own: its name is the file's stem, its root is the directory containing it, it holds
+  that one module, and it depends only on `std`. Its paths are bare file names.
 * **Positions** are objects `{"line":L,"col":C,"offset":O}`: line and column are
   1-based, the column counts bytes, and `offset` is the 0-based byte offset in the file.
   A **span** is `{"file":F,"start":P,"end":P}`, half-open. Offsets are there so that an

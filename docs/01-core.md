@@ -20,11 +20,12 @@ warnings.
   comments only ASCII is allowed. Lines end with a line feed on every system. A carriage
   return in a source file is an error whose fix removes it.
 * **Value identifiers** match `[a-z_][a-z0-9_]*`. They name variables, functions,
-  fields, enum variants, modules and constants.
-* **Type identifiers** match `[A-Z][A-Za-z0-9]*`. They name types, interfaces and
-  generic parameters (including constant parameters such as `N`).
-  The two classes are different tokens, so the parser always knows whether a name is a
-  type without a symbol table.
+  fields, enum variants, modules, constants and constant generic parameters (`n` in
+  `[T, const n: i64]`).
+* **Type identifiers** match `[A-Z][A-Za-z0-9]*`. They name types, interfaces and type
+  parameters. The two classes are different tokens, so the parser always knows whether
+  a name is a type or a value without a symbol table. Constants are lower_snake like
+  every other value: `max_len`, never `MAX_LEN`.
 * Built-in type names are keywords: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void
   never`, and the vector types of section 26 (`f32x4`, `u8x16`, `boolx8`, ...).
 * Keywords: `align as bench break catch const continue copy defer dispatch dyn else enum
@@ -86,7 +87,7 @@ warnings.
 | `?T` | section 25 | optional. The same as the enum `Option[T] { none, some: T }` |
 | `T ! E` | section 6 | result. The same as the enum `Result[T, E] { ok: T, err: E }` |
 | `&T`, `&mut T` | 8 | shared and exclusive borrow of one `T`. Never null |
-| `[]T`, `[]mut T` | 16 | shared and exclusive slice: a borrow of `len` consecutive `T`. Fields `.len: i64` and, in `unsafe`, `.ptr` |
+| `[]T`, `[]mut T` | 16 | shared and exclusive slice: a borrow of `len` consecutive `T`. Fields `.len: i64` and `.ptr`, a raw pointer to the first element (`*T` or `*mut T`) |
 | `*T`, `*mut T` | 8 | raw pointer. May be null. Can be created anywhere and used only in `unsafe` |
 | `fn(A, B) -> R ! E` | 8 | pointer to a function with no captures |
 | `&dyn I`, `&mut dyn I` | 16 | borrow of some value whose type implements interface `I`, with a method table |
@@ -96,6 +97,10 @@ There is no `usize`, no `char`, no string type distinct from `[]u8` and no impli
 integer promotion. Text handling in the standard library validates and decodes UTF-8
 explicitly.
 
+No array or slice has more than 2^62 elements. An array type with a longer length is
+E0521, and `@slice_from_raw` requires it. So `i + c` cannot overflow when `i` is at most
+a length and `c` is a constant no larger than 2^62.
+
 **Type properties.** Every type has four properties that the compiler computes from its
 structure. Section 10 defines them. They are `Copy`, `Discard`, `Send` and `Sync`, and a
 type is additionally either a **view type** (it contains a borrow) or **self-contained**.
@@ -104,10 +109,21 @@ The bound `Owned` names the self-contained types.
 **No implicit conversions.** A value only flows between identical types. There are two
 exceptions. Untyped numeric literals take the type their context expects; an integer
 literal may take a float type when its value is exactly representable in it (`1` is
-`1.0`), and otherwise it is error E0405. The literal defaults: an integer literal with no
-context is `i64` and a float literal is `f64`. And a `&T` or `&mut T` becomes a `&dyn I`
-or `&mut dyn I` where the context expects that type and `T` implements `I`
-(section 4.4).
+`1.0`), and otherwise it is error E0405. When both operands of an operator are untyped
+literals, an integer literal takes the type of a float literal beside it, so `1 + 2.0`
+is an `f64`. The literal defaults: an integer literal with no context is `i64` and a
+float literal is `f64`. And a `&T` or `&mut T` becomes a `&dyn I` or `&mut dyn I`
+wherever the expected type reaches and is that type, and `T` implements `I`
+(section 4.4). The expected type reaches into the branches of an `if` or `match`, a
+`catch` or `orelse` value and the payload of `.some(...)`, as it does for literals.
+
+**Literals under a numeric bound.** Where a literal's expected type is a type parameter,
+the literal must be a value of every type the parameter's bound allows: an integer
+literal in `0..=127` under `Num` or `Int`, in `-128..=127` under `SInt`, in `0..=255`
+under `UInt`, and under `Float` any integer that `f32` holds exactly, or any float
+literal (rounded for each instance). Anything else is E0405. A float literal under a
+bound that also allows integers is E0401. The check is made once, in the generic body;
+only the value differs per instance.
 
 **Expected-type shorthand.** Where the expected type is stated by a declaration (a typed
 `let`, a parameter, a field, a return type, the other side of an assignment or `==`),
@@ -218,6 +234,15 @@ impl Length for Vec3 {
 * `impl T { ... }` adds functions to the namespace of `T`. A function whose first
   parameter is named `self` is a method and may be called as `value.name(args)`.
   Others are called `T.name(args)`. The type of `self` is `T`, `&T` or `&mut T`.
+* `impl T { ... }` must be in the module that declares `T`. For a built-in type that is
+  `std` alone, which may write inherent impls for the built-in type constructors
+  (`impl[T] []mut T { ... }`, `impl[T] ?T { ... }`); this is where functions such as
+  `s.shared()` and `o.take()` are declared, with ordinary signatures.
+* The fields, variants, methods, associated functions and associated constants of a
+  type share one namespace. Two with one name are E0308, at the second.
+* `T.name` without a call names an inherent function or method of `T` as a value, with
+  `self` as an ordinary first parameter. A variant with a payload is not a function value
+  (E0410), and neither is `value.method` without a call (E0314): write a closure.
 * **Receiver passing is the one place a borrow is inserted for you.** `v.dot(o)` passes
   `v`, `&v` or `&mut v` according to the declared type of `self`. Every other argument is
   passed exactly as written, so a callee that mutates an argument shows `&mut` at the
@@ -231,13 +256,17 @@ impl Length for Vec3 {
   (`impl[K: Hash] Hash for Pair[K, K]`), never a bare type parameter, so two
   implementations can never overlap.
 * `value.name(args)` looks in `impl T` first and then in the interfaces `T` implements.
-  If two interfaces supply the name, the call is written `I.name(value, args)`.
+  If two interfaces supply the name, the call is written `I.name(value, args)`. A
+  function of `I` without `self` may be called `I.name(args)` when the argument types
+  determine `Self`; otherwise it is E0803 and the call is written `T.name(args)`.
 * Calls through a generic parameter are resolved at compile time. Dynamic dispatch
-  happens only through `&dyn I` and `&mut dyn I`, and only for interfaces whose methods
-  do not mention `Self` by value and have no generic parameters. A `&T` (`&mut T`)
-  becomes a `&dyn I` (`&mut dyn I`) where the expected type is one and `T` implements
-  `I`: as an argument, a return value, a field, or a binding with that type written.
-  This is the only implicit conversion between non-literal values.
+  happens only through `&dyn I` and `&mut dyn I`, and only for interfaces that declare
+  no associated type and whose functions all take `self` by borrow, have no generic
+  parameters, and mention `Self` nowhere else. Of the built-in interfaces, `Hash` and
+  `Format` qualify. A `&T` (`&mut T`) becomes a `&dyn I` (`&mut dyn I`) wherever the
+  expected type reaches and is one, and `T` implements `I` (section 3). This is the only
+  implicit conversion between non-literal values. A `&dyn J` does not convert to a
+  `&dyn I`, even when `I` is a supertrait of `J`.
 * **The built-in interfaces** are declared by the language, as if this were written in
   every module (they need no import, section 8):
 
@@ -266,8 +295,14 @@ impl Length for Vec3 {
   `Format` imports `std.hash.Hasher` or `std.fmt.Formatter` to name them. A `Formatter`
   records the first write error itself, and `@format` returns it, so `format` cannot
   fail. Every integer, `bool`, raw pointer and payload-free enum implements `Eq`, `Ord`
-  and `Hash`, comparing and hashing by value; floats implement `Eq` and `Ord` with the
-  IEEE total order, and nothing else implements them without an `impl`. Every scalar,
+  and `Hash`, comparing and hashing by value. Floats implement `Eq` and `Ord` with the
+  IEEE total order, under which NaN equals itself and `-0.0` differs from `0.0`; the
+  operator `==` stays IEEE equality. An array, a slice (`[]T` or `[]mut T`), a tuple and
+  a `?T` implement `Eq`, `Ord` and `Hash` when their element types do: element by
+  element, in order, a shorter slice before a longer one with the same prefix, `.none`
+  before `.some`. A slice is compared and hashed by its elements, never by its address. A
+  `&T` implements each of them when `T` does, through the borrow. Nothing else
+  implements them without an `impl`. Every scalar,
   vector, mask and slice of `u8` (`[]u8` or `[]mut u8`) implements `Format`. `Ordering` is a builtin name like the
   interfaces. `Executor` (section 27.2) has no members a program can call; it is
   implemented only by the executors `std.exec` and `std.gpu` declare, and an `impl
@@ -329,7 +364,9 @@ shift or a different bitwise operator. `a & b == 0` is an error whose fix insert
 parentheses.
 
 **Evaluation order** is left to right: operands, then arguments in order. In an
-assignment the target place is evaluated before the value.
+assignment the operands of the target (its index expressions) are evaluated first, then
+the value; then the target is located and checked, and the store is made. A compound
+assignment `p op= v` reads `p` after `v` is evaluated, by the same rule.
 
 ### 5.2 Integer arithmetic
 
@@ -359,8 +396,11 @@ lists the checks that remain. Code that wants wrapping says so with `+%`.
 IEEE-754, round to nearest even, no traps. The compiler does not reassociate, does not
 contract `a * b + c` into a fused multiply-add and does not assume the absence of NaN or
 infinities. `@fma(a, b, c)` is the explicit fused form. Comparisons with NaN are false,
-except `!=`. `%` is not defined on floats (`@rem`). The only place the language permits
-a different association order is a `reduce` kernel (section 27), where it is declared.
+except `!=`. `%` is not defined on floats: `@rem(a, b)` is the remainder of truncated
+division, with the sign of `a`, as `%` is for integers. `==` is IEEE equality; the `Eq`
+and `Ord` implementations of floats use the total order instead (section 4.4). The only
+place the language permits a different association order is a `reduce` kernel
+(section 27), where it is declared.
 
 ### 5.4 Conversions
 
@@ -389,8 +429,10 @@ a builtin that names what happens to values that do not fit:
 * `a[i]` on an array or slice takes an `i64` index and traps if `i < 0 || i >= len`. It
   is a place.
 * `s[lo..hi]` on a slice gives a slice of the same kind and traps unless
-  `0 <= lo <= hi <= s.len`. Taking a slice of an array is a borrow and is written as
-  one: `&a[lo..hi]` gives `[]T`, `&mut a[lo..hi]` gives `[]mut T`.
+  `0 <= lo <= hi <= s.len`. Either bound may be left out: `s[lo..]` ends at `s.len`,
+  `s[..hi]` starts at 0, and `s[..]` is the whole slice, with the same check. Taking a
+  slice of an array is a borrow and is written as one: `&a[lo..hi]` gives `[]T`,
+  `&mut a[lo..hi]` gives `[]mut T`.
 * `&p` and `&mut p` borrow a place (section 12). `&mut` needs a `var` or a place reached
   through `&mut`.
 * An exclusive borrow does not convert to a shared one by itself. `&r.*` reborrows a
@@ -401,8 +443,8 @@ a builtin that names what happens to values that do not fit:
 * A call passes each argument by value: a `Copy` value is copied, anything else is moved.
 * Type arguments of a generic function are inferred from the argument types alone. An
   untyped literal does not decide a type parameter; if nothing else does, the literal's
-  default type is used. When a type parameter does not appear in a parameter type,
-  write `f.[T](args)`.
+  default type is used. When a generic parameter does not appear in a parameter type,
+  write its arguments: `f.[T](args)`, `make.[u8, 16](args)`.
 * A **closure** is written with an explicit capture list:
 
   ```ingot
@@ -412,19 +454,31 @@ a builtin that names what happens to values that do not fit:
   ```
 
   A capture is `name` (copy or move the variable in), `&name` or `&mut name`. Inside the
-  body the name has the captured type. Nothing is captured that is not listed. Each
-  closure has its own anonymous type, so it is passed to a generic parameter bounded by
-  `Fn(A) -> R` (callable through `&`), `FnMut(A) -> R` (through `&mut`) or
-  `FnOnce(A) -> R` (consumed by the call), and the call is direct. `&dyn Fn(A) -> R` is
-  the dynamic form. Because a closure's type has no name, a closure is stored in a field
-  or returned only through a type parameter or as `&dyn`.
+  body the name has the captured type and is an immutable binding. Nothing is captured
+  that is not listed. Each closure has its own anonymous type, so it is passed to a
+  generic parameter bounded by `Fn(A) -> R` (callable through `&`), `FnMut(A) -> R`
+  (through `&mut`) or `FnOnce(A) -> R` (consumed by the call), and the call is direct.
+  Because a closure's type has no name, a closure is stored in a field or returned only
+  through a type parameter or as `&dyn`. A closure never converts to a `fn` type (E0401):
+  a named function is the spelling for that.
+* A closure satisfies `Fn` when every capture is `&name` or a by-value capture of a
+  `Copy` type; `FnMut` when its other captures are all `&mut name`; and only `FnOnce`
+  when it captures a non-`Copy` value by value. `Fn` implies `FnMut`, which implies
+  `FnOnce`. A function or `fn` pointer satisfies all three.
+* `f(args)` uses `f` by shared borrow when its type is `Fn`, by exclusive borrow when it
+  is only `FnMut`, and moves it when it is only `FnOnce`. The exclusive use is allowed on
+  a `let` or a parameter: a closure never changes its own bytes, only what its `&mut`
+  captures point at. A `&F` is callable when `F: Fn` and a `&mut F` when `F: FnMut`. The
+  dynamic forms are `&dyn Fn(A) -> R` and `&mut dyn FnMut(A) -> R`.
 
 ### 5.7 Conditional and match expressions
 
 `if c { a } else { b }` and `match` are expressions when every branch is a single
-expression. Blocks do not have values: a branch that needs statements belongs in a
-statement-form `if` or in a function. `unsafe("reason") { expr }` is the third
-expression form of this kind (section 29).
+expression, or a block that ends in `return`, `fail`, `break`, `continue` or a trap and
+so never gives a value. Blocks do not have values: a branch that needs statements and
+then a value belongs in a statement-form `if` or in a function. A branch block that can
+reach its end is E0207. `unsafe("reason") { expr }` is the third expression form of this
+kind (section 29).
 
 ```ingot
 let sign: i64 = if x < 0 { -1 } else { 1 };
@@ -433,6 +487,7 @@ let area: f64 = match shape {
     .rect(q) => q.w * q.h,
     .empty => 0.0,
 };
+let v = match x { .a(y) => y, .b => { return 0; } };
 ```
 
 `@select(c, a, b)` evaluates both `a` and `b` and picks without a branch.
@@ -488,7 +543,8 @@ let k = parse_u32(text) catch e => {                 // run a block that leaves
   conversion happens.
 * `x catch e => expr` gives `expr` on failure. `x catch e => { block }` runs the block,
   which must end in `return`, `fail`, `break`, `continue` or a trap unless the success
-  type is `void`. `_` in place of `e` ignores the error value.
+  type is `void`. `_` in place of `e` discards the error value, so the error type must
+  be `Discard` (E0414 otherwise).
 * `x orelse y` and `x orelse { block }` do the same for `?T`.
 * `try` binds to the whole postfix expression after it: `try a.b().c()` tries the result
   of `c()`.
@@ -521,10 +577,13 @@ _ = g();                  // discard a result on purpose (the type must be Disca
 
 * Every binding is initialized. `@zero` is the all-zero value. It is allowed for
   numbers, `bool`, raw pointers and vectors, for arrays, tuples and structs of types
-  that allow it (subject to the privacy rule of section 4.2), and for an enum whose
-  first variant has no payload or a payload that allows it. For any `?T` it is `.none`.
-  It is an error for a type that contains a borrow.
-* A name may not shadow another local or a parameter.
+  that allow it (subject to the privacy rule of section 4.2), and for an enum that has a
+  variant with tag value 0 (the first, unless tags are explicit) whose payload, if any,
+  allows it. For any `?T` it is `.none`. It is an error for a type that contains a
+  borrow.
+* A name may not shadow another local, a parameter, or a `const` or `static` visible in
+  its module (E0309). This is what keeps a binding in a pattern from being read as the
+  constant it was meant to compare with.
 * The pattern of a `let` or `var` cannot fail to match: a name, `_`, a tuple pattern
   or a struct pattern. Anything that can fail belongs in `if let` or `match`.
 * Only a call may be an expression statement, optionally under `try` or followed by
@@ -562,7 +621,8 @@ outer: for row in rows { for c in row { if c == 0 { break outer; } } }
 
 `xs.refs()` iterates a shared slice by `&T`, for elements that are not `Copy`. Loops
 over arrays, slices and ranges are counted loops with no iterator object. A range whose
-start is not below its end runs zero times.
+start is not below its end runs zero times. A `for` over a range has no second variable:
+the value is the counter (E0609 otherwise).
 
 ### 7.2 Match and patterns
 
@@ -578,11 +638,19 @@ match msg {
 * A `match` must cover every value. For an enum that means every variant or an `else`
   arm. For integers, an `else` arm is required. The fix for a missing variant inserts
   the arms.
-* Patterns: `_`, a binding name, a literal, a range `a..b` or `a..=b`, `.variant`, `.variant(p)`,
-  `(p, q)`, `T.{ field, field: p }`.
+* Patterns: `_`, a binding name, a literal, a range `a..b` or `a..=b` with literal
+  bounds, `.variant`, `.variant(p)`, `(p, q)`, `T.{ field, field: p }`, and `p | q`.
+* `p | q` matches either. Every alternative binds the same names with the same types
+  (E0603 at the alternative that differs).
+* A bare name in a pattern binds a new local. When the scrutinee is an enum with a
+  variant of that name, it is E0603 with a fix that inserts the `.`: `red =>` was meant
+  as `.red =>`.
+* `_` discards what it matches, so the type there must be `Discard` (E0414 otherwise):
+  a linear payload is bound and consumed.
 * Bindings follow the scrutinee. `match v` moves or copies payloads out of `v`.
   `match &v` binds shared borrows of the payloads and `match &mut v` binds exclusive
-  borrows, so a variant can be updated in place.
+  borrows, so a variant can be updated in place. A binding is moved out only once its
+  arm is chosen; in a guard it is read through a shared borrow.
 * There is no fallthrough. `break` and `continue` inside a `match` refer to the
   enclosing loop.
 
@@ -619,10 +687,12 @@ fn sum[T: Num](xs: []T) -> T {
     return s;
 }
 
-struct Ring[T, const N: i64] { items: [N]T, head: i64 }
+struct Ring[T, const n: i64] { items: [n]T, head: i64 }
 ```
 
-* Generic parameters are types or `const` values of integer, `bool` or enum type.
+* Generic parameters are types or `const` values of integer, `bool` or enum type. A
+  constant parameter is a value and is spelled like one (`const n: i64`); an argument for
+  it is a literal, a constant name or `{ expr }`: `Ring[u8, max_depth]`.
 * A generic body is checked **once**, against its bounds. An operation not granted by a
   bound is an error in the generic, not in some instantiation.
 * Each distinct instantiation is compiled as its own copy. Checking the generic once is
@@ -656,14 +726,18 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
 
 * A constant expression is evaluated by the compiler: `const` initializers, array
   lengths, `const` generic arguments, enum tag values, `when` conditions, `align(...)`.
-* Any function may be called in a constant expression if its execution does not touch a
-  `static`, enter `unsafe`, call an `extern` function, spawn, or exceed the evaluation
-  step limit. A trap during evaluation is a compile error at the call.
+* Any function may be called in a constant expression if its execution does not read a
+  `static`'s value, enter `unsafe`, call an `extern` function, spawn, or exceed the
+  evaluation step limit. Taking the address of a static is allowed: it is how one static
+  borrows another. A generic function is evaluated with its arguments, without being
+  instantiated for code generation. A trap during evaluation is a compile error at the
+  call.
 * Compile-time builtins: `@sizeof(T)`, `@alignof(T)`, `@offsetof(T, field)` (each an
   `i64`),
   `@static_assert(cond, "msg")`, and the `@target` record (section 24).
 * The condition of `@static_assert` is a constant expression. In a generic function it
   may depend on the type and constant parameters, and is then checked for each
-  instantiation.
+  instantiation that is reached from a non-generic function, test, `const` or `static`
+  of the packages being checked.
 * There is no reflection over fields and no code generation inside the language.
   `ingot api --json` is the supported way for a tool to learn the shape of a program.

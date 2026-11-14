@@ -43,7 +43,8 @@ that is visible in its source. One object per item:
 
 | `kind` | Meaning |
 |---|---|
-| `bounds_check`, `overflow_check`, `div_check`, `shift_check` | a check that survived, with the expression's span |
+| `bounds_check`, `overflow_check`, `div_check`, `shift_check` | a check that survived, with the expression's span. A division has one check with two outcomes (T04, T05) and one `div_check`. The range checks of `@gather` and `@scatter` and the coverage check of `dispatch` are `bounds_check`s that are never removed |
+| `scatter_check` | the check that the indices of a `@scatter` are distinct (T15): cheap with AVX-512CD, a compare network on NEON |
 | `alloc` | a call that may allocate, with the allocator's static type |
 | `indirect_call` | a call through `fn`, `&dyn` or an `extern fn` pointer |
 | `copy` | a copy or move of more than 64 bytes |
@@ -51,6 +52,8 @@ that is visible in its source. One object per item:
 | `loop` | one entry per loop: vectorized or not, the vector width, the reason if not |
 | `task_spawn`, `lock`, `park_point` | concurrency costs |
 | `frame` | stack frame size |
+
+`@narrow`, `@assert` and `@panic` are not cost items: they are written in the source.
 
 The check, `alloc`, `indirect_call`, `copy` and concurrency rows are the same for both
 build pipelines, because they are properties of the checked semantics. `not_inlined`,
@@ -73,7 +76,8 @@ on them when writing a hot loop.
    result always fits.
 5. No overflow check where both operands are constants (it is evaluated at compile
    time and an overflow is a compile error).
-6. A second identical check on the same values in the same block.
+6. A second identical check on the same values, dominated by the first with no
+   assignment to them in between.
 
 The compiler may remove more. `ingot cost` is the source of truth for what is left, and
 the way to remove a remaining check is to restructure the code or add an `@assert` that
@@ -161,7 +165,10 @@ pub fn main(env: &Env) -> void ! AppErr { ... }
 ```
 
 `main` takes `&Env` and returns `void` or `u8` (the exit status), optionally fallible.
-If an error is returned, the runtime prints it to standard error and exits with status 1.
+If an error is returned, the runtime prints one line to standard error and exits with
+status 1. The line is `error: ` followed by the error value in the structural `Format`
+form of its type, which the compiler generates for the instance `main` uses (an enum
+prints as its variant name, then its payload in parentheses).
 `Env` holds everything the process was given:
 
 | Field | Type | Gives |
@@ -213,6 +220,14 @@ Only the shape is specified here. Each module gets its own document as it is des
 | `std.math`, `std.hash`, `std.rand`, `std.sort` | correctly rounded elementary functions with the same results on every target; hashing; PRNGs; sorting |
 | `std.sys` | the `unsafe` OS layer everything above is built on, one implementation per operating system (`std.sys.macos`, `std.sys.linux`, `std.sys.windows`) behind a common internal interface |
 | `arch.aarch64`, `arch.x86_64` | per-instruction intrinsics |
+
+**Format strings** (`@format`, `@debug`). The format string is a string literal. A
+placeholder is `{}` or `{:spec}`, and `{{` and `}}` are literal braces. `spec` is
+`[<|>][0][width][.precision][x|X|b|o]`. Arguments are used in order and their count
+must match the placeholders. A `[]u8` prints as text, and with `x` as hex bytes. A float
+prints as the shortest text that reads back to the same value, unless a precision is
+given. A malformed placeholder, a spec the argument's type does not support, or a count
+mismatch is E0422.
 
 Library conventions that every module follows:
 

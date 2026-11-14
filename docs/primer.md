@@ -5,7 +5,8 @@ what trips up someone who already knows Rust, Zig, Go or Swift. No model was tra
 Ingot, so do not guess from a similar language: where this primer is silent, check the
 [specification](README.md) or run `ingot explain CODE`.
 
-Status: the language is specified and has no compiler yet.
+Status: the language is specified, and a compiler is being built. It checks names, types
+and function bodies today; ownership checking and code generation come next.
 
 ## 1. One complete program
 
@@ -343,6 +344,8 @@ let w = @select(m, v, @splat(f32x4, 0.0));
 * A `kernel fn` is applied to every index of a range and may run on SIMD, threads or a
   GPU: `dispatch saxpy(2.0, xs, ys) over 0..xs.len on exec.par;`. Inside one: write only
   `out[i]`, read `in[i]` or `in.at_clamped(j)`, and use only non-trapping arithmetic.
+  It may call only kernel helpers: a `kernel fn` whose first parameter is not an index,
+  which follows the same rules and takes and returns plain values.
 
 ## 11. `unsafe` and C
 

@@ -1,11 +1,12 @@
 # Ingot v1 grammar
 
-The grammar is LL(1) apart from two places that need one more token of lookahead, both
-noted below. Terminals in capitals are tokens from section 1: `IDENT` (lowercase
+The grammar is LL(1) apart from three places that need more lookahead, all noted
+below. Terminals in capitals are tokens from section 1: `IDENT` (lowercase
 initial), `TYPE` (uppercase initial), `INT`, `FLOAT`, `STRING`, `CSTRING`, `BUILTIN`
 (`@name`), `SCALAR` (`i8` ... `f64`, `bool`, `void`, `never`) and `VECTOR` (`f32x4`,
-`boolx8`, ...). The words `step`, `over`, `on`, `reduce` and `grain` are contextual:
-they are keywords only in the positions shown and are ordinary identifiers elsewhere.
+`boolx8`, ...). The words `par`, `step`, `over`, `on`, `reduce` and `grain` are
+contextual: they are keywords only in the positions shown and are ordinary identifiers
+elsewhere.
 
 ```ebnf
 file         = { import } { item } ;
@@ -25,7 +26,7 @@ origin       = IDENT [ ".*" ] | "static" ;
 reduce_op    = "+" | "*" | "&" | "|" | "^" | IDENT ;          (* IDENT: min, max *)
 
 gparams      = "[" gparam { "," gparam } "]" ;
-gparam       = TYPE [ ":" bound { "+" bound } ] | "const" TYPE ":" type ;
+gparam       = TYPE [ ":" bound { "+" bound } ] | "const" IDENT ":" type ;
 bound        = path_type | fn_bound ;
 fn_bound     = ( "Fn" | "FnMut" | "FnOnce" ) "(" [ type { "," type } ] ")" [ "->" type [ "!" type ] ] ;
 
@@ -59,7 +60,7 @@ type         = SCALAR | VECTOR
              | [ "extern" ] "fn" "(" [ type { "," type } ] ")" [ "->" type [ "!" type ] ] ;
 path_type    = { IDENT "." } TYPE [ gargs ] [ "." TYPE ] ;   (* trailing .TYPE: associated type *)
 gargs        = "[" garg { "," garg } "]" ;
-garg         = type | INT | "true" | "false" | "{" expr "}" ;  (* a TYPE alone is a type or a const parameter *)
+garg         = type | INT | "true" | "false" | IDENT | "{" expr "}" ;  (* a lone IDENT is a constant *)
 
 (* ---- statements ---- *)
 block        = "{" { stmt } "}" ;
@@ -109,25 +110,26 @@ add_expr     = mul_expr { ( "+" | "-" | "+%" | "-%" | "+|" | "-|" ) mul_expr } ;
 mul_expr     = cast_expr { ( "*" | "/" | "%" | "*%" | "*|" ) cast_expr } ;
 cast_expr    = prefix_expr { "as" type } ;
 prefix_expr  = ( "-" | "-%" | "!" | "~" | "&" [ "mut" ] | "try" ) prefix_expr | postfix_expr ;
-postfix_expr = primary { "(" [ args ] ")" | "[" expr [ ".." expr ] "]"
-                       | "." IDENT | "." INT | ".*" | ".[" type { "," type } "]" } ;
+postfix_expr = primary { "(" [ args ] ")" | "[" expr "]" | "[" [ expr ] ".." [ expr ] "]"
+                       | "." IDENT | "." INT | ".*" | ".[" garg { "," garg } "]" } ;
 call_expr    = postfix_expr ;                                  (* must end in a call *)
 place        = postfix_expr ;                                  (* must be a place, section 5.5 *)
 args         = expr { "," expr } [ "," ] ;
 
 primary      = IDENT | literal | BUILTIN [ "(" [ builtin_args ] ")" ]
              | "(" expr ")" | "(" expr "," expr { "," expr } ")"
-             | path_type [ ".{" [ inits ] "}" ]                (* a type as a value: T.f(), T.{..}, a const parameter *)
+             | path_type [ ".{" [ inits ] "}" ]                (* a type as a value: T.f(), T.{..} *)
              | "[" expr "]" type ".{" [ args ] "}"             (* array literal *)
              | "." IDENT [ "(" expr ")" ] | ".{" [ inits ] "}" (* expected-type shorthand *)
              | "fn" "[" [ capture { "," capture } ] "]" "(" [ params ] ")" [ result ] block
-             | "if" expr "{" expr "}" "else" ( "{" expr "}" | if_expr_tail )
+             | "if" expr branch "else" ( branch | if_expr_tail )
              | "match" expr "{" { arm } "}"
              | "spawn" call_expr "in" expr
              | "dispatch" call_expr "over" domain "on" expr
              | "unsafe" "(" STRING ")" "{" expr "}" ;
 domain       = or_expr ".." or_expr { "," or_expr ".." or_expr } ;   (* one range per dimension *)
-if_expr_tail = "if" expr "{" expr "}" "else" ( "{" expr "}" | if_expr_tail ) ;
+if_expr_tail = "if" expr branch "else" ( branch | if_expr_tail ) ;
+branch       = "{" { stmt } [ expr ] "}" ;   (* expression form: see Notes *)
 capture      = [ "&" [ "mut" ] ] IDENT ;
 inits        = IDENT ":" expr { "," IDENT ":" expr } [ "," ] ;
 builtin_args = ( type | expr ) { "," expr } ;
@@ -136,18 +138,21 @@ literal      = INT | FLOAT | STRING | CSTRING | "true" | "false" ;
 
 ## Notes
 
-* **Two tokens of lookahead** are needed in two places. In a statement, `IDENT ":"`
-  followed by `for`, `while` or `loop` is a label. In `gargs`, a `TYPE` token alone may
-  be a type or a constant parameter, which name resolution decides.
+* **More lookahead** is needed in three places. In a statement, `IDENT ":"` followed by
+  `for`, `while` or `loop` is a label. In `gargs` and `.[`, an `IDENT` followed by `.`
+  begins a type path, and a lone `IDENT` is a constant. A statement that begins `par for`
+  or `par ( grain :` is a parallel loop; any other `par` is an identifier.
 * **No ambiguity between a type and a value.** A `TYPE` token never begins a value
-  expression except as the start of `path_type`, which is then followed by `.name`,
-  `.{` or nothing (a constant parameter). `Name[` after a `TYPE` is always type
-  application, and `name[` after an `IDENT` is always indexing. Explicit type arguments
-  on a function use `.[`.
+  expression except as the start of `path_type`, which is then followed by `.name` or
+  `.{`. Constant generic parameters are values and are spelled as `IDENT`s. `Name[` after
+  a `TYPE` is always type application, and `name[` after an `IDENT` is always indexing.
+  Explicit generic arguments on a function use `.[`.
 * **Statement or expression.** `if`, `match`, `spawn`, `dispatch` and `unsafe` begin a
   statement when they appear in statement position, and an expression elsewhere. In
   expression form each branch of `if` and each arm of `match` holds exactly one
-  expression.
+  expression, or is a block that cannot reach its end because it ends in `return`,
+  `fail`, `break`, `continue` or a trap (E0207 otherwise). In `branch`, a final
+  expression without `;` is the branch's value and must then stand alone.
 * **The first argument of a builtin** is a type when it is a `type` that does not
   begin with an `IDENT` standing alone: a scalar or vector type, a borrow, slice, array,
   pointer, optional or function type, or a `path_type`, including one that starts with

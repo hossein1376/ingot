@@ -16,10 +16,15 @@ signatures of the functions it calls.
 | `Copy` | may be duplicated by assignment or passing | scalars, vectors, raw pointers, `fn` pointers, `&T`, `[]T`, `copy struct`/`copy enum`, and arrays, tuples and `?T` of `Copy` types |
 | `Discard` | may go out of scope without being consumed | every type that is not linear |
 | **linear** (not `Discard`) | must be consumed exactly once on every path | `linear struct`, `T ! E`, `Task[R]`, and any array, tuple, struct or enum containing a linear type |
-| **view** | contains a borrow, so it is bound to the lifetime of what it borrows | `&T`, `&mut T`, `[]T`, `[]mut T`, `&dyn I`, closures with `&` captures, and anything containing one |
+| **view** | contains a borrow, so it is bound to the lifetime of what it borrows | `&T`, `&mut T`, `[]T`, `[]mut T`, `&dyn I`, a `*T` or `*mut T` whose `T` is a view, closures that capture a borrow or a view, and anything containing one |
 | `Owned` | contains no borrow, so a value can outlive everything around it | every type that is not a view |
 
 `&mut T` and `[]mut T` are neither `Copy` nor linear: they move, and they may be dropped.
+
+A closure's properties follow its captures: it is `Copy` if every capture is `Copy` (a
+`&mut` capture is not), linear if any capture is linear, and a view if any capture is a
+borrow or a view. A type parameter that no field mentions does not make a type a view,
+so a `Handle[T]` of indices stays self-contained (section 14.4).
 
 A value is **consumed** by moving it: passing it by value to a function, returning it,
 storing it into a place, or destructuring it. For a linear value that is the only way
@@ -44,8 +49,9 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
 ```
 
 * A linear value that is still owned at the end of its scope, on any path, is an error.
-  When the type has exactly one consuming function that takes nothing else, the fix
-  inserts the `defer` that calls it. Otherwise the diagnostic lists the candidates.
+  When the type has exactly one consuming function that takes nothing else and cannot
+  fail, the fix inserts the `defer` that calls it. Otherwise the diagnostic lists the
+  candidates, because a fix that swallows a close error is not one to apply blindly.
 * A value consumed inside a `defer` block counts as consumed at scope exit. Until then it
   can be borrowed, but not moved. `errdefer` counts for the error exits only, so the
   usual pattern for "hand it to the caller on success, clean up on failure" checks.
@@ -67,7 +73,13 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
 * Assigning to a place that still holds a linear value is an error, because the old
   value would be lost. Take it out first with `@replace`.
 * A variable moved in one branch and not the other is moved after the join. For a linear
-  value that is an error at the join, because one path would leak it.
+  value that is an error (E1003, at its declaration), because one path would leak it.
+* A temporary, a value that is used without being bound, lives until the end of the
+  statement that contains it. In the header of an `if`, `match`, `while` or `for` that
+  is the end of the whole statement, and for a loop, of each iteration. A borrow of a
+  temporary that is still live after that is E1105; bind the value with `let` to keep
+  it. A linear temporary that is not consumed by then is E1003 at the expression that
+  made it.
 * Uninitialized memory does not exist in safe code. `@uninit(T)` is an `unsafe` builtin.
 
 ## 12. Borrows
@@ -91,10 +103,17 @@ free. Array and slice elements are not distinguished: `a[i]` and `a[j]` are the 
 place to the checker. Disjoint parts of a slice are obtained through library functions
 that prove disjointness once (`split_at_mut`, `chunks_mut`, iteration over `[]mut T`).
 
-**Reborrowing.** Passing a `&mut T` or `[]mut T` variable to a function, iterating it
-with `for`, or writing `&mut r.*`, lends it for the duration of that use and the original
-is usable again afterwards. Through a shared borrow, an exclusive borrow stored in the
-referent can only be reborrowed as shared.
+**Reborrowing.** A place of type `&mut T` or `[]mut T` written as a call argument, a
+method receiver, a `spawn` or `dispatch` argument or the iterand of a `for` is lent for
+that use, as if `&mut p.*` were written, and is usable again afterwards. For a `spawn`
+the use lasts until the scope ends. Any other by-value use of such a place (a binding, a
+`return`, a store, a capture) moves it, and moving it out of a borrow is E1002. Writing
+`&mut r.*` (or `s[..]` for a slice) reborrows explicitly. Through a shared borrow, an
+exclusive borrow stored in the referent can only be reborrowed as shared.
+
+**Statics.** A `static` is never the subject of a loan. A borrow of one, or of a place
+inside one, has no origins, as `from static`. `&mut` of a static is E0610 and moving out
+of one is E1002.
 
 **Call arguments.** All arguments of a call are evaluated left to right first. Borrows
 written directly as arguments, and the automatic receiver borrow, become active when the
@@ -124,7 +143,10 @@ Inside a body, three rules build the sets:
 ### 13.1 `from`: where a returned borrow comes from
 
 A function whose return type is written with a borrow in it (`&`, `[]`, or a view
-struct) must name its sources.
+struct) must name its sources. A return type that mentions `Self`, an associated type or
+a type parameter may name them, since it may hold a borrow in some implementation
+(`Iter.next` is declared `from self.*`); an implementation whose type holds no borrow
+there omits the clause.
 
 ```ingot
 fn first_word(s: []u8) -> []u8 from s { ... }
@@ -344,15 +366,33 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 * `unsafe("reason") { ... }` requires the string. It states the invariant the block
   relies on, and `ingot audit` prints every block with its reason.
 * Inside, and only inside, code may: dereference a raw pointer, call an `unsafe fn` or an
-  `extern` function, use `@uninit`, `@slice_from_raw`, `@borrow_from_raw`,
-  `@unchecked_index`, `@unchecked_add` and the other `@unchecked_*` builtins, use
-  `@assume(cond)`, read a slice's `.ptr`, and write `unsafe impl Send`/`Sync`.
+  `extern` function or call through an `extern fn` pointer, use the builtins below, and
+  write `unsafe impl Send`/`Sync`. Creating a raw pointer is safe (`&x as *T`, a slice's
+  `.ptr`); using it is not.
+
+  | Builtin | Signature |
+  |---|---|
+  | `@uninit(T)` | a `T` whose bytes are unspecified |
+  | `@assume(c)` | `c: bool`; `void` |
+  | `@unchecked_index(s, i)` | the place `s[i]`, with no bounds check |
+  | `@unchecked_slice(s, lo, hi)` | `s[lo..hi]`, with no bounds check |
+  | `@unchecked_add`, `@unchecked_sub`, `@unchecked_mul` `(a, b)`, `@unchecked_neg(a)` | as the operator, on one integer type, with no overflow check |
+  | `@unchecked_div`, `@unchecked_rem` `(a, b)`, `@unchecked_shl`, `@unchecked_shr` `(x, n)` | as the operator, with no check |
+  | `@unchecked_narrow(T, x)` | as `@narrow`, with no check |
+  | `@unchecked_load(V, s, i)`, `@unchecked_store(s, i, v)` | as `@load` and `@store` (section 26.3), with no check |
+  | `@slice_from_raw(p, len)` | `p: *T` gives `[]T`, `p: *mut T` gives `[]mut T`; `len: i64`, at most 2^62 |
+  | `@borrow_from_raw(p)` | `p: *T` gives `&T`, `p: *mut T` gives `&mut T` |
+
+  The `@unchecked_*` list is closed: one per check kind of section 31.
 * `unsafe` does not turn off any check on safe constructs. Borrows are still checked and
   `a[i]` is still bounds-checked inside the block.
 * An `unsafe` block that contains nothing that needs it is an error, so that the list
   `ingot audit` prints is exactly the list of places that matter. An operation needs only
   the innermost `unsafe` block around it, so a block that only encloses another one is
   also an error.
+* The body of an `unsafe fn` is not an `unsafe` context: its unsafe operations sit in
+  `unsafe` blocks like any others. The region of an `unsafe` block is lexical, so a
+  closure written inside one is inside it.
 * An `unsafe fn` documents its preconditions in its doc comment. `ingot api` shows them.
 * An `unsafe fn` can only be called. It cannot be used as a value, because a `fn` pointer
   to it could then be called without `unsafe`. A closure or a safe function that calls
@@ -364,6 +404,8 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   the block's obligation.
 * A type that builds interior mutability out of `unsafe` must bound its contents with
   `Owned` (section 13.6), and must not be `Sync` unless it synchronizes every access.
+* A type that keeps a `T` behind an untyped pointer has a field whose type mentions `T`
+  (a `[0]T` field costs nothing), so that its properties follow `T`.
 
 ## 16. The complete list of run-time failures
 

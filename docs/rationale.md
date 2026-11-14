@@ -246,7 +246,11 @@ CPU feature detection. Any CPU or operating system beyond the three targets.
 contracts on signatures; `f16`, `i128`; a borrow type that is known to be static and so
 is not a view; named origin parameters on structs; streaming-mode (SME) regions; GPU
 textures and multi-pass pipelines; a `packed struct` with bit fields; profiling with a
-report for the author, then profile-guided optimization; post-link layout optimization.
+report for the author, then profile-guided optimization; post-link layout optimization;
+grid kernels (`Idx2`, `Idx3`, `Grid`); a compiler-provided structural `Eq`, `Ord` and
+`Hash` for a plain struct, on request, if writing `std` shows the need, rather than a
+general derive mechanism; `@config.name` values from `ingot.toml` for `when`, which
+cannot name a constant.
 
 ## 13. Where this design is most likely to be wrong
 
@@ -271,10 +275,11 @@ the compiler is built.
 
 ## 14. Implementation notes
 
-* There is no compiler for this language yet. An earlier prototype (a different, smaller
-  language: no ownership checking, a Go front end, a direct AArch64 backend) was removed
-  from the tree when this specification became the definition of Ingot. It is in git
-  history at commit `ab090de`. Its JSON diagnostics and fix application, and its handling
+* A compiler for this language is being built on the `compiler` branch (`COMPILER.md`
+  records its design and steps). An earlier prototype (a different, smaller language: no
+  ownership checking, a Go front end, a direct AArch64 backend) was removed from the
+  tree when this specification became the definition of Ingot. It is in git history at
+  commit `ab090de`. Its JSON diagnostics and fix application, and its handling
   of the Apple arm64 ABI and Mach-O, are worth reading before writing the new ones.
 * The ownership checker needs a control-flow-graph IR between the syntax tree and code
   generation. Build that IR first; everything else hangs off it.

@@ -85,9 +85,9 @@ object format.
 * **Alignment** can be raised: `struct Slot align(@target.cache_line) { ... }` on a
   type, `hits: Atomic[i64] align(128)` on a field, and on a `static`. This is how false
   sharing is avoided. The argument is a constant power of two, no smaller than the
-  natural alignment of what it applies to.
+  natural alignment of what it applies to and no larger than 65536.
 * **Enums** store the tag first, then the payload at the alignment of the most aligned
-  payload. `?&T`, `?&mut T`, `?[]T`, `?Box[T, A]` and `?fn(...)` use a null pointer for
+  payload. `?&T`, `?&mut T`, `?[]T` and `?fn(...)` use a null pointer for
   `.none` and are the size of the type without `?`. No other niche is guaranteed. An
   enum with no variants has size 0 and alignment 1.
 * **Vectors** are as large as their width (16, 32 or 64 bytes) and aligned to their
@@ -139,9 +139,10 @@ Vectors are `Copy` values. They are passed and returned in registers.
 | `@select(mask, a, b)` | per-lane choice |
 | `@any(m)`, `@all(m)`, `@count(m)`, `@first(m)` | mask queries. `@count` and `@first` give `i64` |
 | `@mask_bits(m)` | the mask as a `u64`, lane 0 in bit 0 |
-| `@fma(a, b, c)`, `@sqrt`, `@abs`, `@min`, `@max`, `@floor`, `@ceil`, `@round` | lane-wise |
+| `@fma(a, b, c)`, `@sqrt`, `@abs`, `@min`, `@max`, `@floor`, `@ceil`, `@round` | lane-wise. On floats, scalars and vectors alike, `@min` and `@max` return the other operand when exactly one is NaN, and order `-0.0` below `0.0`, so the result does not depend on the order of a reduction |
 | `@reduce_add`, `@reduce_min`, `@reduce_max`, `@reduce_and`, `@reduce_or` | float `@reduce_add` adds in a fixed pairwise tree, the same on both CPUs |
-| `@shuffle(v, [N]i32 const)`, `@lookup(table, idx)` | constant permutation; byte table lookup (`tbl` / `vpermb`) |
+| `@shuffle(v, idx)`, `@shuffle(a, b, idx)` | constant permutation. `v`, `a`, `b`: `LxN`; `idx` a constant `[M]i32` literal, each in `0..N` (in `0..2N` for two sources, the upper half picking from `b`); the result is `LxM`, which must be a vector type (E1501). An index that is not constant or out of range is E1504 |
+| `@lookup(table, idx)` | byte table lookup (`tbl` / `vpermb`): `table: u8xN`, `idx: u8xM`, result `u8xM`; a lane is `table[idx]`, or 0 when `idx >= N` |
 | `as`, `@wrap`, `@sat`, `@nearest`, `@bits` | the conversions of section 5.4, lane-wise between vectors of the same lane count (`@bits`: same total size) |
 
 ### 26.3 Memory
@@ -152,7 +153,8 @@ Vectors are `Copy` values. They are passed and returned in registers.
 | `@store(s, i, v)` | the same, `s` is `[]mut T` |
 | `@load_tail(V, s, i)` | reads the lanes that exist from `i` to `s.len` and zero-fills the rest. One check that `0 <= i <= s.len` |
 | `@store_tail(s, i, v)` | writes only the lanes that fit |
-| `@gather(V, s, idx)`, `@scatter(s, idx, v)` | one check that every index is in range. `@scatter` requires distinct indices, checked |
+| `@gather(V, s, idx)` | `V = LxN`, `s: []L`, `idx: i32xN` or `i64xN`; result `V`. One check that every index is in `0..s.len` (T14) |
+| `@scatter(s, idx, v)` | `s: []mut L`, `idx` as for `@gather`, `v: LxN`; `void`. The same check (T14), then a check that the indices are distinct (T15) |
 
 No alignment is required. `@load` in a loop whose condition is `i + lanes <= s.len` has
 its check removed (section 31).
@@ -208,14 +210,21 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
 
 ### 27.1 Rules for a kernel
 
-* The first parameter is the index: `Idx` for one dimension. `Idx` is a built-in type
-  and needs no import. An index is opaque: `i.pos()` gives its position as an `i32`, and
-  `i.offset(d)` (with `d: i32`) gives the `Idx` that is `d` positions away, for use with
-  `at_clamped` and `at_or`. Only the kernel's own index parameter, unchanged, may be used
-  with `[]`.
+* A `kernel fn` whose first parameter is an index is a **kernel**. Any other `kernel fn`
+  is a **kernel helper**: its parameters and result have uniform types (below), its body
+  follows the same body rules, and it may be called from kernels, from helpers and from
+  ordinary code alike. A kernel is never called: `dispatch` runs it (section 27.2).
+* The first parameter of a kernel is the index: `Idx` for one dimension. `Idx` is a
+  built-in type and needs no import. An index is an opaque `Copy` value: `i.pos()` gives
+  its position as an `i32`, and `i.offset(d)` (with `d: i32`) gives the `Idx` that is
+  `d` positions away, for use with `at_clamped` and `at_or`. `offset` saturates at the
+  limits of `i32`, so a far offset reads as outside rather than wrapping to a valid
+  position. Only the kernel's own index parameter, unchanged, may be used with `[]`.
 * An index type exists only inside a kernel: as its first parameter, and as the type of
-  a local or an expression in its body. A field, another parameter, a result or a
-  function that is not a kernel cannot mention it.
+  a local or an expression in its body. A field, another parameter, a result, a helper
+  or a function that is not a kernel cannot mention it.
+* Kernels and helpers have no generic parameters. A body checked once against a bound
+  such as `Num` cannot know whether `+` would trap for the type it is given.
 * **Grid kernels are reserved.** `Idx2`, `Idx3`, `Grid[T]`, `GridMut[T]`, the members
   `.x()`, `.y()` and `.z()`, and a domain of more than one range are for kernels over two
   and three dimensions. Their layout and members are not specified yet, and a program
@@ -231,24 +240,24 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
   is outside the input. Both take an `Idx`, so only kernels can use them. There is no way
   to write an out-of-bounds access, so no bounds trap is needed on any executor.
 * Element and uniform types are built from `i32 u32 f32 bool`, vectors of up to four
-  lanes of those, and `copy struct`s of those. `i64 u64 f64` are allowed if the executor
+  lanes of those, payload-free `copy enum`s, and `copy struct`s of those. `i64 u64 f64`
+  are allowed if the executor
   supports them, which is known at compile time: `exec.seq`, `exec.simd` and `exec.par`
   support all three, and section 28 says which a GPU supports (Metal does not have
   `f64`). Every local and every value computed in a kernel body has one of these types:
   there are no arrays, borrows, optionals or results in a kernel.
 * The body may use `let`, `var`, `if`, `match` on integers, `bool` and payload-free
   enums, `for` over a constant range, `while`, `loop`, `break`, `continue`, `return`, the
-  builtins of sections 5 and 26 that cannot trap, and calls to other functions that meet
-  these rules. It may not allocate, borrow (`&`, `&mut`, or a call whose receiver or
-  parameter is a borrow), recurse directly or through other functions, call through a
+  builtins of sections 5 and 26 that cannot trap, and calls of kernel helpers. It may
+  not allocate, borrow (`&` or `&mut`), call an ordinary function, call through a
   function value, a closure, `&dyn` or an interface bound, write a closure, spawn or
   open a `scope`, use `par for`, `dispatch` or `select`, block, fail (`try`, `fail`,
-  `catch`, `orelse`, or a call of a fallible function), use `defer` or `unsafe`, or loop
-  with `for` over a range that is not constant.
-* A function that a kernel calls, directly or through other calls, follows the same
-  rules, and its parameters and result have uniform types. The compiler checks this over
-  the call graph once every body has been type-checked, and reports a violation at the
-  construct, with the chain of calls from the kernel.
+  `catch` or `orelse`), use `defer` or `unsafe`, or loop with `for` over a range that is
+  not constant.
+* Each kernel and helper body is checked on its own, so "this function is safe in a
+  kernel" is part of its signature and an error is reported at the function that breaks
+  the rules. The one check over more than one body is recursion: helpers that call each
+  other in a cycle are an error at the call that closes it.
 * Nothing in a kernel traps. Integer `+ - *`, unary `-` and `/ %` are errors inside a
   kernel: write `+%`, `+|`, `-%x`, `@div_or(a, b, fallback)`, `@rem_or(a, b, fallback)`
   (section 5.2). A shift by a count that is not a constant is written `@shl(x, n)` or
@@ -270,8 +279,9 @@ output covers the range (a trap otherwise), then runs the kernel for every index
 returns when all of them are done. The executor expression has a type that implements
 the built-in `Executor` interface.
 
-* `k` is a `kernel fn`, named directly. A kernel is never called directly or used as a
-  value; `dispatch` is the only way to run one.
+* `k` is a kernel, named directly; a kernel helper or an ordinary function is E1515. A
+  kernel is never called directly or used as a value; `dispatch` is the only way to run
+  one.
 * The range is `lo..hi` of `i64` with `0 <= lo <= hi`. Since a position is an `i32`, `hi`
   must not exceed `2^31 - 1`, and every input and output must have a length of at least
   `hi`. The check traps (T16) otherwise.
@@ -361,7 +371,10 @@ export fn ingot_checksum(data: *u8, len: i64) -> u32 {
 ```
 
 * An `extern` block declares C functions. Calling one is allowed only in `unsafe`, and
-  so is a call through an `extern fn` pointer, which may point to any C function.
+  so is a call through an `extern fn` pointer, which may point to any C function. The
+  name of a function declared in an `extern` block may be used as a value of its
+  `extern fn` type: creating it is safe, calling it is not. A variadic one may not be
+  used as a value.
 * `export fn` defines a function with the platform C ABI and an unmangled symbol. Its
   parameters and result must be FFI types.
 * **The platform C ABI** is the target's: Apple arm64 on macOS, System V AMD64 on Linux,
