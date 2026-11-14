@@ -20,10 +20,10 @@ Section 33 of the specification lists the commands. This file fixes their output
 
 * **Exit status.** 0 when `ok` is true, 1 when the command ran and found problems, 2 when
   the compiler itself failed. A consumer should trust `ok`, not the absence of lines.
-* **Failures.** A command that stops with status 2 for a reason it can name (a path
-  that does not exist, a part of the compiler that is not written yet) writes
-  `{"type":"error","message":M}` and then its summary, with `ok` false. Only a crash
-  leaves the summary out.
+* **Failures.** A command that stops before doing its work, with status 2, for a reason
+  it can name (a path that does not exist, a command or option that is not written yet)
+  writes `{"type":"error","message":M}` and then its summary, with `ok` false. Only a
+  crash leaves the summary out.
 * **Compatibility.** `protocol` is 1. Within a protocol version, fields are added but
   never removed, renamed or given another type. Consumers must ignore unknown fields.
 * **Paths** are relative to the package root and use `/` on every system. When `PATH`
