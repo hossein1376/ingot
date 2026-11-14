@@ -28,7 +28,7 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 8 | Lower | typed tree | one CFG per function, checks explicit | none |
 | 9 | Ownership | CFG | the same CFG, verified | E10xx, E11xx, E12xx, E1401 to E1403, E1407 |
 | 10 | Check removal | CFG | CFG without the checks §31 requires gone, and the cost items | none |
-| 11 | Instantiate | generic CFGs, roots | one CFG per concrete instance | E0806, E0809, E1514 only |
+| 11 | Instantiate | generic CFGs, roots | one CFG per concrete instance | E0806, E0809, E0810, E1514 only |
 | 12 | Optimize | CFGs | CFGs or back-end IR | none |
 | 13 | Emit | | object code, kernel shaders | none |
 | 14 | Link | | executable | linker failures, reported as the compiler's own exit status 2 |
@@ -53,7 +53,8 @@ of phase 11 as is needed to find them. It needs no `main` and no linker.
 * **Generic bodies go through phases 7 to 10 once, uninstantiated**, with type
   parameters as opaque types that have exactly the properties their bounds grant.
   Phase 11 must not be able to produce any diagnostic except E0806 (a constant
-  expression that depends on a generic argument traps), E0809 and E1514 (a kernel type
+  expression that depends on a generic argument traps), E0810 (an `@static_assert`
+  whose condition depends on a generic argument is false), E0809 and E1514 (a kernel type
   the chosen executor lacks). If an implementation finds another error only after
   instantiation, the bound system in the specification has a hole: fix it there.
 * **Phase 9 never changes the program.** It accepts or rejects.

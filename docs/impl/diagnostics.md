@@ -136,7 +136,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0405 | `literal_out_of_range` | a numeric literal does not fit the type its context gives it | the literal | — |
 | E0406 | `invalid_operand` | an operator is not defined for its operand type: arithmetic on `bool`, `%` on floats, unary `-` on unsigned, `==` or `<` on a struct or payload enum, differing operand types | the operator | for `==` on a type implementing `Eq`, rewrite to `a.eq(&b)` |
 | E0407 | `int_vector_plain_arith` | `+ - *` on integer vectors (§26.2) | the operator | — |
-| E0408 | `bad_bits` | `@bits(T, x)` with different sizes, padding in the source, a borrow in either type, or a `T` with invalid bit patterns | the builtin call | — |
+| E0408 | `bad_bits` | `@bits(T, x)` with different sizes (E1503 instead when either type is a vector or a mask), padding in the source, a borrow in either type, or a `T` with invalid bit patterns | the builtin call | — |
 | E0409 | `bad_zero` | `@zero` for a type that does not allow it (§7) | the `@zero` | — |
 | E0410 | `wrong_argument_count` | a call, variant constructor or builtin with the wrong number of arguments | the argument list (`callee`) | — |
 | E0411 | `not_callable` | a call on something that is not a function, closure, variant constructor or `fn` value | the callee expression | — |
@@ -224,10 +224,10 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
 | E0805 | `not_generic` | generic arguments on something that takes none | the argument list | delete them |
 | E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`instantiation` if inside a generic) | — |
-| E0807 | `not_constant` | a constant expression reads a `static`, enters `unsafe`, calls an `extern` function or spawns | the operation | — |
+| E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function or spawns | the operation | — |
 | E0808 | `evaluation_limit` | constant evaluation exceeds the step limit | the outermost call | — |
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
-| E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond` | the builtin call | — |
+| E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond`. A `cond` that depends on a generic parameter is checked for each instance (phase 11) | the builtin call | — |
 | E0811 | `layout_depends_on_parameter` | `@bits` or `@zero` on a type parameter with no bound that grants it | the builtin call | — |
 | E0812 | `constant_cycle` | the value of a constant depends on itself | the constant's name | — |
 | E0813 | `wrong_generic_argument_kind` | a type is given for a constant generic parameter, or a constant for a type parameter | the argument | — |
@@ -275,7 +275,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1301 | `needs_unsafe` | outside `unsafe`: a raw pointer dereference, a call of an `unsafe fn` or `extern` function, `@uninit`, `@assume`, an `@unchecked_*` or `@*_from_raw` builtin, or a read of a slice's `.ptr` | the operation | — |
 | E1302 | `missing_unsafe_reason` | the reason string of an `unsafe` block is empty or only white space | the string | — |
 | E1303 | `unsafe_impl_mismatch` | `impl Send`/`impl Sync` without `unsafe`, or `unsafe impl` of any other interface | the `impl` | — |
-| E1304 | `unneeded_unsafe` | an `unsafe` block contains no operation that E1301 would reject | the `unsafe` keyword | — |
+| E1304 | `unneeded_unsafe` | an `unsafe` block contains no operation that E1301 would reject. An operation counts only for the innermost `unsafe` block around it, so an outer block whose only such operations are inside an inner one is reported | the `unsafe` keyword | — |
 
 ## 14. Concurrency (E14xx)
 
@@ -290,7 +290,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1407 | `par_for_outer_mutation` | a `par for` body assigns to, moves or exclusively borrows something declared outside the loop | the operation (`declared`) | — |
 | E1408 | `par_for_exit` | `break`, a `continue` of an outer loop, `return`, `fail` or `try` inside a `par for` body | the statement | — |
 | E1409 | `not_waitable` | a `select` arm's operation is not a call of a `waitable fn` | the call (`callee`) | — |
-| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow | the `self` parameter | — |
+| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow, or that has no `self` parameter | the `self` parameter, or the function's name when it has none | — |
 
 A task that would use the same data twice is not a separate code: it is E1102 or E1103
 with a `spawn` related span.
@@ -301,7 +301,7 @@ with a `spawn` related span.
 |---|---|---|---|---|
 | E1501 | `bad_vector_type` | a vector type whose total width is not 128, 256 or 512 bits, or a `boolxN` with `N` not in 2, 4, 8, 16, 32, 64 | the type | — |
 | E1502 | `bad_lane_index` | `v[k]` or `@insert(v, k, x)` with `k` not a constant in range | the index | — |
-| E1503 | `vector_shape_mismatch` | operands, a mask or a conversion with different lane counts, or `@bits` with different sizes | the operation | — |
+| E1503 | `vector_shape_mismatch` | operands, a mask or a conversion with different lane counts, or `@bits` with different sizes where either type is a vector or a mask | the operation | — |
 | E1504 | `bad_shuffle` | `@shuffle` indices that are not constant or out of range | the index array | — |
 | E1510 | `bad_kernel_signature` | a kernel whose first parameter is not `Idx`, `Idx2` or `Idx3`, or with a parameter that is not a uniform, input or output (§27.1) | the parameter | — |
 | E1511 | `forbidden_in_kernel` | a kernel body, or a function it calls, allocates, borrows, recurses, calls through a pointer, spawns, blocks, fails, or loops with `for` over a non-constant range | the construct (`callee` chain if in a called function) | — |

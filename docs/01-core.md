@@ -656,5 +656,8 @@ struct Ring[T, const N: i64] { items: [N]T, head: i64 }
 * Compile-time builtins: `@sizeof(T)`, `@alignof(T)`, `@offsetof(T, field)` (each an
   `i64`),
   `@static_assert(cond, "msg")`, and the `@target` record (section 24).
+* The condition of `@static_assert` is a constant expression. In a generic function it
+  may depend on the type and constant parameters, and is then checked for each
+  instantiation.
 * There is no reflection over fields and no code generation inside the language.
   `ingot api --json` is the supported way for a tool to learn the shape of a program.

@@ -350,7 +350,9 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 * `unsafe` does not turn off any check on safe constructs. Borrows are still checked and
   `a[i]` is still bounds-checked inside the block.
 * An `unsafe` block that contains nothing that needs it is an error, so that the list
-  `ingot audit` prints is exactly the list of places that matter.
+  `ingot audit` prints is exactly the list of places that matter. An operation needs only
+  the innermost `unsafe` block around it, so a block that only encloses another one is
+  also an error.
 * An `unsafe fn` documents its preconditions in its doc comment. `ingot api` shows them.
 * A module that contains `unsafe` is responsible for making its `pub` surface safe for
   every possible safe caller.
