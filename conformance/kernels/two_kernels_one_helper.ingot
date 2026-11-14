@@ -1,7 +1,7 @@
 //! expect: reject
 //! section: 27.1
 
-fn h(a: i32) -> i32 {
+kernel fn h(a: i32) -> i32 {
     return a + 1; //~ E1512
 }
 

@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn k[T: Float](i: Idx, a: T, x: []T, y: []mut T) { //~ E1510
+    y[i] = a * x[i];
+}
+
+kernel fn h[T: Num](a: T) -> T { //~ E1510
+    return a + a;
+}

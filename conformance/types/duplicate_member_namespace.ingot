@@ -1,0 +1,27 @@
+//! expect: reject
+//! section: 4.4
+
+struct P { x: i64 }
+
+impl P {
+    fn x(self: P) -> i64 { //~ E0308
+        return self.x;
+    }
+}
+
+enum E { a, b }
+
+impl E {
+    fn a() -> E { //~ E0308
+        return .a;
+    }
+}
+
+struct Q { y: i64 }
+
+impl Q {
+    const y: i64 = 1; //~ E0308
+    fn y(self: Q) -> i64 { //~ E0308
+        return 2;
+    }
+}

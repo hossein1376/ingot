@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 3, 15
+
+fn f(s: []u8) -> *u8 {
+    return s.ptr;
+}

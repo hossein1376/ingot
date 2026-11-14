@@ -58,6 +58,80 @@ fn a_package_with_nothing_to_check_is_accepted() {
 }
 
 #[test]
+fn checking_one_file_of_a_package_prints_only_that_files_diagnostics() {
+    let dir = package(
+        "one-file",
+        "name = \"app\"\n",
+        "fn main_error() -> i64 {\n    return true;\n}\n",
+    );
+    fs::write(
+        dir.join("other.ingot"),
+        "fn other_error() -> i64 {\n    return true;\n}\n",
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_ingot"))
+        .args(["check"])
+        .arg(dir.join("main.ingot"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    let out = stdout(&o);
+    assert!(out.contains("main.ingot"), "{out}");
+    assert!(!out.contains("other.ingot"), "{out}");
+
+    let o = Command::new(env!("CARGO_BIN_EXE_ingot"))
+        .args(["check"])
+        .arg(dir.join("other.ingot"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    let out = stdout(&o);
+    assert!(out.contains("other.ingot"), "{out}");
+    assert!(!out.contains("main.ingot"), "{out}");
+}
+
+#[test]
+fn a_relative_file_path_finds_the_manifest_above_it() {
+    let dir = package(
+        "relative",
+        "name = \"app\"\n",
+        "fn a() -> i64 { return 1; }\n",
+    );
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    fs::write(
+        dir.join("sub/other.ingot"),
+        "fn b() -> i64 {\n    return true;\n}\n",
+    )
+    .unwrap();
+    // From the package root and from the file's own directory, the path printed is
+    // relative to the package root.
+    for (cwd, arg) in [
+        (dir.clone(), "sub/other.ingot"),
+        (dir.join("sub"), "other.ingot"),
+    ] {
+        let o = Command::new(env!("CARGO_BIN_EXE_ingot"))
+            .args(["check", arg])
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+        assert!(stdout(&o).contains("sub/other.ingot:2:"), "{}", stdout(&o));
+    }
+}
+
+#[test]
+fn checking_one_file_still_prints_the_manifests_diagnostics() {
+    let dir = package(
+        "one-file-manifest",
+        "name = 3\n",
+        "fn a() -> i64 { return 1; }\n",
+    );
+    let o = ingot(&["check"], &dir.join("main.ingot"));
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    assert!(stdout(&o).contains("E1701"), "{}", stdout(&o));
+}
+
+#[test]
 fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
     let dir = package("decl", "name = \"app\"\n", "fn f() -> i64 { return 1; }\n");
     let o = ingot(&["check", "--json"], &dir);

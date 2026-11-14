@@ -231,6 +231,30 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             )
             .relate_in("previous", &path, prev_span);
         }
+        // A parameter is a name too: it may not shadow a constant or static either.
+        if (check_shadow || kind == hir::LocalKind::Param)
+            && let Lookup::Found(d) = self.r.lookup_in_scope(self.module, Ns::Value, name)
+        {
+            let (kind, prev_span, prev_file) = {
+                let def = self.r.sema.def(d);
+                (def.kind, def.span, def.file)
+            };
+            if matches!(kind, DefKind::Const | DefKind::Static) {
+                let prev_file = prev_file.unwrap_or(self.file);
+                let path = self.r.source(prev_file).path.clone();
+                let what = if kind == DefKind::Const {
+                    "constant"
+                } else {
+                    "static"
+                };
+                self.diag(
+                    "E0309",
+                    format!("`{name}` shadows the {what} `{name}` visible in this module"),
+                    span,
+                )
+                .relate_in("previous", &path, prev_span);
+            }
+        }
         let id = self.alloc_local(name, span, kind, mutable);
         if let Some(scope) = self.scopes.last_mut() {
             scope.names.insert(name.to_string(), id);
@@ -822,6 +846,12 @@ impl<'r, 'a> Lowerer<'r, 'a> {
     fn resolve_type_name(&mut self, name: &str, span: Span) -> Res {
         for scope in self.generics.iter().rev() {
             if let Some(&d) = scope.get(name) {
+                if matches!(
+                    self.r.sema.def(d).kind,
+                    DefKind::GenericParam { is_const: true }
+                ) {
+                    continue;
+                }
                 return Res::Def(d);
             }
         }
@@ -1430,6 +1460,16 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             );
             return Res::Poison;
         }
+        for scope in self.generics.iter().rev() {
+            if let Some(&d) = scope.get(name)
+                && matches!(
+                    self.r.sema.def(d).kind,
+                    DefKind::GenericParam { is_const: true }
+                )
+            {
+                return Res::Def(d);
+            }
+        }
         match self.r.lookup_in_scope(self.module, Ns::Value, name) {
             Lookup::Found(d) => {
                 if self.r.sema.def(d).kind == DefKind::Module {
@@ -1564,6 +1604,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             K::Bool(b) => hir::ExprKind::Bool(*b),
             K::Ident(name) => return self.lower_ident_expr(name, span, true),
             K::Path(p) => hir::ExprKind::Path(self.lower_path(p)),
+            K::Block(b) => hir::ExprKind::Block(self.lower_block(b)),
             K::Builtin {
                 name,
                 type_arg,
@@ -1626,8 +1667,8 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                 bracket,
             } => hir::ExprKind::Slice {
                 base: self.lower_expr(base),
-                lo: self.lower_expr(lo),
-                hi: self.lower_expr(hi),
+                lo: lo.as_ref().map(|e| self.lower_expr(e)),
+                hi: hi.as_ref().map(|e| self.lower_expr(e)),
                 bracket: *bracket,
             },
             K::Field {
@@ -1663,7 +1704,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             },
             K::TypeApply { base, args, .. } => hir::ExprKind::TypeApply {
                 base: self.lower_expr(base),
-                args: args.iter().map(|t| self.lower_ty(t)).collect(),
+                args: args.iter().map(|a| self.lower_generic_arg(a)).collect(),
             },
             K::Cast { expr, ty, as_span } => hir::ExprKind::Cast {
                 expr: self.lower_expr(expr),
@@ -1748,6 +1789,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             K::Catch {
                 value,
                 binding,
+                binding_span,
                 handler,
                 catch_span,
             } => {
@@ -1761,6 +1803,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                 hir::ExprKind::Catch {
                     value,
                     binding,
+                    binding_span: *binding_span,
                     handler,
                     catch_span: *catch_span,
                 }

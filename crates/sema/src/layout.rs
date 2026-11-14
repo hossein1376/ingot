@@ -27,7 +27,7 @@ pub fn align_up(offset: u64, align: u64) -> Option<u64> {
 
 /// A valid `align(...)` argument: a positive power of two.
 pub fn valid_align(v: i128) -> Option<u64> {
-    if v > 0 && (v & (v - 1)) == 0 && v <= 1 << 32 {
+    if v > 0 && (v & (v - 1)) == 0 && v <= 65536 {
         Some(v as u64)
     } else {
         None

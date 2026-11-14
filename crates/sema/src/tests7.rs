@@ -890,7 +890,7 @@ fn closures_reset_defer_and_par_for_exits() {
 #[test]
 fn a_static_assert_condition_that_depends_on_a_generic_is_left_for_instantiation() {
     let b = build(
-        "fn f[T]() {\n    @static_assert(@sizeof(T) > 0, \"nonempty\");\n}\nfn g[const N: i64]() {\n    @static_assert(N > 0, \"positive\");\n}\n",
+        "fn f[T]() {\n    @static_assert(@sizeof(T) > 0, \"nonempty\");\n}\nfn g[const n: i64]() {\n    @static_assert(n > 0, \"positive\");\n}\n",
     );
     assert_eq!(b.only_codes(), Vec::<String>::new());
     assert!(
@@ -936,7 +936,7 @@ fn kernel_members_and_dispatch_are_typed() {
 #[test]
 fn a_kernel_forbids_blocking_borrowing_closures_and_unsafe() {
     let b = build(
-        "fn work() { }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    scope s { spawn work() in s; }\n    let r = &x[i];\n    let f = fn []() -> i32 { return 1; };\n    let n = f();\n    let u = unsafe(\"x is valid\") { x.ptr };\n    _ = u;\n    y[i] = r.* + @nearest(f32, n);\n}\n",
+        "fn work() { }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    scope s { spawn work() in s; }\n    let r = &x[i];\n    let f = fn []() -> i32 { return 1; };\n    let n = f();\n    let u = unsafe(\"x is valid\") { x.ptr.* };\n    _ = u;\n    y[i] = r.* + @nearest(f32, n);\n}\n",
     );
     let codes = b.only_codes();
     assert!(codes.iter().all(|c| c == "E1511"), "{codes:?}");
@@ -973,14 +973,14 @@ fn a_kernel_statement_dispatch_is_recorded() {
 }
 
 #[test]
-fn kernel_calls_of_trapping_helpers_fail_only_the_kernel() {
+fn kernel_calls_of_trapping_helpers_fail_only_the_helper() {
     let b = build(
-        "fn inc(a: i32) -> i32 { return a + 1; }\nkernel fn k(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\nkernel fn k2(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\n",
+        "kernel fn inc(a: i32) -> i32 { return a + 1; }\nkernel fn k(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\nkernel fn k2(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\n",
     );
     assert_eq!(b.only_codes(), ["E1512"]);
-    assert!(b.body("k").failed);
-    assert!(b.body("k2").failed);
-    assert!(!b.body("inc").failed);
+    assert!(!b.body("k").failed);
+    assert!(!b.body("k2").failed);
+    assert!(b.body("inc").failed);
 }
 
 #[test]
@@ -1057,11 +1057,28 @@ fn idx_has_the_properties_and_layout_of_a_kernel_index() {
 }
 
 #[test]
-fn a_plain_helper_called_from_a_kernel_is_accepted() {
+fn a_kernel_helper_called_from_a_kernel_is_accepted() {
+    let b = build(
+        "kernel fn scale(a: f32) -> f32 { return a * 2.0; }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    y[i] = scale(x[i]);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn a_plain_function_called_from_a_kernel_is_e1511() {
     let b = build(
         "fn scale(a: f32) -> f32 { return a * 2.0; }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    y[i] = scale(x[i]);\n}\n",
     );
-    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.only_codes(), ["E1511"]);
+}
+
+#[test]
+fn a_wildcard_under_a_borrow_discards_only_the_borrow() {
+    let b = build(
+        "linear struct L { x: i64 }\nenum E { a: L, b }\nfn f(e: &E, o: &?L) -> i64 {\n    let n = match e { .a(_) => 1, .b => 2 };\n    let m = match o { .some(_) => 1, .none => 2 };\n    return n + m;\n}\nfn g(e: E) -> i64 {\n    return match e { .a(_) => 1, .b => 2 };\n}\n",
+    );
+    // Only the `_` in `g`, which matches the linear payload by value.
+    assert_eq!(b.only_codes(), ["E0414"]);
 }
 
 #[test]

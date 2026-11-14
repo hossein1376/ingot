@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 3
+
+struct S {
+    a: [4611686018427387905]u8, //~ E0521
+}

@@ -1,9 +1,9 @@
-//! Phase 7k: the kernel closure (spec section 27.1, pipeline section 1).
+//! Kernel and kernel-helper body rules (spec section 27.1, pipeline section 1).
 //!
-//! A kernel body, and every function it reaches by direct calls, must obey the kernel
-//! rules: no allocation, borrowing, blocking, failing, `unsafe`, recursion, or
-//! trapping integer operation. The checks are written once over a typed body and run
-//! for the kernel body in phase 7 and for the reached bodies here.
+//! A kernel body and a kernel helper body each follow the same rules: no allocation,
+//! borrowing, blocking, failing, `unsafe`, or trapping integer operation, and calls of
+//! kernel helpers only. The checks are written once over a typed body and run in phase 7
+//! for every `kernel fn`. The only check across bodies is a cycle among helpers.
 
 use crate::defs::DefKind;
 use crate::hir::{self, ExprId, ExprKind, LocalId, LocalKind, StmtKind};
@@ -12,10 +12,10 @@ use crate::sigs::ItemSig;
 use crate::ty::*;
 use crate::typed::{Bodies, Callee, ExprRes, FnSource, ReceiverMode, TypedBody};
 use ingot_diag::source::Span;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// What a body needs to know about the kernel whose body it is. `None` for a function
-/// reached from a kernel.
+/// What a body needs to know about the kernel whose body it is. `index` is `None` for a
+/// kernel helper.
 #[derive(Clone, Default)]
 struct KernelCtx {
     index: Option<LocalId>,
@@ -32,9 +32,9 @@ struct Finding {
 }
 
 impl Cx<'_> {
-    /// Phase 7k for the package that was just type-checked. `bodies` holds the phase-7
-    /// result of every body.
-    pub(crate) fn check_kernels(&mut self, bodies: &mut Bodies) {
+    /// Phase 7: the body rules for every `kernel fn` (kernel and helper), each body on
+    /// its own.
+    pub(crate) fn check_kernel_bodies(&mut self, bodies: &mut Bodies) {
         let kernels: Vec<crate::DefId> = bodies
             .bodies
             .iter()
@@ -45,51 +45,104 @@ impl Cx<'_> {
             })
             .collect();
         let mut reported: BTreeSet<(crate::DefId, usize, usize, &'static str)> = BTreeSet::new();
-        for kernel in kernels {
-            let Some(body) = bodies.bodies.get(&kernel) else {
+        for def in kernels {
+            let Some(body) = bodies.bodies.get(&def) else {
                 continue;
             };
             if body.failed {
                 continue;
             }
-            let ctx = self.kernel_ctx(kernel);
-            let mut found: Vec<(Finding, Vec<(usize, Span)>)> = Vec::new();
-            let findings = self.body_findings(kernel, body, ctx.as_ref());
-            for f in findings {
-                found.push((f, Vec::new()));
-            }
-            let mut checked = BTreeSet::new();
-            let mut stack = vec![kernel];
-            self.walk_calls(
-                kernel,
-                body,
-                &[],
-                &mut stack,
-                &mut checked,
-                bodies,
-                &mut found,
-            );
+            let ctx = self.kernel_ctx(def);
+            let mut found = self.body_findings(def, body, ctx.as_ref());
             if !found.is_empty()
-                && let Some(b) = bodies.bodies.get_mut(&kernel)
+                && let Some(b) = bodies.bodies.get_mut(&def)
             {
                 b.failed = true;
             }
-            found.sort_by_key(|(f, _)| (f.file, f.span.start, f.span.end, f.code));
-            for (f, chain) in found {
-                let key = (f.def, f.span.start, f.span.end, f.code);
-                if !reported.insert(key) {
+            found.sort_by_key(|f| (f.file, f.span.start, f.span.end, f.code));
+            for f in found {
+                if !reported.insert((f.def, f.span.start, f.span.end, f.code)) {
                     continue;
                 }
-                let related: Vec<(String, Span)> = chain
-                    .iter()
-                    .map(|(file, span)| (self.sources.get(*file).path.clone(), *span))
-                    .collect();
-                let d = self.error(f.code, f.message, f.file, f.span);
-                for (path, span) in related {
-                    d.relate_in("callee", &path, span);
-                }
+                self.error(f.code, f.message, f.file, f.span);
             }
         }
+    }
+
+    /// The one cross-body check: a cycle of helper-to-helper calls, reported at the call
+    /// that closes it.
+    pub(crate) fn check_helper_cycles(&mut self, bodies: &mut Bodies) {
+        let helpers: BTreeSet<crate::DefId> = bodies
+            .bodies
+            .iter()
+            .filter_map(|(&d, b)| {
+                (b.kind == crate::typed::BodyKind::Fn
+                    && matches!(self.hir_item(d), Some(hir::Item::Fn(f)) if f.mods.kernel)
+                    && self.d.fn_sig(d).is_some_and(|s| self.is_helper_sig(s)))
+                .then_some(d)
+            })
+            .collect();
+        let mut edges: BTreeMap<crate::DefId, Vec<(crate::DefId, usize, Span)>> = BTreeMap::new();
+        for (&def, body) in &bodies.bodies {
+            if !helpers.contains(&def) {
+                continue;
+            }
+            let file = self.file_of(def);
+            let mut out = Vec::new();
+            for (at, callee) in self.body_calls(body) {
+                if helpers.contains(&callee) {
+                    out.push((callee, file, self.pkgs[body.package].expr(at).span));
+                }
+            }
+            out.sort_by_key(|(_, _, span)| (span.start, span.end));
+            edges.insert(def, out);
+        }
+        let mut state: BTreeMap<crate::DefId, u8> = BTreeMap::new();
+        let mut stack = Vec::new();
+        let mut findings: Vec<(crate::DefId, usize, Span, String)> = Vec::new();
+        for &def in &helpers {
+            if state.get(&def).copied().unwrap_or(0) == 0 {
+                self.helper_cycle_dfs(def, &edges, &mut state, &mut stack, &mut findings);
+            }
+        }
+        for (caller, file, span, message) in findings {
+            if let Some(b) = bodies.bodies.get_mut(&caller) {
+                b.failed = true;
+            }
+            self.error("E1511", message, file, span);
+        }
+    }
+
+    fn helper_cycle_dfs(
+        &self,
+        node: crate::DefId,
+        edges: &BTreeMap<crate::DefId, Vec<(crate::DefId, usize, Span)>>,
+        state: &mut BTreeMap<crate::DefId, u8>,
+        stack: &mut Vec<crate::DefId>,
+        out: &mut Vec<(crate::DefId, usize, Span, String)>,
+    ) {
+        state.insert(node, 1);
+        stack.push(node);
+        for (callee, file, span) in edges.get(&node).cloned().unwrap_or_default() {
+            match state.get(&callee).copied().unwrap_or(0) {
+                0 => self.helper_cycle_dfs(callee, edges, state, stack, out),
+                1 => {
+                    let name = self.sema.def(callee).name.clone();
+                    out.push((
+                        node,
+                        file,
+                        span,
+                        format!(
+                            "`{name}` is already on the helper call chain; a kernel helper \
+                             cannot recurse"
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        stack.pop();
+        state.insert(node, 2);
     }
 
     fn kernel_ctx(&mut self, def: crate::DefId) -> Option<KernelCtx> {
@@ -102,106 +155,23 @@ impl Cx<'_> {
         }
         self.ensure_sig(def);
         let sig = self.d.fn_sig(def).cloned()?;
+        let first_is_idx = sig.params.first().is_some_and(|s| self.is_idx_type(s.ty));
         let mut ctx = KernelCtx {
-            index: f.params.first().map(|p| p.local),
+            index: if first_is_idx {
+                f.params.first().map(|p| p.local)
+            } else {
+                None
+            },
             slices: BTreeSet::new(),
         };
-        for (p, s) in f.params.iter().zip(&sig.params).skip(1) {
-            if matches!(self.d.types.kind(s.ty), TyKind::Slice(..)) {
-                ctx.slices.insert(p.local);
+        if first_is_idx {
+            for (p, s) in f.params.iter().zip(&sig.params).skip(1) {
+                if matches!(self.d.types.kind(s.ty), TyKind::Slice(..)) {
+                    ctx.slices.insert(p.local);
+                }
             }
         }
         Some(ctx)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn walk_calls(
-        &mut self,
-        caller: crate::DefId,
-        body: &TypedBody,
-        chain: &[(usize, Span)],
-        stack: &mut Vec<crate::DefId>,
-        checked: &mut BTreeSet<crate::DefId>,
-        bodies: &Bodies,
-        out: &mut Vec<(Finding, Vec<(usize, Span)>)>,
-    ) {
-        let file = self.file_of(caller);
-        for (at, callee) in self.body_calls(body) {
-            if stack.contains(&callee) {
-                let name = self.sema.def(callee).name.clone();
-                out.push((
-                    Finding {
-                        def: caller,
-                        file,
-                        span: self.pkgs[body.package].expr(at).span,
-                        code: "E1511",
-                        message: format!(
-                            "`{name}` is already on the call chain; a kernel cannot recurse"
-                        ),
-                    },
-                    chain.to_vec(),
-                ));
-                continue;
-            }
-            self.ensure_sig(callee);
-            let Some(sig) = self.d.fn_sig(callee).cloned() else {
-                continue;
-            };
-            if sig.mods.kernel {
-                continue;
-            }
-            let mut offender = None;
-            for p in &sig.params {
-                if !self.kernel_uniform(p.ty, 0) {
-                    offender = Some(format!("takes `{}`", self.ty_name(p.ty)));
-                    break;
-                }
-            }
-            if offender.is_none()
-                && sig.ret != self.d.types.void
-                && !self.kernel_uniform(sig.ret, 0)
-            {
-                offender = Some(format!("returns `{}`", self.ty_name(sig.ret)));
-            }
-            if let Some(offender) = offender {
-                out.push((
-                    Finding {
-                        def: caller,
-                        file,
-                        span: self.pkgs[body.package].expr(at).span,
-                        code: "E1511",
-                        message: format!(
-                            "`{}` {offender}; a function called from a kernel takes and returns \
-                             only uniform types",
-                            sig.name
-                        ),
-                    },
-                    chain.to_vec(),
-                ));
-            }
-            let Some(next) = bodies.bodies.get(&callee) else {
-                continue;
-            };
-            if next.failed {
-                continue;
-            }
-            let next_chain = {
-                let mut c = chain.to_vec();
-                c.push((file, self.pkgs[body.package].expr(at).span));
-                c
-            };
-            if checked.insert(callee) {
-                let findings = self.body_findings(callee, next, None);
-                for f in findings {
-                    out.push((f, next_chain.clone()));
-                }
-            } else {
-                continue;
-            }
-            stack.push(callee);
-            self.walk_calls(callee, next, &next_chain, stack, checked, bodies, out);
-            stack.pop();
-        }
     }
 
     /// Direct calls of one typed body, in source order.
@@ -264,7 +234,7 @@ impl Cx<'_> {
             }
             let ok = self.kernel_uniform(info.ty, 0)
                 || self.kernel_payload_free_enum(info.ty)
-                || (kernel.is_some() && self.is_idx_type(info.ty))
+                || (kernel.and_then(|k| k.index).is_some() && self.is_idx_type(info.ty))
                 || info.ty == self.d.types.void
                 || info.ty == self.d.types.never;
             if !ok {
@@ -386,6 +356,7 @@ impl Cx<'_> {
                     "E1511",
                     "a kernel cannot write a closure",
                 ),
+                ExprKind::Block(b) => self.scan_block(def, file, pkg, body, *b, kernel, &mut out),
                 ExprKind::Catch { .. } | ExprKind::Orelse { .. } => add(
                     &mut out,
                     expr.span,
@@ -822,7 +793,19 @@ impl Cx<'_> {
                 let Some(sig) = self.d.fn_sig(f.def).cloned() else {
                     return;
                 };
-                if sig.mods.kernel {
+                if self.is_kernel_sig(&sig) {
+                    // The direct call is E1515 at the call.
+                    return;
+                }
+                if !self.is_helper_sig(&sig) {
+                    let name = sig.name.clone();
+                    push(
+                        "E1511",
+                        &format!(
+                            "this calls `{name}`, which is not a kernel helper; mark it \
+                             `kernel fn` or inline it"
+                        ),
+                    );
                     return;
                 }
                 if sig.mods.unsafe_
@@ -848,14 +831,6 @@ impl Cx<'_> {
                     push(
                         "E1511",
                         "a kernel cannot call a method whose receiver is a borrow",
-                    );
-                    return;
-                }
-                if sig.params.iter().any(|p| self.has_borrow_or_slice(p.ty)) {
-                    let name = sig.name.clone();
-                    push(
-                        "E1511",
-                        &format!("`{name}` takes a borrow or slice; a kernel cannot call it"),
                     );
                 }
             }
@@ -1030,32 +1005,6 @@ impl Cx<'_> {
             },
             _ => None,
         }
-    }
-
-    fn has_borrow_or_slice(&self, t: TypeId) -> bool {
-        fn go(cx: &Cx<'_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
-            if seen.contains(&t) {
-                return false;
-            }
-            seen.push(t);
-            match cx.d.types.kind(t) {
-                TyKind::Ref(..) | TyKind::Slice(..) => true,
-                TyKind::Adt(_, a) => a.iter().any(|a| match a {
-                    GenericArg::Ty(t) => go(cx, *t, seen),
-                    GenericArg::Const(_) => false,
-                }),
-                TyKind::Array(x, _) | TyKind::Optional(x) | TyKind::RawPtr(_, x) => {
-                    go(cx, *x, seen)
-                }
-                TyKind::Result(a, b) => go(cx, *a, seen) || go(cx, *b, seen),
-                TyKind::Tuple(ts) => ts.iter().any(|t| go(cx, *t, seen)),
-                TyKind::FnPtr(s) => {
-                    s.params.iter().any(|t| go(cx, *t, seen)) || go(cx, s.ret, seen)
-                }
-                _ => false,
-            }
-        }
-        go(self, t, &mut Vec::new())
     }
 
     fn constness(&mut self, pkg: usize, file: usize, e: ExprId) -> Constness {

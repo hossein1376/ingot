@@ -1,7 +1,7 @@
 //! expect: reject
 //! section: 27.1
 
-fn again(a: i32) -> i32 {
+kernel fn again(a: i32) -> i32 {
     return again(a); //~ E1511
 }
 

@@ -903,8 +903,12 @@ fn collect_runtime_reads(pkg: &hir::Package, sema: &Sema, e: ExprId, out: &mut V
         }
         ExprKind::Slice { base, lo, hi, .. } => {
             collect_runtime_reads(pkg, sema, *base, out);
-            collect_runtime_reads(pkg, sema, *lo, out);
-            collect_runtime_reads(pkg, sema, *hi, out);
+            if let Some(lo) = lo {
+                collect_runtime_reads(pkg, sema, *lo, out);
+            }
+            if let Some(hi) = hi {
+                collect_runtime_reads(pkg, sema, *hi, out);
+            }
         }
         ExprKind::StructLit { fields, .. } | ExprKind::StructShorthand { fields, .. } => {
             for f in fields {
@@ -928,6 +932,7 @@ fn collect_runtime_reads(pkg: &hir::Package, sema: &Sema, e: ExprId, out: &mut V
             }
         }
         ExprKind::Paren(inner) => collect_runtime_reads(pkg, sema, *inner, out),
+        ExprKind::Block(b) => collect_runtime_reads_block(pkg, sema, *b, out),
         ExprKind::If {
             cond,
             then,

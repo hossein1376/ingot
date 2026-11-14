@@ -705,6 +705,8 @@ pub enum ExprKind {
     Bool(bool),
     Ident(String),
     Path(PathTy),
+    /// A block used as an expression branch: it must leave before its end (E0207).
+    Block(Block),
     Builtin {
         name: String,
         type_arg: Option<Box<Ty>>,
@@ -733,8 +735,8 @@ pub enum ExprKind {
     },
     Slice {
         base: Box<Expr>,
-        lo: Box<Expr>,
-        hi: Box<Expr>,
+        lo: Option<Box<Expr>>,
+        hi: Option<Box<Expr>>,
         bracket: Span,
     },
     Field {
@@ -753,7 +755,7 @@ pub enum ExprKind {
     },
     TypeApply {
         base: Box<Expr>,
-        args: Vec<Ty>,
+        args: Vec<GenericArg>,
         span: Span,
     },
     Cast {
@@ -816,6 +818,8 @@ pub enum ExprKind {
         value: Box<Expr>,
         /// The bound error name, or `None` for `catch _ =>`.
         binding: Option<(String, Span)>,
+        /// The span of the name or `_`, when one was written.
+        binding_span: Option<Span>,
         handler: Handler,
         catch_span: Span,
     },

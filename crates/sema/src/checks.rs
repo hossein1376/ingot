@@ -33,6 +33,7 @@ impl Cx<'_> {
         self.eval_constants();
         self.build_impl_tables();
         self.check_impls();
+        self.check_member_namespaces();
         self.check_functions();
         self.check_externs();
         self.check_types();
@@ -68,7 +69,20 @@ impl Cx<'_> {
 
     fn dedup_diagnostics(&mut self) {
         let mut seen = BTreeSet::new();
+        // A bare variant name that E0603 reports is not an unused binding too.
+        let pattern_errors: BTreeSet<(String, usize, usize)> = self
+            .d
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "E0603")
+            .map(|d| (d.file.clone(), d.span.start, d.span.end))
+            .collect();
         self.d.diagnostics.retain(|d| {
+            if d.code == "E0311"
+                && pattern_errors.contains(&(d.file.clone(), d.span.start, d.span.end))
+            {
+                return false;
+            }
             seen.insert((
                 d.code,
                 d.file.clone(),
@@ -224,6 +238,25 @@ impl Cx<'_> {
                     );
                     misplaced.insert(*def);
                 }
+            } else {
+                let here = self.sema.def(*def).module;
+                let target_module = self.module_of_head(sig.target);
+                let ok = match target_module {
+                    Some(m) => m == here,
+                    // A built-in type has no declaring module: only `std` may add
+                    // inherent functions to it (section 4.4).
+                    None => self.pkgs[self.pkg_of(*def)].name == "std",
+                };
+                if !ok {
+                    self.error(
+                        "E0506",
+                        "an inherent `impl` must be in the module that declares the type; \
+                         for a built-in type only `std` may write one",
+                        file,
+                        sig.header,
+                    );
+                    misplaced.insert(*def);
+                }
             }
             self.d.register_impl(*def);
         }
@@ -307,6 +340,98 @@ impl Cx<'_> {
     }
 
     // ------------------------------------------------------- impl contents
+
+    /// Whether a return type written with a borrow, a type parameter, an associated
+    /// type, or a view structure may hold a borrow in some implementation (E1206).
+    fn type_may_hold_borrow(&mut self, t: TypeId) -> bool {
+        fn symbolic(cx: &Cx<'_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
+            if seen.contains(&t) {
+                return false;
+            }
+            seen.push(t);
+            match cx.d.types.kind(t) {
+                TyKind::Param(_) | TyKind::Projection(..) => true,
+                TyKind::Ref(..) | TyKind::Slice(..) => true,
+                _ => {
+                    cx.d.types
+                        .children(t)
+                        .into_iter()
+                        .any(|c| symbolic(cx, c, seen))
+                }
+            }
+        }
+        if symbolic(self, t, &mut Vec::new()) {
+            return true;
+        }
+        !matches!(self.d.props(t).view, Tri::No)
+    }
+
+    /// E0308: the fields, variants, methods, associated functions and associated
+    /// constants of one type share one namespace (section 4.4). A clash inside one
+    /// `impl` is reported by the `impl` check, so only clashes across sources are here.
+    fn check_member_namespaces(&mut self) {
+        let items: Vec<(DefId, ItemSig)> =
+            self.d.items.iter().map(|(d, s)| (*d, s.clone())).collect();
+        let impls: Vec<ImplSig> = self
+            .d
+            .impls
+            .all
+            .iter()
+            .filter_map(|d| self.d.impl_sig(*d).cloned())
+            .collect();
+        for (def, sig) in items {
+            let type_name = self.sema.def(def).name.clone();
+            // (member, name, span, the impl it is in: `None` for a field or variant)
+            let mut members: Vec<(DefId, String, Span, Option<usize>)> = Vec::new();
+            match sig {
+                ItemSig::Struct(s) => {
+                    for f in &s.fields {
+                        members.push((f.def, f.name.clone(), f.name_span, None));
+                    }
+                }
+                ItemSig::Enum(e) => {
+                    for v in &e.variants {
+                        members.push((v.def, v.name.clone(), v.name_span, None));
+                    }
+                }
+                _ => continue,
+            }
+            for (i, sig) in impls.iter().enumerate() {
+                if sig.of != ImplOf::Inherent || self.d.head_of(sig.target) != Head::Adt(def) {
+                    continue;
+                }
+                for (name, &m) in &sig.methods {
+                    members.push((m, name.clone(), self.sema.def(m).span, Some(i)));
+                }
+                for (name, &c) in &sig.consts {
+                    members.push((c, name.clone(), self.sema.def(c).span, Some(i)));
+                }
+            }
+            members.sort_by_key(|(d, _, _, _)| *d);
+            let mut seen: BTreeMap<String, (DefId, Span)> = BTreeMap::new();
+            let mut in_impl: BTreeSet<(usize, String)> = BTreeSet::new();
+            for (d, name, span, origin) in members {
+                if let Some(i) = origin
+                    && !in_impl.insert((i, name.clone()))
+                {
+                    continue;
+                }
+                if let Some((prev, prev_span)) = seen.get(&name).copied() {
+                    let file = self.file_of(d);
+                    let ppath = self.path_of(self.file_of(prev));
+                    self.error(
+                        "E0308",
+                        format!("`{name}` is already a member of `{type_name}`"),
+                        file,
+                        span,
+                    )
+                    .relate_in("previous", &ppath, prev_span);
+                } else {
+                    seen.insert(name, (d, span));
+                }
+            }
+        }
+    }
 
     fn check_impls(&mut self) {
         let impls: Vec<DefId> = self.d.impls.all.clone();
@@ -793,6 +918,12 @@ impl Cx<'_> {
             }
             TyKind::Mask(n) => n <= 4,
             TyKind::Adt(d, args) => {
+                if let Some(e) = self.d.enum_sig(d)
+                    && e.copy
+                    && self.d.is_payload_free_enum(d)
+                {
+                    return true;
+                }
                 let Some(sig) = self.d.struct_sig(d).cloned() else {
                     return false;
                 };
@@ -837,6 +968,16 @@ impl Cx<'_> {
         }
     }
 
+    /// Whether `sig` is a kernel (a `kernel fn` whose first parameter is `Idx`).
+    pub(crate) fn is_kernel_sig(&self, sig: &FnSig) -> bool {
+        sig.mods.kernel && sig.params.first().is_some_and(|p| self.is_idx_type(p.ty))
+    }
+
+    /// A `kernel fn` whose first parameter is not an index: a kernel helper.
+    pub(crate) fn is_helper_sig(&self, sig: &FnSig) -> bool {
+        sig.mods.kernel && !self.is_kernel_sig(sig)
+    }
+
     /// E1510 and E1519 for every `kernel fn`, and E1519 for `reduce` on a function that
     /// is not a kernel.
     fn check_kernel_signatures(&mut self) {
@@ -869,50 +1010,40 @@ impl Cx<'_> {
                 continue;
             }
             let reduce_span = f.reduce_span.unwrap_or(f.name_span);
-            match f.params.first() {
-                None => {
-                    self.error(
-                        "E1510",
-                        format!(
-                            "`{}` has no parameters; the first parameter of a `kernel fn` must be \
-                             `Idx`",
-                            f.name
-                        ),
-                        file,
-                        f.name_span,
-                    );
-                }
-                Some(p) => {
-                    if !self.d.types.has_poison(p.ty) && !self.is_idx_type(p.ty) {
-                        self.error(
-                            "E1510",
-                            format!(
-                                "the first parameter of a `kernel fn` must be `Idx`, not `{}`",
-                                self.ty_name(p.ty)
-                            ),
-                            file,
-                            p.ty_span,
-                        );
-                    }
-                }
+            let is_kernel = self.is_kernel_sig(&f);
+            if let Some(g) = self.d.generics_of(f.def).first() {
+                self.error(
+                    "E1510",
+                    format!(
+                        "`{}` is a `kernel fn` with generic parameters; a kernel and a kernel \
+                         helper have none",
+                        f.name
+                    ),
+                    file,
+                    g.span,
+                );
             }
-            for p in f.params.iter().skip(1) {
+            let first = if is_kernel { 1 } else { 0 };
+            for p in f.params.iter().skip(first) {
                 if self.d.types.has_poison(p.ty) {
                     continue;
                 }
                 let ok = self.kernel_uniform(p.ty, 0)
-                    || match self.d.types.kind(p.ty) {
-                        TyKind::Slice(_, el) => self.kernel_uniform(*el, 0),
-                        _ => false,
-                    };
+                    || (is_kernel
+                        && match self.d.types.kind(p.ty) {
+                            TyKind::Slice(_, el) => self.kernel_uniform(*el, 0),
+                            _ => false,
+                        });
                 if !ok {
+                    let what = if is_kernel {
+                        "a `kernel fn` parameter must be uniform, an input `[]T` or an output \
+                         `[]mut T`"
+                    } else {
+                        "a kernel helper parameter must be a uniform type"
+                    };
                     self.error(
                         "E1510",
-                        format!(
-                            "this parameter has type `{}`; a `kernel fn` parameter must be \
-                             uniform, an input `[]T` or an output `[]mut T`",
-                            self.ty_name(p.ty)
-                        ),
+                        format!("this parameter has type `{}`; {what}", self.ty_name(p.ty)),
                         file,
                         p.ty_span,
                     );
@@ -922,7 +1053,7 @@ impl Cx<'_> {
                 self.error(
                     "E1510",
                     format!(
-                        "`{}` has error type `{}`; a `kernel fn` has no error type",
+                        "`{}` has error type `{}`; a kernel and a kernel helper have no error type",
                         f.name,
                         self.ty_name(e)
                     ),
@@ -931,7 +1062,17 @@ impl Cx<'_> {
                 );
             }
             if f.reduce.is_some() {
-                if f.ret == self.d.types.void {
+                if !is_kernel {
+                    self.error(
+                        "E1519",
+                        format!(
+                            "`{}` is a kernel helper; `reduce` is only for a kernel",
+                            f.name
+                        ),
+                        file,
+                        reduce_span,
+                    );
+                } else if f.ret == self.d.types.void {
                     self.error(
                         "E1519",
                         format!(
@@ -953,12 +1094,28 @@ impl Cx<'_> {
                         reduce_span,
                     );
                 }
-            } else if f.ret != self.d.types.void {
+            } else if is_kernel && f.ret != self.d.types.void {
                 self.error(
                     "E1510",
                     format!(
-                        "`{}` returns `{}` without `reduce`; a `kernel fn` has a result only with \
+                        "`{}` returns `{}` without `reduce`; a kernel has a result only with \
                          `reduce`",
+                        f.name,
+                        self.ty_name(f.ret)
+                    ),
+                    file,
+                    f.ret_span,
+                );
+            } else if !is_kernel
+                && f.ret != self.d.types.void
+                && !self.d.types.has_poison(f.ret)
+                && !self.type_has_idx(f.ret)
+                && !self.kernel_uniform(f.ret, 0)
+            {
+                self.error(
+                    "E1510",
+                    format!(
+                        "`{}` returns `{}`; a kernel helper's result must be a uniform type",
                         f.name,
                         self.ty_name(f.ret)
                     ),
@@ -1195,6 +1352,14 @@ impl Cx<'_> {
                     span,
                 );
             }
+        }
+        if !f.from.is_empty() && !self.type_may_hold_borrow(f.ret) {
+            self.error(
+                "E1206",
+                "`from` on a return type that can hold no borrow",
+                file,
+                f.from[0].span,
+            );
         }
         // E1601, E1604: the C boundary.
         if f.abi.is_some() || f.mods.export {
@@ -1555,7 +1720,10 @@ impl Cx<'_> {
             None => {
                 self.error(
                     "E0515",
-                    format!("`align({})`: the alignment must be a power of two", a.value),
+                    format!(
+                        "`align({})`: the alignment must be a power of two no larger than 65536",
+                        a.value
+                    ),
                     file,
                     a.span,
                 );
@@ -1693,60 +1861,77 @@ impl Cx<'_> {
         }
     }
 
-    /// E0510: `&dyn I` needs an interface whose methods do not take or return `Self`
-    /// by value and have no generic parameters (section 4.4).
+    /// E0510: `dyn I` needs an interface with no associated type whose functions all
+    /// take `self` by borrow, have no generic parameters, and mention `Self` nowhere
+    /// else (section 4.4).
     fn check_dyn(&mut self, o: &Obligation, iface: DefId) {
         self.ensure_sig(iface);
         let Some(isig) = self.d.interface_sig(iface).cloned() else {
             return;
         };
-        for &m in &isig.methods {
-            let Some(f) = self.d.fn_sig(m).cloned() else {
-                continue;
-            };
-            let mut why = None;
-            if !self.d.generics_of(m).is_empty() {
-                why = Some("it has generic parameters");
-            } else {
-                let mut tys: Vec<TypeId> = f.params.iter().map(|p| p.ty).collect();
-                tys.push(f.ret);
-                tys.extend(f.error);
-                if tys
-                    .into_iter()
-                    .any(|t| self.mentions_self_by_value(t, isig.self_def))
-                {
-                    why = Some("it takes or returns `Self` by value");
+        let mut why = None;
+        let mut at = isig.span;
+        if let Some(&a) = isig.assoc.first() {
+            why = Some(format!(
+                "it declares the associated type `{}`",
+                self.sema.def(a).name
+            ));
+            at = self.sema.def(a).span;
+        } else {
+            for &m in &isig.methods {
+                let Some(f) = self.d.fn_sig(m).cloned() else {
+                    continue;
+                };
+                if !self.d.generics_of(m).is_empty() {
+                    why = Some(format!("`{}` has generic parameters", f.name));
+                } else if f.params.is_empty() {
+                    why = Some(format!("`{}` has no `self`", f.name));
+                } else if !matches!(
+                    self.d.types.kind(f.params[0].ty),
+                    TyKind::Ref(_, inner)
+                        if matches!(self.d.types.kind(*inner), TyKind::Param(p) if *p == isig.self_def)
+                ) {
+                    why = Some(format!("`{}` takes `self` by value", f.name));
+                } else {
+                    let mut tys: Vec<TypeId> = f.params.iter().skip(1).map(|p| p.ty).collect();
+                    tys.push(f.ret);
+                    tys.extend(f.error);
+                    if tys
+                        .into_iter()
+                        .any(|t| self.mentions_self(t, isig.self_def))
+                    {
+                        why = Some(format!("`{}` mentions `Self` outside its receiver", f.name));
+                    }
+                }
+                if why.is_some() {
+                    at = f.name_span;
+                    break;
                 }
             }
-            if let Some(why) = why {
-                let ipath = self.path_of(self.file_of(m));
-                let mname = f.name.clone();
-                let iname = self.sema.def(iface).name.clone();
-                self.error(
-                    "E0510",
-                    format!(
-                        "`dyn {iname}` is not allowed: `{mname}` cannot be called through it, {why}"
-                    ),
-                    o.file,
-                    o.span,
-                )
-                .relate_in("declared", &ipath, f.name_span);
-                return;
-            }
+        }
+        if let Some(why) = why {
+            let iname = self.sema.def(iface).name.clone();
+            let ipath = self.path_of(self.file_of(iface));
+            self.error(
+                "E0510",
+                format!("`dyn {iname}` is not allowed: {why}"),
+                o.file,
+                o.span,
+            )
+            .relate_in("declared", &ipath, at);
         }
     }
 
-    fn mentions_self_by_value(&self, ty: TypeId, self_def: DefId) -> bool {
+    /// Whether `ty` mentions `Self` anywhere, including inside a borrow.
+    fn mentions_self(&self, ty: TypeId, self_def: DefId) -> bool {
         match self.d.types.kind(ty) {
             TyKind::Param(p) => *p == self_def,
-            TyKind::Ref(..) | TyKind::Slice(..) | TyKind::RawPtr(..) => false,
-            TyKind::Dyn(..) | TyKind::DynFn(..) | TyKind::Projection(..) => false,
             _ => self
                 .d
                 .types
                 .children(ty)
                 .into_iter()
-                .any(|c| self.mentions_self_by_value(c, self_def)),
+                .any(|c| self.mentions_self(c, self_def)),
         }
     }
 

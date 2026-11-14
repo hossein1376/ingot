@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 27.1
+
+copy enum Mode { off, on }
+
+kernel fn k(i: Idx, m: Mode, y: []mut i32) {
+    y[i] = match m { .off => 0, .on => 1 };
+}

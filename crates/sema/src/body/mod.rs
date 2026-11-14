@@ -84,8 +84,11 @@ pub(crate) struct Checker<'c, 'a> {
     pub mutated: BTreeSet<LocalId>,
     /// Each `var` statement with the locals its pattern binds.
     pub var_stmts: Vec<(StmtId, Vec<LocalId>)>,
-    /// The `let`/`var` statement that binds a local (for the fix of E0606 and E0610).
+    /// A `let`/`var` statement that binds a local (for the fix of E0606 and E0610).
     pub let_of: BTreeMap<LocalId, StmtId>,
+    /// The last expression of a branch block: E0207 explains it, so E0413 is not also
+    /// reported there.
+    pub branch_tail: Option<Span>,
     pub defer_depth: u32,
     pub par_depth: u32,
     /// One entry per `unsafe` block around the current expression; `true` once an
@@ -101,6 +104,9 @@ pub(crate) struct Checker<'c, 'a> {
     pub in_item_init: bool,
     /// The body is a `kernel fn` (section 27.1).
     pub kernel: bool,
+    /// The body is a kernel (not a helper): its first parameter is `Idx`, so `Idx` is
+    /// allowed in the body.
+    pub kernel_index: bool,
 }
 
 impl<'c, 'a> Checker<'c, 'a> {
@@ -158,6 +164,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             mutated: BTreeSet::new(),
             var_stmts: Vec::new(),
             let_of: BTreeMap::new(),
+            branch_tail: None,
             defer_depth: 0,
             par_depth: 0,
             unsafe_used: Vec::new(),
@@ -166,6 +173,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             poisoned: false,
             in_item_init: matches!(kind, BodyKind::Const | BodyKind::Static),
             kernel: false,
+            kernel_index: false,
         }
     }
 
@@ -289,6 +297,16 @@ impl<'c, 'a> Checker<'c, 'a> {
         matches!(self.cx.d.types.kind(t), TyKind::Result(..))
     }
 
+    /// Whether `sig` is a kernel (a `kernel fn` whose first parameter is `Idx`).
+    pub(crate) fn is_kernel_sig(&self, sig: &crate::sigs::FnSig) -> bool {
+        sig.mods.kernel && sig.params.first().is_some_and(|p| self.is_idx_type(p.ty))
+    }
+
+    /// A `kernel fn` whose first parameter is not an index: a kernel helper.
+    pub(crate) fn is_helper_sig(&self, sig: &crate::sigs::FnSig) -> bool {
+        sig.mods.kernel && !self.is_kernel_sig(sig)
+    }
+
     /// Whether `t` is the 1-D kernel index type `Idx`.
     pub(crate) fn is_idx_type(&self, t: TypeId) -> bool {
         matches!(
@@ -353,6 +371,7 @@ impl<'c, 'a> Checker<'c, 'a> {
                 ty,
                 res,
                 coerce: None,
+                fn_dyn: None,
             },
         );
         ty
@@ -425,7 +444,7 @@ impl<'c, 'a> Checker<'c, 'a> {
 
     /// Lower a type written in the body.
     pub(crate) fn lower(&mut self, t: &hir::Ty) -> TypeId {
-        let at = if self.kernel {
+        let at = if self.kernel_index {
             None
         } else {
             self.idx_type_span(t)
@@ -607,6 +626,9 @@ impl Cx<'_> {
         );
         c.fns[0].error_span = sig.error_span;
         c.kernel = f.mods.kernel;
+        c.kernel_index = c.kernel
+            && !f.params.is_empty()
+            && sig.params.first().is_some_and(|s| c.is_idx_type(s.ty));
         for (p, s) in f.params.iter().zip(&sig.params) {
             let mode = if c.is_copy(s.ty) {
                 BindMode::Copy

@@ -94,11 +94,14 @@ fn load_file(path: &Path, options: LoadOptions) -> std::io::Result<LoadedPackage
     // A file inside a package is checked as part of that package: walk up to the
     // directory with `ingot.toml`. A bare file name has the empty path as its
     // parent, which means the current directory.
-    let mut dir = Some(
-        path.parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new(".")),
-    );
+    // The walk starts from the absolute directory, so a relative path such as
+    // `other.ingot` or `sub/other.ingot` still reaches a manifest above it.
+    let start = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    let mut dir = Some(start.as_path());
     while let Some(d) = dir {
         if d.join("ingot.toml").exists() {
             return load_dir(d, options, "");
@@ -285,7 +288,7 @@ fn module_components(rel: &Path) -> Vec<String> {
     parts
 }
 
-fn relative_path(rel: &Path) -> String {
+pub(crate) fn relative_path(rel: &Path) -> String {
     rel.components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()

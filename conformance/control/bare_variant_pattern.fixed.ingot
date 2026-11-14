@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 7.2
+
+copy enum Color { red, green }
+
+fn f(c: Color) -> i64 {
+    return match c {
+        .red => 1,
+        .green => 2,
+    };
+}

@@ -222,7 +222,8 @@ pub fn check_bodies(
         checked,
     );
     let mut bodies = cx.check_bodies();
-    cx.check_kernels(&mut bodies);
+    cx.check_kernel_bodies(&mut bodies);
+    cx.check_helper_cycles(&mut bodies);
     // Only function and test bodies become CFGs; the initializer of a constant or static
     // is typed here and evaluated by constant evaluation.
     if bodies
@@ -236,7 +237,16 @@ pub fn check_bodies(
     let mut not_implemented = std::mem::take(&mut d.not_implemented);
     let mut seen = std::collections::BTreeSet::new();
     let mut diags = std::mem::take(&mut d.diagnostics);
+    let pattern_errors: std::collections::BTreeSet<(String, usize, usize)> = diags
+        .iter()
+        .filter(|x| x.code == "E0603")
+        .map(|x| (x.file.clone(), x.span.start, x.span.end))
+        .collect();
     diags.retain(|x| {
+        if x.code == "E0311" && pattern_errors.contains(&(x.file.clone(), x.span.start, x.span.end))
+        {
+            return false;
+        }
         seen.insert((
             x.code,
             x.file.clone(),
@@ -246,6 +256,10 @@ pub fn check_bodies(
         ))
     });
     let diagnostics = scrub_builtin(diags, &mut not_implemented);
+    let mut phase6_diagnostics = phase6_diagnostics;
+    phase6_diagnostics.retain(|x| {
+        !(x.code == "E0311" && pattern_errors.contains(&(x.file.clone(), x.span.start, x.span.end)))
+    });
     d.diagnostics = phase6_diagnostics;
     d.not_implemented = phase6_not_implemented;
     BodyOutput {

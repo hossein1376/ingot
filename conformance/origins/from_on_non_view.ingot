@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 13.1
+
+fn f() -> i64 from static { //~ E1206
+    return 1;
+}

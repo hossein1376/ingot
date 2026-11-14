@@ -183,18 +183,40 @@ impl Declarations {
                     sync: inner.sync,
                 }
             }
-            TyKind::RawPtr(..) => Props {
-                send: Tri::No,
-                sync: Tri::No,
-                ..leaf
-            },
-            // Whether the values behind a `&dyn I` cross tasks is not defined.
-            TyKind::Dyn(m, ..) | TyKind::DynFn(m, ..) => Props {
+            TyKind::RawPtr(_, e) => {
+                let inner = self.lookup(cur, e);
+                Props {
+                    send: Tri::No,
+                    sync: Tri::No,
+                    view: inner.view,
+                    maybe_view: inner.maybe_view,
+                    ..leaf
+                }
+            }
+            // `&dyn I` is `Send`/`Sync` from `I`'s supertraits (section 20); the
+            // dynamic `Fn` forms are neither.
+            TyKind::Dyn(m, def, _) => {
+                let send = self.interface_has_prop(def, PropBound::Send);
+                let sync = self.interface_has_prop(def, PropBound::Sync);
+                Props {
+                    copy: Tri::from_bool(m == Mutability::Shared),
+                    view: Tri::Yes,
+                    maybe_view: Tri::Yes,
+                    send: if m == Mutability::Shared {
+                        Tri::from_bool(sync)
+                    } else {
+                        Tri::from_bool(send)
+                    },
+                    sync: Tri::from_bool(sync),
+                    ..leaf
+                }
+            }
+            TyKind::DynFn(m, ..) => Props {
                 copy: Tri::from_bool(m == Mutability::Shared),
                 view: Tri::Yes,
                 maybe_view: Tri::Yes,
-                send: Tri::Unknown,
-                sync: Tri::Unknown,
+                send: Tri::No,
+                sync: Tri::No,
                 ..leaf
             },
             TyKind::Param(p) => {
@@ -255,6 +277,33 @@ impl Declarations {
                 p
             }
         }
+    }
+
+    /// Whether `iface` or one of its superinterfaces is `Send` or `Sync`.
+    fn interface_has_prop(&self, iface: crate::DefId, prop: PropBound) -> bool {
+        fn go(
+            this: &Declarations,
+            def: crate::DefId,
+            prop: PropBound,
+            seen: &mut Vec<crate::DefId>,
+        ) -> bool {
+            if seen.contains(&def) {
+                return false;
+            }
+            seen.push(def);
+            let Some(sig) = this.interface_sig(def) else {
+                return false;
+            };
+            for b in &sig.supers {
+                match b {
+                    Bound::Prop(p) if *p == prop => return true,
+                    Bound::Interface(i, _) if go(this, *i, prop, seen) => return true,
+                    _ => {}
+                }
+            }
+            false
+        }
+        go(self, iface, prop, &mut Vec::new())
     }
 
     /// The properties of an aggregate from its parts.

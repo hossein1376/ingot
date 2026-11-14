@@ -31,7 +31,7 @@ fn visibility_is_kept_on_every_item_kind() {
     let (_, ast) = module(
         "pub struct A {}\nstruct B {}\npub enum C { x }\npub interface D {}\n\
          pub const e: i64 = 1;\npub static f: i64 = 1;\npub type G = i64;\nconst h: i64 = 1;\n\
-         pub extern \"c\" { fn ef(); }\nextern \"c\" { fn eg(); }\n",
+         extern \"c\" { fn ef(); }\nextern \"c\" { fn eg(); }\n",
     );
     let flags: Vec<bool> = ast
         .items
@@ -50,7 +50,7 @@ fn visibility_is_kept_on_every_item_kind() {
     assert_eq!(
         flags,
         vec![
-            true, false, true, true, true, true, true, false, true, false
+            true, false, true, true, true, true, true, false, false, false
         ]
     );
 }

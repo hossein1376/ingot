@@ -856,16 +856,24 @@ impl<'a> Cx<'a> {
     /// The length of an array type: a constant generic parameter or a value.
     fn array_len(&mut self, e: hir::ExprId) -> ConstArg {
         let arg = self.const_arg(e, ValTy::Int(IntTy::I64));
-        if let ConstArg::Value(ConstValue::Int { value, .. }) = arg
-            && value < 0
-        {
+        if let ConstArg::Value(ConstValue::Int { value, .. }) = arg {
             let span = self.pkgs[self.cur.pkg].expr(e).span;
-            self.err(
-                "E0521",
-                format!("an array cannot have the negative length {value}"),
-                span,
-            );
-            return ConstArg::Poison;
+            if value < 0 {
+                self.err(
+                    "E0521",
+                    format!("an array cannot have the negative length {value}"),
+                    span,
+                );
+                return ConstArg::Poison;
+            }
+            if value > 1 << 62 {
+                self.err(
+                    "E0521",
+                    format!("an array length is at most 2^62, not {value}"),
+                    span,
+                );
+                return ConstArg::Poison;
+            }
         }
         arg
     }

@@ -611,9 +611,12 @@ impl Checker<'_, '_> {
                     Zero::Ok
                 }
                 Some(ItemSig::Enum(sig)) => {
-                    // The first variant has no payload, or a payload that allows it.
-                    match sig.variants.first() {
-                        None => Zero::Bad("an enum with no variants has no value".to_string()),
+                    // The variant with tag value 0, whose payload (if any) allows it.
+                    match sig.variants.iter().find(|v| v.tag == 0) {
+                        None => Zero::Bad(
+                            "an enum with no variant at tag value 0 has no all-zero value"
+                                .to_string(),
+                        ),
                         Some(v) => match v.payload {
                             None => Zero::Ok,
                             Some(p) => {

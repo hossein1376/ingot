@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 7
+
+copy enum Mode: u8 { off, on }
+
+fn f() -> Mode {
+    return @zero;
+}

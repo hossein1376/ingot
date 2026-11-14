@@ -8,6 +8,6 @@ struct Row { cells: [width]u8 }
 
 struct Grid { rows: [width]Row, flat: [area]u8, tag: [@sizeof(Row)]u8 }
 
-struct Ring[T, const N: i64] { items: [N]T, head: i64 }
+struct Ring[T, const n: i64] { items: [n]T, head: i64 }
 
 struct Buffers { small: Ring[u8, 4], large: Ring[u8, { area }] }

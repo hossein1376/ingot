@@ -53,6 +53,36 @@ impl Checker<'_, '_> {
         found: TypeId,
         expected: TypeId,
     ) -> Option<TypeId> {
+        if let TyKind::DynFn(target_m, kind, sig) = self.kind(expected).clone() {
+            let TyKind::Ref(source_m, inner) = self.kind(found).clone() else {
+                return None;
+            };
+            if source_m != target_m {
+                return None;
+            }
+            let TyKind::Closure(_, idx) = self.kind(inner) else {
+                return None;
+            };
+            let c = self.out.closures.get(&ExprId(idx)).cloned()?;
+            let meets = match kind {
+                FnKind::Fn => c.kind == FnKind::Fn,
+                FnKind::FnMut => c.kind != FnKind::FnOnce,
+                FnKind::FnOnce => true,
+            };
+            if !meets || c.sig != sig {
+                return None;
+            }
+            let info = FnDynCoercion {
+                kind,
+                sig,
+                self_ty: inner,
+            };
+            if let Some(expr) = self.out.exprs.get_mut(&e) {
+                expr.ty = expected;
+                expr.fn_dyn = Some(info);
+            }
+            return Some(expected);
+        }
         let TyKind::Dyn(target_m, iface, iargs) = self.kind(expected).clone() else {
             return None;
         };
@@ -195,20 +225,6 @@ impl Checker<'_, '_> {
                 self.unhandled_result(e, found);
                 return;
             }
-            (TyKind::Closure(..), TyKind::FnPtr(_)) => {
-                self.ni(
-                    "a closure where a `fn` pointer is expected (the specification does not say \
-                     whether a closure without captures converts)",
-                );
-                return;
-            }
-            (TyKind::Ref(..), TyKind::DynFn(..)) => {
-                self.ni(
-                    "making a `&dyn Fn(..)` from a borrow (the specification gives no \
-                     conversion or syntax)",
-                );
-                return;
-            }
             _ => {}
         }
         let (f, x) = (self.name(found), self.name(expected));
@@ -244,6 +260,31 @@ impl Checker<'_, '_> {
                     self.mk(TyKind::RawPtr(Mutability::Shared, u8_)),
                     ExprRes::None,
                 )
+            }
+            ExprKind::Block(b) => {
+                let tail =
+                    self.hir
+                        .block(*b)
+                        .stmts
+                        .last()
+                        .and_then(|s| match &self.hir.stmt(*s).kind {
+                            hir::StmtKind::Expr(e) => Some(self.span_of(*e)),
+                            _ => None,
+                        });
+                let saved = self.branch_tail;
+                self.branch_tail = tail;
+                let completes = self.block(*b);
+                self.branch_tail = saved;
+                if completes {
+                    let span = self.span_of(e);
+                    self.err(
+                        "E0207",
+                        "this branch block can reach its end; it must end in `return`, `fail`, \
+                         `break`, `continue` or a trap",
+                        span,
+                    );
+                }
+                (self.never(), ExprRes::None)
             }
             ExprKind::Bool(_) => (self.bool_(), ExprRes::None),
             ExprKind::Path(p) => self.path_value(e, p),
@@ -383,9 +424,10 @@ impl Checker<'_, '_> {
             ExprKind::Catch {
                 value,
                 binding,
+                binding_span,
                 handler,
                 catch_span,
-            } => self.catch_expr(*value, *binding, handler, hint, *catch_span),
+            } => self.catch_expr(*value, *binding, *binding_span, handler, hint, *catch_span),
             ExprKind::Orelse {
                 value,
                 handler,
@@ -488,7 +530,7 @@ impl Checker<'_, '_> {
         &mut self,
         e: ExprId,
         d: DefId,
-        explicit: Vec<TypeId>,
+        explicit: Vec<GenericArg>,
     ) -> (TypeId, ExprRes) {
         let Some(sig) = self.fn_sig(d) else {
             return (self.poison(), ExprRes::None);
@@ -528,24 +570,40 @@ impl Checker<'_, '_> {
         }
         let mut s = Subst::new();
         let mut args = Vec::new();
-        for (g, t) in generics.iter().zip(&explicit) {
-            if g.is_const {
-                self.ni(
-                    "an explicit argument for a constant generic parameter of a function value",
-                );
-                return (self.poison(), ExprRes::None);
+        for (g, arg) in generics.iter().zip(&explicit) {
+            match (g.is_const, arg) {
+                (true, GenericArg::Const(c)) => {
+                    s.insert(g.def, GenericArg::Const(*c));
+                    args.push(GenericArg::Const(*c));
+                }
+                (false, GenericArg::Ty(t)) => {
+                    s.insert(g.def, GenericArg::Ty(*t));
+                    args.push(GenericArg::Ty(*t));
+                }
+                (true, GenericArg::Ty(_)) => {
+                    self.err(
+                        "E0813",
+                        "this generic parameter is a constant: give it a value, not a type",
+                        self.span_of(e),
+                    );
+                    return (self.poison(), ExprRes::None);
+                }
+                (false, GenericArg::Const(_)) => {
+                    self.err(
+                        "E0813",
+                        "this generic parameter is a type: give it a type, not a constant",
+                        self.span_of(e),
+                    );
+                    return (self.poison(), ExprRes::None);
+                }
             }
-            s.insert(g.def, GenericArg::Ty(*t));
-            args.push(GenericArg::Ty(*t));
         }
         // An `extern` function's value has the `extern fn` type, which says what it is.
-        if sig.mods.kernel {
+        if self.is_kernel_sig(&sig) {
             let name = sig.name.clone();
             self.err(
                 "E1515",
-                format!(
-                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not used as a value"
-                ),
+                format!("`{name}` is a kernel; it is run only by `dispatch`, not used as a value"),
                 self.span_of(e),
             );
             return (self.poison(), ExprRes::None);
@@ -597,17 +655,21 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn type_apply(&mut self, e: ExprId, base: ExprId, args: &[hir::Ty]) -> (TypeId, ExprRes) {
-        let tys: Vec<TypeId> = args.iter().map(|t| self.lower(t)).collect();
+    fn type_apply(
+        &mut self,
+        e: ExprId,
+        base: ExprId,
+        args: &[hir::GenericArg],
+    ) -> (TypeId, ExprRes) {
         let b = self.unparen(base);
         if let ExprKind::Path(p) = &self.hir.expr(b).kind
             && let Res::Def(d) = p.res
             && matches!(self.def_kind(d), DefKind::Fn | DefKind::ExternFn)
         {
-            if tys.iter().any(|t| self.is_poison(*t)) {
+            let Some(lowered) = self.lower_explicit_args(args, d) else {
                 return (self.poison(), ExprRes::None);
-            }
-            let (ty, res) = self.fn_value(e, d, tys);
+            };
+            let (ty, res) = self.fn_value(e, d, lowered);
             self.set(b, ty, res.clone());
             return (ty, res);
         }
@@ -755,13 +817,10 @@ impl Checker<'_, '_> {
             }
             TyKind::Slice(m, elem) => match name {
                 "len" => (self.i64_(), ExprRes::SliceLen { derefs }),
-                "ptr" => {
-                    self.requires_unsafe(self.span_of(e), "reading a slice's `.ptr`");
-                    (
-                        self.mk(TyKind::RawPtr(m, elem)),
-                        ExprRes::SlicePtr { derefs },
-                    )
-                }
+                "ptr" => (
+                    self.mk(TyKind::RawPtr(m, elem)),
+                    ExprRes::SlicePtr { derefs },
+                ),
                 _ => {
                     let cands = vec!["len".to_string(), "ptr".to_string()];
                     self.unknown_member(name, name_span, &cands, t);
@@ -956,14 +1015,20 @@ impl Checker<'_, '_> {
         &mut self,
         e: ExprId,
         base: ExprId,
-        lo: ExprId,
-        hi: ExprId,
+        lo: Option<ExprId>,
+        hi: Option<ExprId>,
         bracket: Span,
         borrow: Option<Mutability>,
     ) -> (TypeId, ExprRes) {
         let bt = self.expr(base, None);
-        self.index_operand(lo);
-        self.index_operand(hi);
+        if let Some(lo) = lo {
+            self.index_operand(lo);
+        }
+        if let Some(hi) = hi {
+            self.index_operand(hi);
+        }
+        let implicit_lo = lo.is_none();
+        let implicit_hi = hi.is_none();
         if self.is_poison(bt) || self.is_never(bt) {
             return (self.poison(), ExprRes::None);
         }
@@ -977,6 +1042,8 @@ impl Checker<'_, '_> {
                     ExprRes::Slice {
                         derefs,
                         of_array: false,
+                        implicit_lo,
+                        implicit_hi,
                     },
                 )
             }
@@ -988,6 +1055,8 @@ impl Checker<'_, '_> {
                         ExprRes::Slice {
                             derefs,
                             of_array: true,
+                            implicit_lo,
+                            implicit_hi,
                         },
                     )
                 }
@@ -1464,8 +1533,16 @@ impl Checker<'_, '_> {
                     }
                 }
                 hir::ArmBody::Block(b) => {
-                    self.block(*b);
-                    self.ni("a block as the arm of a `match` used as a value");
+                    let completes = self.block(*b);
+                    if completes {
+                        let span = self.hir.block(*b).span;
+                        self.err(
+                            "E0207",
+                            "this arm block can reach its end; it must end in `return`, `fail`, \
+                             `break`, `continue` or a trap",
+                            span,
+                        );
+                    }
                 }
             }
         }
@@ -1477,6 +1554,7 @@ impl Checker<'_, '_> {
         &mut self,
         value: ExprId,
         binding: Option<hir::LocalId>,
+        binding_span: Option<Span>,
         handler: &Handler,
         hint: Option<TypeId>,
         catch_span: Span,
@@ -1501,6 +1579,23 @@ impl Checker<'_, '_> {
         };
         if let Some(b) = binding {
             self.bind_local(b, err, BindMode::Move);
+        } else if let Some(span) = binding_span {
+            let p = self.cx.d.props(err);
+            match p.discard() {
+                Tri::No => {
+                    let name = self.name(err);
+                    self.err(
+                        "E0414",
+                        format!("`catch _` cannot discard a linear error of type `{name}`"),
+                        span,
+                    );
+                }
+                Tri::Unknown => self.ni(
+                    "whether a `catch _` may discard an error of a type whose properties the \
+                     specification does not define",
+                ),
+                Tri::Yes => {}
+            }
         }
         self.handler(handler, ok, hint, "`catch`");
         (ok, ExprRes::None)

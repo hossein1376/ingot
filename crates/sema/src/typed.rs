@@ -115,6 +115,10 @@ pub struct ExprInfo {
     /// of `ty` is then the `&dyn I`; phase 8 builds the fat pointer and the method table
     /// from this.
     pub coerce: Option<DynCoercion>,
+    /// The coercion of this expression's value to `&dyn Fn(..)` or
+    /// `&mut dyn FnMut(..)`, when its context expects one and its own type is a borrow
+    /// of a closure. The value of `ty` is then the dynamic type.
+    pub fn_dyn: Option<FnDynCoercion>,
 }
 
 /// A `&T` (`&mut T`) that becomes a `&dyn I` (`&mut dyn I`) because `T` implements
@@ -127,6 +131,17 @@ pub struct DynCoercion {
     pub self_ty: TypeId,
     /// How `T` implements `interface`.
     pub via: InterfaceVia,
+}
+
+/// A `&closure` (`&mut closure`) that becomes a `&dyn Fn(..)` (`&mut dyn FnMut(..)`)
+/// because the closure satisfies the bound with that signature (spec sections 3 and
+/// 5.6). The target type is the expression's `ty`.
+#[derive(Clone, Debug)]
+pub struct FnDynCoercion {
+    pub kind: FnKind,
+    pub sig: FnPtrSig,
+    /// The closure's own type under the borrow.
+    pub self_ty: TypeId,
 }
 
 /// What the source left implicit on an expression. Which variant occurs with which
@@ -167,9 +182,16 @@ pub enum ExprRes {
     /// `Index`: the base is looked through `derefs` borrows (an array or slice, or a
     /// vector with a constant lane).
     Index { derefs: u32 },
-    /// `Slice` (`s[lo..hi]`). `of_array`: the base is an array place and the result is
-    /// the borrow written around the expression (`&a[lo..hi]`).
-    Slice { derefs: u32, of_array: bool },
+    /// `Slice` (`s[lo..hi]`, `s[lo..]`, `s[..hi]`, `s[..]`). `of_array`: the base is an
+    /// array place and the result is the borrow written around the expression
+    /// (`&a[lo..hi]`). `implicit_lo`/`implicit_hi`: the bound was left out and phase 8
+    /// inserts `0` or `.len`.
+    Slice {
+        derefs: u32,
+        of_array: bool,
+        implicit_lo: bool,
+        implicit_hi: bool,
+    },
     /// `EnumLit`, or a `Field` on a type naming a payload-free variant (`Color.red`),
     /// or the callee of a variant constructor call.
     Variant(VariantRef),
@@ -296,6 +318,17 @@ pub struct CallInfo {
     pub callee: Callee,
     /// Present for `value.name(args)`: how the receiver becomes the first argument.
     pub receiver: Option<Receiver>,
+    /// A call through a closure: how the callee is used (shared, exclusive, moved).
+    /// Phase 9 checks the exclusive use and the move.
+    pub mode: Option<CallMode>,
+}
+
+/// How a call through a closure uses it (spec section 5.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallMode {
+    Shared,
+    Exclusive,
+    Move,
 }
 
 #[derive(Clone, Debug)]
@@ -461,6 +494,8 @@ pub struct ClosureInfo {
     pub sig: FnPtrSig,
     /// The type of the closure expression: `TyKind::Closure`.
     pub ty: TypeId,
+    /// `Fn`, `FnMut` or `FnOnce`, from the capture list (spec section 5.6).
+    pub kind: FnKind,
     pub captures: Vec<CaptureInfo>,
     pub span: Span,
 }

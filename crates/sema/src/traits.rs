@@ -689,6 +689,32 @@ impl Declarations {
         if result != Tri::No {
             return result;
         }
+        // Structural `Eq`, `Ord` and `Hash` follow the element type, including a user
+        // implementation of it (section 4.4).
+        let b = self.builtins;
+        let structural = args.is_empty()
+            && [b.eq, b.ord, b.hash]
+                .into_iter()
+                .flatten()
+                .any(|d| d == iface);
+        if structural {
+            match self.types.kind(ty).clone() {
+                TyKind::Ref(_, e)
+                | TyKind::Array(e, _)
+                | TyKind::Slice(_, e)
+                | TyKind::Optional(e) => {
+                    return self.satisfies_interface(e, iface, args);
+                }
+                TyKind::Tuple(ts) => {
+                    let mut out = Tri::Yes;
+                    for t in ts {
+                        out = out.and(self.satisfies_interface(t, iface, args));
+                    }
+                    return out;
+                }
+                _ => {}
+            }
+        }
         if args.is_empty() {
             self.builtin_implements(ty, iface)
         } else {
@@ -713,6 +739,20 @@ impl Declarations {
                 // The IEEE total order: `Eq` and `Ord`, not `Hash`.
                 TyKind::Float(_) => Tri::from_bool(!hash),
                 TyKind::Adt(d, _) => Tri::from_bool(self.is_payload_free_enum(*d)),
+                TyKind::Array(e, _)
+                | TyKind::Slice(_, e)
+                | TyKind::Optional(e)
+                | TyKind::Ref(_, e) => self.builtin_implements(*e, iface),
+                TyKind::Tuple(ts) => {
+                    if ts
+                        .iter()
+                        .all(|t| self.builtin_implements(*t, iface) == Tri::Yes)
+                    {
+                        Tri::Yes
+                    } else {
+                        Tri::No
+                    }
+                }
                 _ => Tri::No,
             };
         }

@@ -299,12 +299,12 @@ fn an_alias_is_expanded() {
 
 #[test]
 fn substitution_replaces_parameters_and_constants() {
-    let mut d = app("struct Ring[T, const N: i64] { items: [N]T, head: i64 }\n");
+    let mut d = app("struct Ring[T, const n: i64] { items: [n]T, head: i64 }\n");
     assert_eq!(d.codes(), vec![]);
     let ring = d.type_def("app", "Ring");
     let sig = d.decls.struct_sig(ring).expect("Ring").clone();
     let items = sig.fields[0].ty;
-    assert_eq!(d.display(items), "[N]T");
+    assert_eq!(d.display(items), "[n]T");
     let g = d.decls.generics_of(ring).to_vec();
     let i16_ty = d.int(IntTy::I16);
     let mut s = Subst::new();
@@ -319,7 +319,7 @@ fn substitution_replaces_parameters_and_constants() {
     let mut only_t = Subst::new();
     only_t.insert(g[0].def, GenericArg::Ty(i16_ty));
     let got = d.decls.types.subst(items, &only_t);
-    assert_eq!(d.display(got), "[N]i16");
+    assert_eq!(d.display(got), "[n]i16");
     // An empty substitution is the identity, with the same id.
     assert_eq!(d.decls.types.subst(items, &Subst::new()), items);
 }
@@ -968,7 +968,7 @@ fn align_must_be_a_power_of_two_not_below_the_natural_alignment_e0515() {
 #[test]
 fn a_layout_that_depends_on_a_parameter_is_not_invented() {
     let mut d = app("struct Box1[T] { x: T }\n\
-         struct Ring[T, const N: i64] { items: [N]T }\n\
+         struct Ring[T, const n: i64] { items: [n]T }\n\
          struct Use { a: Box1[u16], b: Ring[u8, 5] }\n");
     assert_eq!(d.codes(), vec![]);
     let b1 = d.decls.generics_of(d.type_def("app", "Box1"))[0].def;
@@ -1267,7 +1267,7 @@ fn sizeof_alignof_and_target_fields_are_constants() {
 fn constants_feed_array_lengths_and_generic_arguments() {
     let mut d = app("const width: i64 = 2 + 2;\n\
          const area: i64 = width * width;\n\
-         struct Ring[T, const N: i64] { items: [N]T }\n\
+         struct Ring[T, const n: i64] { items: [n]T }\n\
          struct Grid { cells: [area]u8, r: Ring[u8, { width }], q: Ring[u8, 4], s: [@sizeof(Ring[u8, 4])]u8 }\n");
     assert_eq!(d.codes(), vec![]);
     let cells = d.field("Grid", "cells");
@@ -1579,6 +1579,8 @@ fn a_dyn_interface_may_not_take_or_return_self_by_value_or_be_generic_e0510() {
     assert_eq!(
         got,
         vec![
+            ("E0510".to_string(), 6),
+            ("E0510".to_string(), 6),
             ("E0510".to_string(), 6),
             ("E0510".to_string(), 6),
             ("E0510".to_string(), 6)
@@ -1992,7 +1994,7 @@ fn impls_of_the_builtin_interfaces_are_checked_against_their_declarations() {
          struct It { n: i64 }\n\
          impl Iter for It {\n\
              type Item = i64;\n\
-             fn next(self: &mut It) -> ?i64 from self.* { return .none; }\n\
+             fn next(self: &mut It) -> ?i64 { return .none; }\n\
          }\n",
     );
     assert_eq!(d.codes(), vec![]);
@@ -2008,7 +2010,7 @@ fn impls_of_the_builtin_interfaces_are_checked_against_their_declarations() {
          impl Format for R { fn format(self: &R, out: &mut Formatter) { } fn extra(self: &R) { } }\n\
          struct It { n: i64 }\n\
          impl Iter for It {\n\
-             fn next(self: &mut It) -> ?i64 from self.* { return .none; }\n\
+             fn next(self: &mut It) -> ?i64 { return .none; }\n\
          }\n\
          struct Jt { n: i64 }\n\
          impl Iter for Jt {\n\
@@ -2172,11 +2174,11 @@ fn builtin_types_implement_what_section_4_4_lists() {
     let void = d.kind(TyKind::Void);
     table.push(("void".into(), void, [n; 5]));
     let tuple = d.kind(TyKind::Tuple(vec![i64_ty, i64_ty]));
-    table.push(("tuple".into(), tuple, [n; 5]));
+    table.push(("tuple".into(), tuple, [y, y, y, n, n]));
     let r = d.kind(TyKind::Ref(Mutability::Shared, i64_ty));
-    table.push(("&i64".into(), r, [n; 5]));
+    table.push(("&i64".into(), r, [y, y, y, n, n]));
     let o = d.kind(TyKind::Optional(i64_ty));
-    table.push(("?i64".into(), o, [n; 5]));
+    table.push(("?i64".into(), o, [y, y, y, n, n]));
     let arr = d.kind(TyKind::Array(
         u8_ty,
         ConstArg::Value(ConstValue::Int {
@@ -2184,14 +2186,14 @@ fn builtin_types_implement_what_section_4_4_lists() {
             value: 4,
         }),
     ));
-    table.push(("[4]u8".into(), arr, [n; 5]));
+    table.push(("[4]u8".into(), arr, [y, y, y, n, n]));
     // Slices of `u8` format, `[]u8` and `[]mut u8` alike (section 4.4).
     let s = d.kind(TyKind::Slice(Mutability::Shared, u8_ty));
-    table.push(("[]u8".into(), s, [n, n, n, y, n]));
+    table.push(("[]u8".into(), s, [y, y, y, y, n]));
     let s = d.kind(TyKind::Slice(Mutability::Mut, u8_ty));
-    table.push(("[]mut u8".into(), s, [n, n, n, y, n]));
+    table.push(("[]mut u8".into(), s, [y, y, y, y, n]));
     let s = d.kind(TyKind::Slice(Mutability::Shared, i64_ty));
-    table.push(("[]i64".into(), s, [n; 5]));
+    table.push(("[]i64".into(), s, [y, y, y, n, n]));
     // Vectors and masks format, and nothing else (section 4.4).
     let v = d.kind(TyKind::Vector(crate::Lane::Float(crate::FloatTy::F32), 4));
     table.push(("f32x4".into(), v, [n, n, n, y, n]));
@@ -2468,11 +2470,11 @@ fn e0508_e0509_the_new_conditions() {
 
 #[test]
 fn e0812_e0813_constants_and_generic_argument_kinds() {
-    let d = app("struct Ring[T, const N: i64] { items: [N]T }\n\
+    let d = app("struct Ring[T, const n: i64] { items: [n]T }\n\
          struct W[T] { t: T }\n\
          struct A { a: Ring[u8, i64], b: Ring[u8, []u8], c: Ring[u8, 4], d: Ring[u8, { 2 + 2 }] }\n\
          struct B { a: W[4], b: W[{ 1 }], c: W[u8] }\n\
-         struct G[const N: i64] { a: Ring[u8, N], b: Ring[N, u8] }\n");
+         struct G[const n: i64] { a: Ring[u8, n], b: Ring[n, u8] }\n");
     assert_eq!(
         d.codes(),
         vec![
@@ -2480,7 +2482,7 @@ fn e0812_e0813_constants_and_generic_argument_kinds() {
             ("E0813".to_string(), 3),
             ("E0813".to_string(), 4),
             ("E0813".to_string(), 4),
-            // `Ring[N, u8]`: a constant for the type parameter, a type for the constant.
+            // `Ring[n, u8]`: a constant for the type parameter, a type for the constant.
             ("E0813".to_string(), 5),
             ("E0813".to_string(), 5)
         ]

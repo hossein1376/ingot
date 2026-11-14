@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4
+
+impl i64 { //~ E0506
+    fn double(self: i64) -> i64 {
+        return self * 2;
+    }
+}

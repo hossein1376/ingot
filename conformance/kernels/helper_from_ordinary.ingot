@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 27.1
+
+kernel fn add(a: i32, b: i32) -> i32 {
+    return a +% b;
+}
+
+fn f(a: i32) -> i32 {
+    return add(a, 2);
+}

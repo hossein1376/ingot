@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3, 15
+
+fn f(s: []u8) -> *u8 {
+    let p = unsafe("nothing here needs it") { s.ptr }; //~ E1304
+    return p;
+}

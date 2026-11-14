@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 7
+
+const max_len: i64 = 4;
+
+fn f() -> i64 {
+    let max_len: i64 = 1; //~ E0309
+    return max_len;
+}
+
+fn g(max_len: i64) -> i64 { //~ E0309
+    return max_len;
+}

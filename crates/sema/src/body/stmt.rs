@@ -375,6 +375,9 @@ impl Checker<'_, '_> {
         let name = self.name(t);
         let discardable = self.cx.d.props(t).discard() == Tri::Yes;
         let edit = self.edit(Span::empty(span.start), "_ = ");
+        if self.branch_tail == Some(span) {
+            return true;
+        }
         let d = self.err(
             "E0413",
             format!("this call returns `{name}`, which is not used"),
@@ -633,11 +636,10 @@ impl Checker<'_, '_> {
         }
         let poison = self.poison();
         let (info, linear) = match range_end {
-            Some((inclusive, hi)) => (self.for_range(iter, hi, inclusive, step, index), false),
+            Some((inclusive, hi)) => (self.for_range(iter, hi, inclusive, step), false),
             None => {
                 if let Some(st) = step {
                     self.expr(st, None);
-                    self.ni("`step` on a `for` that is not over a range");
                 }
                 if par {
                     let t = self.expr(iter, None);
@@ -702,13 +704,8 @@ impl Checker<'_, '_> {
         hi: ExprId,
         inclusive: bool,
         step: Option<ExprId>,
-        index: Option<&hir::ForVar>,
     ) -> Option<ForInfo> {
         let (l, r) = self.operands(lo, hi, None);
-        if let Some(ix) = index {
-            self.ni("a counter variable on a `for` over a range (the specification gives it for collections only)");
-            let _ = ix;
-        }
         if self.is_poison(l) || self.is_poison(r) {
             if let Some(st) = step {
                 self.expr(st, None);

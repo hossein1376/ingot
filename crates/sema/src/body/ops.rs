@@ -224,11 +224,20 @@ impl Checker<'_, '_> {
                     return self.default_int_literal(e, value, negative);
                 }
                 if poss.float && !(poss.signed || poss.unsigned) {
-                    self.ni(
-                        "an integer literal where a floating-point type parameter is expected \
-                         (specification sections 1 and 3 do not say whether it converts)",
-                    );
-                    return self.poison();
+                    let h = hint.expect("a hint");
+                    if !int_fits_float(value, FloatTy::F32) {
+                        let text = self.text(span).to_string();
+                        self.err(
+                            "E0405",
+                            format!(
+                                "the literal {text} is not a value of every type the bound \
+                                 `Float` allows"
+                            ),
+                            span,
+                        );
+                        return self.poison();
+                    }
+                    return h;
                 }
                 // The literal must fit every type the bounds allow.
                 let lo: i128 = if poss.unsigned {
@@ -240,16 +249,38 @@ impl Checker<'_, '_> {
                 };
                 let hi: i128 = if poss.signed { 127 } else { 255 };
                 if value > i128::MAX as u128 || signed_value < lo || signed_value > hi {
-                    self.ni(
-                        "an integer literal that does not fit every type a numeric bound allows \
-                         (the specification does not say how a literal is typed as a type \
-                         parameter)",
+                    let text = self.text(span).to_string();
+                    self.err(
+                        "E0405",
+                        format!(
+                            "the literal {text} is not a value of every type the numeric bound \
+                             allows"
+                        ),
+                        span,
                     );
                     return self.poison();
                 }
                 h
             }
             _ => self.default_int_literal(e, value, negative),
+        }
+    }
+
+    /// Whether `e` contains a float literal, through parentheses and unary or binary
+    /// untyped arithmetic.
+    fn has_float_literal(&self, e: ExprId) -> bool {
+        match &self.hir.expr(e).kind {
+            ExprKind::Float(_) => true,
+            ExprKind::Paren(i) => self.has_float_literal(*i),
+            ExprKind::Unary {
+                op: UnOp::Neg | UnOp::NegWrap,
+                expr,
+                ..
+            } => self.has_float_literal(*expr),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.has_float_literal(*lhs) || self.has_float_literal(*rhs)
+            }
+            _ => false,
         }
     }
 
@@ -294,10 +325,10 @@ impl Checker<'_, '_> {
                 if poss.float && !(poss.signed || poss.unsigned) {
                     h
                 } else if poss.float {
-                    // `Num`: a float literal is a float, which not every instance is.
-                    self.ni(
-                        "a floating-point literal typed as a `Num` type parameter, which may be \
-                         an integer type (the specification does not say)",
+                    self.err(
+                        "E0401",
+                        "a float literal where the numeric bound allows integer types",
+                        span,
                     );
                     self.poison()
                 } else {
@@ -326,7 +357,19 @@ impl Checker<'_, '_> {
         hint: Option<TypeId>,
     ) -> (TypeId, TypeId) {
         let (lu, ru) = (self.untyped(lhs), self.untyped(rhs));
-        let (l, r) = if lu && !ru {
+        let (l, r) = if lu && ru {
+            // When both operands are untyped, an integer literal takes the type of a
+            // float literal beside it (section 3).
+            if self.has_float_literal(lhs) && !self.has_float_literal(rhs) {
+                let l = self.expr(lhs, hint);
+                let r = self.expr(rhs, Some(l));
+                (l, r)
+            } else {
+                let r = self.expr(rhs, hint);
+                let l = self.expr(lhs, Some(r));
+                (l, r)
+            }
+        } else if lu && !ru {
             let r = self.expr(rhs, hint);
             let l = self.expr(lhs, Some(r));
             (l, r)

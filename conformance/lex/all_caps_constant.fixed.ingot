@@ -1,0 +1,4 @@
+//! expect: accept
+//! section: 1
+
+const max_len: i64 = 4;

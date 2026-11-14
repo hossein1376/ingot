@@ -7,10 +7,11 @@
 
 use super::Checker;
 use crate::hir::{self, ExprId, PatId, PatKind};
-use crate::sigs::ItemSig;
+use crate::sigs::{ItemSig, Tri};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
+use std::collections::BTreeMap;
 
 /// The default binding mode while a pattern descends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,8 +29,47 @@ impl Checker<'_, '_> {
 
     /// The alternatives of a `match` arm.
     pub(crate) fn arm_patterns(&mut self, arm: &hir::Arm, st: TypeId) {
+        let mut first: Option<BTreeMap<String, TypeId>> = None;
         for &p in &arm.patterns {
             self.pattern(p, st);
+            let mut binds = BTreeMap::new();
+            self.pattern_binds(p, &mut binds);
+            match &first {
+                None => first = Some(binds),
+                Some(expected) if expected != &binds => {
+                    let span = self.hir.pat(p).span;
+                    self.err(
+                        "E0603",
+                        "this alternative binds different names or types; every alternative of \
+                         `p | q` binds the same names with the same types",
+                        span,
+                    );
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    fn pattern_binds(&self, p: PatId, out: &mut BTreeMap<String, TypeId>) {
+        match &self.hir.pat(p).kind {
+            PatKind::Bind { local } => {
+                let name = self.hir.local(*local).name.clone();
+                out.insert(name, self.local_ty(*local));
+            }
+            PatKind::Variant {
+                payload: Some(p), ..
+            } => self.pattern_binds(*p, out),
+            PatKind::Tuple(ps) => {
+                for p in ps {
+                    self.pattern_binds(*p, out);
+                }
+            }
+            PatKind::Struct { fields, .. } => {
+                for f in fields {
+                    self.pattern_binds(f.pattern, out);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -71,8 +111,51 @@ impl Checker<'_, '_> {
             return;
         }
         match &pat.kind {
-            PatKind::Wild => self.record(p, ty, 0, PatRes::None),
+            PatKind::Wild => {
+                // Under a borrow (`match &v`) the `_` discards a borrow, not the value.
+                if bm == Bm::Value && !self.is_poison(ty) && !self.is_never(ty) {
+                    let p = self.cx.d.props(ty);
+                    match p.discard() {
+                        Tri::No => {
+                            let name = self.name(ty);
+                            self.err(
+                                "E0414",
+                                format!("`_` cannot discard a value of the linear type `{name}`"),
+                                pat.span,
+                            );
+                        }
+                        Tri::Unknown => self.ni(
+                            "whether the value of a type the specification does not define the \
+                             properties of can be discarded",
+                        ),
+                        Tri::Yes => {}
+                    }
+                }
+                self.record(p, ty, 0, PatRes::None)
+            }
             PatKind::Bind { local } => {
+                // A bare name that is a variant of the scrutinee's enum was meant as
+                // `.name` (section 7.2).
+                let name = self.hir.local(*local).name.clone();
+                let (t, _, _) = self.peel(ty, bm);
+                if !self.is_poison(t)
+                    && self.is_enum_like(t)
+                    && self.variant_named(t, &name).is_some()
+                {
+                    let span = self.hir.pat(p).span;
+                    let tname = self.name(t);
+                    let edit = self.edit(Span::empty(span.start), ".");
+                    self.failed_pats.insert(p);
+                    self.err(
+                        "E0603",
+                        format!(
+                            "`{name}` is a variant of `{tname}`; a bare name binds a new local, \
+                             so write `.name`"
+                        ),
+                        span,
+                    )
+                    .fix("write the variant", edit);
+                }
                 let (lty, mode) = match bm {
                     Bm::Value => {
                         let mode = if self.is_copy(ty) {

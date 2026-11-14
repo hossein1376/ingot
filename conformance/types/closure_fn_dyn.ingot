@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 5.6
+
+fn f(x: i64) -> i64 {
+    let shared = fn[&x]() -> i64 { return x.*; };
+    let p: &dyn Fn() -> i64 = &shared;
+    var y = 1;
+    var exclusive = fn[&mut y](a: i64) -> i64 { y.* += a; return y.*; };
+    let q: &mut dyn FnMut(i64) -> i64 = &mut exclusive;
+    return p() + q(1);
+}

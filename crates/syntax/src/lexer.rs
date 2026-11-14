@@ -556,11 +556,34 @@ impl<'a> Lexer<'a> {
         let first = text.as_bytes()[0];
         if first.is_ascii_uppercase() {
             if text.contains('_') {
-                self.error(
-                    "E0104",
-                    format!("type identifier `{text}` must not contain `_`"),
-                    span,
-                );
+                if text
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                {
+                    let lower = text.to_ascii_lowercase();
+                    let file = self.source.path.clone();
+                    let diag = self.error(
+                        "E0104",
+                        format!(
+                            "`{text}` is an all-capitals name; constants are lower_snake: `{lower}`"
+                        ),
+                        span,
+                    );
+                    diag.fix(
+                        format!("write `{lower}`"),
+                        Edit {
+                            file,
+                            span,
+                            text: lower,
+                        },
+                    );
+                } else {
+                    self.error(
+                        "E0104",
+                        format!("type identifier `{text}` must not contain `_`"),
+                        span,
+                    );
+                }
             }
             self.tokens
                 .push(Token::new(TokenKind::TypeIdent(text.to_string()), span));

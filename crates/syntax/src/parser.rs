@@ -40,6 +40,7 @@ struct Unit {
 #[derive(Clone, Copy, Default)]
 struct Modifiers {
     public: bool,
+    pub_span: Option<Span>,
     inline: bool,
     noinline: bool,
     unsafe_: bool,
@@ -438,11 +439,14 @@ impl<'a> Parser<'a> {
             }
             TokenKind::TypeIdent(name) => {
                 let span = self.bump().span;
-                self.diag(
-                    "E0212",
-                    format!("`{name}` is a type identifier, not a value name"),
-                    span,
-                );
+                // E0104 already reported an invalid spelling; do not report its use too.
+                if !name.contains('_') {
+                    self.diag(
+                        "E0212",
+                        format!("`{name}` is a type identifier, not a value name"),
+                        span,
+                    );
+                }
                 (name, span)
             }
             TokenKind::Keyword(k) if !self.ends_skipped_unit() => {
@@ -609,6 +613,7 @@ impl<'a> Parser<'a> {
                     self.diag("E0213", "duplicate `pub` modifier", self.span());
                 }
                 mods.public = true;
+                mods.pub_span = Some(self.span());
                 self.bump();
                 continue;
             }
@@ -687,12 +692,25 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Interface) => {
                 Item::Interface(self.interface_decl(mods.public, start))
             }
-            TokenKind::Keyword(Kw::Impl) => Item::Impl(self.impl_decl(mods.unsafe_, start)),
+            TokenKind::Keyword(Kw::Impl) => {
+                if let Some(span) = mods.pub_span {
+                    self.diag("E0210", "`pub` is not allowed on an `impl`", span);
+                }
+                Item::Impl(self.impl_decl(mods.unsafe_, start))
+            }
             TokenKind::Keyword(Kw::Const) => Item::Const(self.const_decl(mods.public, start)),
             TokenKind::Keyword(Kw::Static) => Item::Static(self.static_decl(mods.public, start)),
             TokenKind::Keyword(Kw::Type) => Item::TypeAlias(self.type_alias(mods.public, start)),
-            TokenKind::Keyword(Kw::Extern) => Item::Extern(self.extern_block(mods.public, start)),
+            TokenKind::Keyword(Kw::Extern) => {
+                if let Some(span) = mods.pub_span {
+                    self.diag("E0210", "`pub` is not allowed on an `extern` block", span);
+                }
+                Item::Extern(self.extern_block(mods.public, start))
+            }
             TokenKind::Keyword(Kw::Test) | TokenKind::Keyword(Kw::Bench) => {
+                if let Some(span) = mods.pub_span {
+                    self.diag("E0210", "`pub` is not allowed on a `test` or `bench`", span);
+                }
                 Item::Test(self.test_decl(start))
             }
             TokenKind::Keyword(Kw::When) => Item::When(self.when_items(start)),
@@ -755,7 +773,21 @@ impl<'a> Parser<'a> {
         while !self.at(RBracket) && !self.at_eof() {
             let start = self.span().start;
             let is_const = self.eat_kw(Kw::Const);
-            let (name, name_span) = self.expect_type_ident();
+            let (name, name_span) = if is_const {
+                if matches!(self.kind(), TokenKind::TypeIdent(_)) {
+                    let span = self.span();
+                    self.diag(
+                        "E0201",
+                        "a constant generic parameter is a value: write its name in lower_snake",
+                        span,
+                    );
+                    self.expect_type_ident()
+                } else {
+                    self.expect_ident()
+                }
+            } else {
+                self.expect_type_ident()
+            };
             let mut bounds = Vec::new();
             let mut const_ty = None;
             if is_const {
@@ -1053,6 +1085,7 @@ impl<'a> Parser<'a> {
         loop {
             if self.eat_kw(Kw::Pub) {
                 mods.public = true;
+                mods.pub_span = Some(self.tokens[self.pos - 1].span);
             } else if self.eat_kw(Kw::Inline) {
                 mods.inline = true;
             } else if self.eat_kw(Kw::Noinline) {
@@ -1151,6 +1184,15 @@ impl<'a> Parser<'a> {
             let outer = self.enter_unit(Some(RBrace));
             let before = self.pos;
             let mods = self.member_modifiers();
+            if interface.is_some()
+                && let Some(span) = mods.pub_span
+            {
+                self.diag(
+                    "E0210",
+                    "`pub` is not allowed on a member of an interface implementation",
+                    span,
+                );
+            }
             match self.kind().clone() {
                 TokenKind::Keyword(Kw::Fn) => {
                     members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
@@ -1412,6 +1454,17 @@ impl<'a> Parser<'a> {
                 let close = self.expect(RBrace);
                 GenericArg::Const(Expr::new(ExprKind::Paren(Box::new(e)), open.join(close)))
             }
+            // An `IDENT` followed by `.` begins a type path; a lone `IDENT` is a constant.
+            TokenKind::Ident(_)
+                if self.peek_at(1).kind.is_punct(Dot)
+                    && matches!(
+                        self.peek_at(2).kind,
+                        TokenKind::Ident(_) | TokenKind::TypeIdent(_)
+                    ) =>
+            {
+                GenericArg::Ty(self.ty())
+            }
+            TokenKind::Ident(_) => GenericArg::Const(self.primary()),
             _ => GenericArg::Ty(self.ty()),
         }
     }
@@ -1431,7 +1484,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let mutable = self.eat_kw(Kw::Mut);
                 if self.eat_kw(Kw::Dyn) {
-                    let interface = self.path_ty();
+                    let interface = self.bound();
                     let end = self.span().end;
                     return Ty::Dyn {
                         interface: Box::new(interface),
@@ -1965,6 +2018,25 @@ impl<'a> Parser<'a> {
             self.bump();
             step = Some(self.expr());
         }
+        if range_end.is_none()
+            && let Some(ref st) = step
+        {
+            let span = st.span;
+            self.diag(
+                "E0201",
+                "`step` is allowed only on a `for` over a range",
+                span,
+            );
+        }
+        if range_end.is_some()
+            && let Some((_, span)) = index
+        {
+            self.diag(
+                "E0609",
+                "a `for` over a range has no second variable: the value is the counter",
+                span,
+            );
+        }
         let body = self.block();
         let end = body.span.end;
         Stmt::For {
@@ -2407,12 +2479,17 @@ impl<'a> Parser<'a> {
                 );
             } else if self.at_kw(Kw::Catch) {
                 let op = self.bump().span;
+                let mut binding_span = None;
                 let binding = match self.kind().clone() {
                     TokenKind::Ident(name) if name == "_" => {
-                        self.bump();
+                        binding_span = Some(self.bump().span);
                         None
                     }
-                    TokenKind::Ident(_) => Some(self.expect_ident()),
+                    TokenKind::Ident(_) => {
+                        let (name, span) = self.expect_ident();
+                        binding_span = Some(span);
+                        Some((name, span))
+                    }
                     _ => {
                         self.unexpected();
                         None
@@ -2425,6 +2502,7 @@ impl<'a> Parser<'a> {
                     ExprKind::Catch {
                         value: Box::new(expr),
                         binding,
+                        binding_span,
                         handler,
                         catch_span: op,
                     },
@@ -2738,31 +2816,55 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Punct(LBracket) => {
                     let bracket = self.bump().span;
-                    let lo = self.expr();
+                    // `[i]`, `[lo..hi]`, `[lo..]`, `[..hi]` or `[..]`.
                     if self.eat(DotDot) {
-                        let hi = self.expr();
+                        let hi = if self.at(RBracket) {
+                            None
+                        } else {
+                            Some(Box::new(self.expr()))
+                        };
                         let close = self.expect(RBracket);
                         let span = expr.span.join(close);
                         expr = Expr::new(
                             ExprKind::Slice {
                                 base: Box::new(expr),
-                                lo: Box::new(lo),
-                                hi: Box::new(hi),
+                                lo: None,
+                                hi,
                                 bracket: bracket.join(close),
                             },
                             span,
                         );
                     } else {
-                        let close = self.expect(RBracket);
-                        let span = expr.span.join(close);
-                        expr = Expr::new(
-                            ExprKind::Index {
-                                base: Box::new(expr),
-                                index: Box::new(lo),
-                                bracket: bracket.join(close),
-                            },
-                            span,
-                        );
+                        let lo = self.expr();
+                        if self.eat(DotDot) {
+                            let hi = if self.at(RBracket) {
+                                None
+                            } else {
+                                Some(Box::new(self.expr()))
+                            };
+                            let close = self.expect(RBracket);
+                            let span = expr.span.join(close);
+                            expr = Expr::new(
+                                ExprKind::Slice {
+                                    base: Box::new(expr),
+                                    lo: Some(Box::new(lo)),
+                                    hi,
+                                    bracket: bracket.join(close),
+                                },
+                                span,
+                            );
+                        } else {
+                            let close = self.expect(RBracket);
+                            let span = expr.span.join(close);
+                            expr = Expr::new(
+                                ExprKind::Index {
+                                    base: Box::new(expr),
+                                    index: Box::new(lo),
+                                    bracket: bracket.join(close),
+                                },
+                                span,
+                            );
+                        }
                     }
                 }
                 TokenKind::Punct(Dot) => {
@@ -2878,7 +2980,7 @@ impl<'a> Parser<'a> {
                     self.bump();
                     let mut args = Vec::new();
                     while !self.at(RBracket) && !self.at_eof() {
-                        args.push(self.ty());
+                        args.push(self.generic_arg());
                         if !self.eat(Comma) {
                             break;
                         }
@@ -3418,12 +3520,10 @@ impl<'a> Parser<'a> {
         self.in_expr_branch = true;
         let block = self.block_after_open(open);
         self.in_expr_branch = old_flag;
-        self.diag(
-            "E0207",
-            "a branch of an expression-form `if` must hold exactly one expression",
-            block.span,
-        );
-        Expr::poison(block.span)
+        // A block branch is accepted here; phase 7 reports E0207 unless it cannot reach
+        // its end.
+        let span = block.span;
+        Expr::new(ExprKind::Block(block), span)
     }
 
     fn block_after_open(&mut self, open: Span) -> Block {
@@ -3472,12 +3572,8 @@ impl<'a> Parser<'a> {
             self.expect(FatArrow);
             let body = if self.at(LBrace) {
                 let block = self.block();
-                self.diag(
-                    "E0207",
-                    "an arm of an expression-form `match` must hold exactly one expression",
-                    block.span,
-                );
-                ArmBody::Expr(Expr::poison(block.span))
+                let span = block.span;
+                ArmBody::Expr(Expr::new(ExprKind::Block(block), span))
             } else {
                 let e = self.expr();
                 self.eat(Comma);
@@ -3801,8 +3897,12 @@ fn check_expr(expr: &Expr, source: &Source, out: &mut Vec<Diagnostic>) {
         }
         ExprKind::Slice { base, lo, hi, .. } => {
             check_expr(base, source, out);
-            check_expr(lo, source, out);
-            check_expr(hi, source, out);
+            if let Some(lo) = lo {
+                check_expr(lo, source, out);
+            }
+            if let Some(hi) = hi {
+                check_expr(hi, source, out);
+            }
         }
         ExprKind::Field { base, .. } | ExprKind::Deref { base, .. } => {
             check_expr(base, source, out)
@@ -3810,8 +3910,11 @@ fn check_expr(expr: &Expr, source: &Source, out: &mut Vec<Diagnostic>) {
         ExprKind::TupleField { base, .. } => check_expr(base, source, out),
         ExprKind::TypeApply { base, args, .. } => {
             check_expr(base, source, out);
-            for t in args {
-                check_ty(t, source, out);
+            for a in args {
+                match a {
+                    GenericArg::Ty(t) => check_ty(t, source, out),
+                    GenericArg::Const(e) => check_expr(e, source, out),
+                }
             }
         }
         ExprKind::Cast { expr, .. } => check_expr(expr, source, out),
@@ -3868,6 +3971,7 @@ fn check_expr(expr: &Expr, source: &Source, out: &mut Vec<Diagnostic>) {
             }
         }
         ExprKind::Closure { body, .. } => check_block(body, source, out),
+        ExprKind::Block(b) => check_block(b, source, out),
         ExprKind::Catch { value, handler, .. } => {
             check_expr(value, source, out);
             check_handler(handler, source, out);

@@ -1,0 +1,15 @@
+//! expect: accept
+//! section: 5.7
+
+fn f(x: ?i64) -> i64 {
+    let v = match x {
+        .some(y) => y,
+        .none => { return 0; }
+    };
+    return v;
+}
+
+fn g(c: bool) -> i64 {
+    let v = if c { 1 } else { return 2; };
+    return v;
+}

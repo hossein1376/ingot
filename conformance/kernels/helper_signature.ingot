@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn a(x: []i32) -> i32 { //~ E1510
+    return 1;
+}
+
+kernel fn b(x: i32) -> i32 ! i32 { //~ E1510
+    return 1;
+}
+
+kernel fn c(x: i32) -> ?i32 { //~ E1510
+    return .none; //~ E1511
+}

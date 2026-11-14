@@ -193,6 +193,8 @@ pub enum ExprKind {
     /// type used as a value (`Vec3.new`, `lib.Ticket.{...}`, a const parameter).
     /// `m.name` through an imported module is a path too.
     Path(PathRef),
+    /// A block used as an expression branch: it must leave before its end (E0207).
+    Block(BlockId),
     Builtin {
         name: String,
         type_arg: Option<Box<Ty>>,
@@ -221,8 +223,8 @@ pub enum ExprKind {
     },
     Slice {
         base: ExprId,
-        lo: ExprId,
-        hi: ExprId,
+        lo: Option<ExprId>,
+        hi: Option<ExprId>,
         bracket: Span,
     },
     Field {
@@ -240,7 +242,7 @@ pub enum ExprKind {
     },
     TypeApply {
         base: ExprId,
-        args: Vec<Ty>,
+        args: Vec<GenericArg>,
     },
     Cast {
         expr: ExprId,
@@ -287,6 +289,7 @@ pub enum ExprKind {
     Catch {
         value: ExprId,
         binding: Option<LocalId>,
+        binding_span: Option<Span>,
         handler: Handler,
         catch_span: Span,
     },

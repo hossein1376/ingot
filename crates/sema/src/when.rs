@@ -526,8 +526,12 @@ impl Cx<'_> {
             }
             ExprKind::Slice { base, lo, hi, .. } => {
                 self.expr(base);
-                self.expr(lo);
-                self.expr(hi);
+                if let Some(lo) = lo {
+                    self.expr(lo);
+                }
+                if let Some(hi) = hi {
+                    self.expr(hi);
+                }
             }
             ExprKind::Field { base, .. }
             | ExprKind::TupleField { base, .. }
@@ -560,6 +564,7 @@ impl Cx<'_> {
                 }
             }
             ExprKind::Paren(inner) => self.expr(inner),
+            ExprKind::Block(b) => self.block(b),
             ExprKind::If {
                 cond,
                 then,
@@ -944,16 +949,23 @@ fn mentions_expr(e: &Expr, out: &mut BTreeSet<String>) {
         }
         ExprKind::Slice { base, lo, hi, .. } => {
             mentions_expr(base, out);
-            mentions_expr(lo, out);
-            mentions_expr(hi, out);
+            if let Some(lo) = lo {
+                mentions_expr(lo, out);
+            }
+            if let Some(hi) = hi {
+                mentions_expr(hi, out);
+            }
         }
         ExprKind::Field { base, .. }
         | ExprKind::TupleField { base, .. }
         | ExprKind::Deref { base, .. } => mentions_expr(base, out),
         ExprKind::TypeApply { base, args, .. } => {
             mentions_expr(base, out);
-            for t in args {
-                mentions_ty(t, out);
+            for a in args {
+                match a {
+                    GenericArg::Ty(t) => mentions_ty(t, out),
+                    GenericArg::Const(e) => mentions_expr(e, out),
+                }
             }
         }
         ExprKind::Cast { expr, ty, .. } => {
@@ -1012,6 +1024,7 @@ fn mentions_expr(e: &Expr, out: &mut BTreeSet<String>) {
             mentions_expr(scrutinee, out);
             mentions_arms(arms, out);
         }
+        ExprKind::Block(b) => mentions_block(b, out),
         ExprKind::Closure {
             captures,
             params,

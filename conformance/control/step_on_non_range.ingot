@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 7.1
+
+fn f(a: []i64) -> i64 {
+    var s: i64 = 0;
+    for x in a step 2 { //~ E0201
+        s += x;
+    }
+    return s;
+}

@@ -1,0 +1,17 @@
+//! expect: reject
+//! section: 5.6
+
+fn f(x: i64) -> i64 {
+    var y = 1;
+    let a = fn[x]() -> i64 {
+        x = 2; //~ E0606
+        return x;
+    };
+    let b = fn[&mut y]() -> i64 {
+        _ = &mut y; //~ E0610
+        return 0;
+    };
+    _ = a;
+    _ = b;
+    return 0;
+}

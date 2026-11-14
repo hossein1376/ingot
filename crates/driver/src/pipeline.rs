@@ -148,6 +148,17 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         diagnostics.extend(output.diagnostics);
         diagnostics.extend(bodies.declarations.diagnostics);
         diagnostics.extend(bodies.diagnostics);
+        // A bare variant name that E0603 reports is not also an unused binding (E0311);
+        // the binding error is made in phase 4, before the pattern is typed.
+        let pattern_errors: std::collections::BTreeSet<(String, usize, usize)> = diagnostics
+            .iter()
+            .filter(|d| d.code == "E0603")
+            .map(|d| (d.file.clone(), d.span.start, d.span.end))
+            .collect();
+        diagnostics.retain(|d| {
+            !(d.code == "E0311"
+                && pattern_errors.contains(&(d.file.clone(), d.span.start, d.span.end)))
+        });
         not_implemented.extend(output.not_implemented);
         // Phase 7 does what phase 6 reports as unchecked.
         not_implemented.extend(
@@ -194,7 +205,32 @@ pub fn analyze_path(path: &Path) -> io::Result<Analysis> {
 }
 
 pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis> {
-    analyze_with(loader::load_with(path, options.load)?, options)
+    let package = loader::load_with(path, options.load)?;
+    let only = if path.is_file() {
+        let root = &package.root;
+        path.strip_prefix(root)
+            .ok()
+            .map(loader::relative_path)
+            .or_else(|| {
+                path.canonicalize().ok().and_then(|p| {
+                    root.canonicalize()
+                        .ok()
+                        .and_then(|r| p.strip_prefix(&r).ok().map(loader::relative_path))
+                })
+            })
+            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+    } else {
+        None
+    };
+    let mut analysis = analyze_with(package, options)?;
+    // Only that file's source diagnostics: a manifest or command-line diagnostic is
+    // about the whole package and is always printed.
+    if let Some(file) = only {
+        analysis
+            .diagnostics
+            .retain(|d| d.file == file || !d.file.ends_with(".ingot"));
+    }
+    Ok(analysis)
 }
 
 /// A source for a diagnostic that has no file: the command line.

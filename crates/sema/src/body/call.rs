@@ -23,7 +23,7 @@ pub(crate) struct CallTarget {
     pub extra_binders: Vec<DefId>,
     /// Parameters supplied by the receiver of a method call.
     pub skip: usize,
-    pub explicit: Vec<TypeId>,
+    pub explicit: Vec<GenericArg>,
     pub explicit_span: Option<Span>,
 }
 
@@ -105,19 +105,18 @@ impl Checker<'_, '_> {
                 }
                 _ => self.value_call(e, callee, args, args_span),
             },
-            ExprKind::TypeApply { base, args: tys } => {
+            ExprKind::TypeApply { base, args: gargs } => {
                 let b = self.unparen(*base);
                 if let ExprKind::Path(p) = &hir.expr(b).kind
                     && let Res::Def(d) = p.res
                     && matches!(self.def_kind(d), DefKind::Fn | DefKind::ExternFn)
                 {
-                    let lowered: Vec<TypeId> = tys.iter().map(|t| self.lower(t)).collect();
-                    if lowered.iter().any(|t| self.is_poison(*t)) {
-                        self.blind_args(args);
-                        return (self.poison(), ExprRes::None);
-                    }
                     let name_span = p.segments.last().map(|(_, s)| *s).unwrap_or(p.span);
                     let span = self.span_of(callee);
+                    let Some(lowered) = self.lower_explicit_args(gargs, d) else {
+                        self.blind_args(args);
+                        return (self.poison(), ExprRes::None);
+                    };
                     return self.fn_call(
                         e,
                         callee,
@@ -158,13 +157,69 @@ impl Checker<'_, '_> {
 
     // --------------------------------------------------------------- functions
 
+    /// Lower the explicit generic arguments of `f.[..]` against the generics of `def`.
+    pub(crate) fn lower_explicit_args(
+        &mut self,
+        args: &[hir::GenericArg],
+        def: DefId,
+    ) -> Option<Vec<GenericArg>> {
+        let generics = self.cx.d.generics_of(def).to_vec();
+        let mut out = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let g = generics.get(i);
+            match arg {
+                hir::GenericArg::Ty(t) => {
+                    if g.is_some_and(|g| g.is_const) {
+                        self.err(
+                            "E0813",
+                            "this generic parameter is a constant: give it a value, not a type",
+                            t.span,
+                        );
+                        return None;
+                    }
+                    let ty = self.lower(t);
+                    if self.is_poison(ty) {
+                        return None;
+                    }
+                    out.push(GenericArg::Ty(ty));
+                }
+                hir::GenericArg::Const(e) => {
+                    if g.is_some_and(|g| !g.is_const) {
+                        self.err(
+                            "E0813",
+                            "this generic parameter is a type: give it a type, not a constant",
+                            self.span_of(*e),
+                        );
+                        return None;
+                    }
+                    let hint =
+                        g.and_then(|g| g.const_ty)
+                            .and_then(|t| match self.cx.d.types.kind(t) {
+                                TyKind::Int(i) => Some(crate::consteval::ValTy::Int(*i)),
+                                TyKind::Bool => Some(crate::consteval::ValTy::Bool),
+                                _ => None,
+                            });
+                    let Some(hint) = hint else {
+                        self.ni(
+                            "a constant generic argument for a parameter whose type is not an \
+                             integer or bool",
+                        );
+                        return None;
+                    };
+                    out.push(GenericArg::Const(self.cx.const_arg(*e, hint)));
+                }
+            }
+        }
+        Some(out)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn fn_call(
         &mut self,
         e: ExprId,
         callee: ExprId,
         d: DefId,
-        explicit: Vec<TypeId>,
+        explicit: Vec<GenericArg>,
         explicit_span: Option<Span>,
         args: &[ExprId],
         args_span: Span,
@@ -175,13 +230,11 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         };
-        if sig.mods.kernel {
+        if self.is_kernel_sig(&sig) {
             let name = sig.name.clone();
             self.err(
                 "E1515",
-                format!(
-                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not called directly"
-                ),
+                format!("`{name}` is a kernel; it is run only by `dispatch`, not called directly"),
                 name_span,
             );
         }
@@ -216,6 +269,7 @@ impl Checker<'_, '_> {
             ExprRes::Call(Box::new(CallInfo {
                 callee: Callee::Fn(fnref),
                 receiver: None,
+                mode: None,
             })),
         )
     }
@@ -303,12 +357,31 @@ impl Checker<'_, '_> {
                 );
                 return fail(self);
             }
-            for (g, ty) in generics.iter().zip(&t.explicit) {
-                if g.is_const {
-                    self.ni("an explicit argument for a constant generic parameter of a call");
-                    return fail(self);
+            for (g, arg) in generics.iter().zip(&t.explicit) {
+                match (g.is_const, arg) {
+                    (true, GenericArg::Const(c)) => {
+                        s.insert(g.def, GenericArg::Const(*c));
+                    }
+                    (false, GenericArg::Ty(ty)) => {
+                        s.insert(g.def, GenericArg::Ty(*ty));
+                    }
+                    (true, GenericArg::Ty(_)) => {
+                        self.err(
+                            "E0813",
+                            "this generic parameter is a constant: give it a value, not a type",
+                            t.explicit_span.unwrap_or(site.name_span),
+                        );
+                        return fail(self);
+                    }
+                    (false, GenericArg::Const(_)) => {
+                        self.err(
+                            "E0813",
+                            "this generic parameter is a type: give it a type, not a constant",
+                            t.explicit_span.unwrap_or(site.name_span),
+                        );
+                        return fail(self);
+                    }
                 }
-                s.insert(g.def, GenericArg::Ty(*ty));
             }
         }
         let params: Vec<ParamSig> = sig.params[t.skip.min(sig.params.len())..].to_vec();
@@ -614,21 +687,20 @@ impl Checker<'_, '_> {
         if let Bound::Fn(kind, sig) = b {
             let found: Option<FnPtrSig> = match self.kind(ty) {
                 TyKind::Closure(_, idx) => {
-                    self.out.closures.get(&ExprId(idx)).map(|c| c.sig.clone())
+                    let Some(c) = self.out.closures.get(&ExprId(idx)) else {
+                        return Tri::Unknown;
+                    };
+                    if !fn_kind_meets(c.kind, *kind) {
+                        return Tri::No;
+                    }
+                    Some(c.sig.clone())
                 }
                 TyKind::FnPtr(s) if !s.ext => Some(s),
-                TyKind::DynFn(_, k, s) if k == *kind || k == FnKind::Fn => Some(s),
+                TyKind::DynFn(_, k, s) if fn_kind_meets(k, *kind) => Some(s),
                 TyKind::Ref(_, inner) => return self.satisfies_ext(inner, b),
                 _ => None,
             };
             if let Some(f) = found {
-                if matches!(self.kind(ty), TyKind::Closure(..)) && *kind != FnKind::FnOnce {
-                    self.ni(format!(
-                        "whether a closure satisfies `{}` (it needs the move and mutation \
-                         analysis of the ownership checker)",
-                        kind.name()
-                    ));
-                }
                 return Tri::from_bool(
                     f.params == sig.params && f.ret == sig.ret && f.error == sig.error,
                 );
@@ -712,11 +784,30 @@ impl Checker<'_, '_> {
             Some(er) => self.mk(TyKind::Result(sig.ret, er)),
             None => sig.ret,
         };
+        let mode = match &kind {
+            ValueCall::Closure(idx) => self.out.closures.get(idx).map(|c| match c.kind {
+                FnKind::Fn => CallMode::Shared,
+                FnKind::FnMut => CallMode::Exclusive,
+                FnKind::FnOnce => CallMode::Move,
+            }),
+            ValueCall::Bound(k) => Some(match k {
+                FnKind::Fn => CallMode::Shared,
+                FnKind::FnMut => CallMode::Exclusive,
+                FnKind::FnOnce => CallMode::Move,
+            }),
+            ValueCall::DynFn(k) => Some(match k {
+                FnKind::Fn => CallMode::Shared,
+                FnKind::FnMut => CallMode::Exclusive,
+                FnKind::FnOnce => CallMode::Move,
+            }),
+            ValueCall::FnPtr => None,
+        };
         (
             ty,
             ExprRes::Call(Box::new(CallInfo {
                 callee: Callee::Value(kind),
                 receiver: None,
+                mode,
             })),
         )
     }
@@ -739,18 +830,7 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         }
-        let inherent = self.cx.d.inherent_impls(t).into_iter().any(|m| {
-            self.cx
-                .d
-                .impl_sig(m.impl_def)
-                .is_some_and(|s| s.methods.contains_key(name))
-        });
         if let Some(v) = self.variant_named(t, name) {
-            if inherent {
-                self.ni("a variant and an associated function with one name");
-                self.blind_args(args);
-                return (self.poison(), ExprRes::None);
-            }
             return self.variant_call(callee, v, name, args, args_span);
         }
         let Some(c) = self.select_candidate(t, name, name_span, false) else {
@@ -792,6 +872,7 @@ impl Checker<'_, '_> {
             ExprRes::Call(Box::new(CallInfo {
                 callee: Callee::Variant(v),
                 receiver: None,
+                mode: None,
             })),
         )
     }
@@ -1341,13 +1422,11 @@ impl Checker<'_, '_> {
             return (self.poison(), ExprRes::None);
         };
         self.note_unsafe_callee(&sig, self.span_of(e));
-        if sig.mods.kernel {
+        if self.is_kernel_sig(&sig) {
             let name = sig.name.clone();
             self.err(
                 "E1515",
-                format!(
-                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not called directly"
-                ),
+                format!("`{name}` is a kernel; it is run only by `dispatch`, not called directly"),
                 name_span,
             );
         }
@@ -1415,6 +1494,7 @@ impl Checker<'_, '_> {
             ExprRes::Call(Box::new(CallInfo {
                 callee: Callee::Fn(fnref),
                 receiver: recv,
+                mode: None,
             })),
         )
     }
@@ -1566,6 +1646,7 @@ impl Checker<'_, '_> {
             ExprRes::Call(Box::new(CallInfo {
                 callee: Callee::Fn(fnref),
                 receiver: None,
+                mode: None,
             })),
         )
     }
@@ -1615,6 +1696,7 @@ impl Checker<'_, '_> {
         // The captures: the name inside the body has the captured type.
         let mut caps = Vec::new();
         let mut part_tys = Vec::new();
+        let mut kind = FnKind::Fn;
         for cap in &c.captures {
             let outer_ty = match cap.outer {
                 Res::Local(l) => self.local_ty(l),
@@ -1646,6 +1728,11 @@ impl Checker<'_, '_> {
                 self.exclusive_capture(l, cap.span);
             }
             self.bind_local(cap.local, lty, mode);
+            if cm == CaptureMode::ByValue && mode == BindMode::Move {
+                kind = FnKind::FnOnce;
+            } else if cm == CaptureMode::Exclusive && kind == FnKind::Fn {
+                kind = FnKind::FnMut;
+            }
             part_tys.push(lty);
             caps.push(CaptureInfo {
                 local: cap.local,
@@ -1662,6 +1749,7 @@ impl Checker<'_, '_> {
             ClosureInfo {
                 sig: sig.clone(),
                 ty,
+                kind,
                 captures: caps,
                 span: c.span,
             },
@@ -1852,11 +1940,16 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), None);
         };
-        if !sig.mods.kernel {
+        if !self.is_kernel_sig(&sig) {
             let name = sig.name.clone();
+            let what = if self.is_helper_sig(&sig) {
+                "a kernel helper"
+            } else {
+                "not a kernel"
+            };
             self.err(
                 "E1515",
-                format!("`{name}` is not a `kernel fn`; `dispatch` runs a `kernel fn`"),
+                format!("`{name}` is {what}; `dispatch` runs a kernel"),
                 name_span,
             );
             self.blind_args(args);
@@ -2004,5 +2097,14 @@ impl Checker<'_, '_> {
             ExprKind::Call { .. } => "call",
             _ => "other",
         }
+    }
+}
+
+/// `Fn` implies `FnMut`, which implies `FnOnce` (section 5.6).
+fn fn_kind_meets(actual: FnKind, wanted: FnKind) -> bool {
+    match wanted {
+        FnKind::Fn => actual == FnKind::Fn,
+        FnKind::FnMut => matches!(actual, FnKind::Fn | FnKind::FnMut),
+        FnKind::FnOnce => true,
     }
 }

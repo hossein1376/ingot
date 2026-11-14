@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3, 8
+
+fn f[U: Num]() -> U {
+    let x: U = 128; //~ E0405
+    return x;
+}
