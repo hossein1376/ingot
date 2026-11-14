@@ -238,14 +238,52 @@ Prints assembly text. It has no JSON mode.
 These answer questions about a program that otherwise need a text search. They run the
 front end only, and they answer for a package with errors as far as the errors allow.
 
-A query takes a position (`FILE:LINE:COL`) or `--name PATH`.
+A query takes a position (`FILE:LINE:COL`) or `--name PATH`. The package is the one
+`FILE` belongs to (§1). In server mode the position is the argument `at`, as in
+`{"command":"query","args":{"kind":"def","at":"src/io.ingot:41:3"}}`; `kind` is the
+query's name. A query prints no diagnostics. Its summary is
+`{"type":"summary","command":"query","kind":K,"ok":true,"protocol":1,"ms":N}`: `ok` is
+true when the query ran, whatever it found, and a position that is not in the file, or
+a file that does not exist, is a failure (§1).
+
+The rules shared by the queries:
+
+* **What a position names.** The token it selects (§1). An identifier names what it
+  resolves to: a segment of a path in an expression, a type, a pattern or an `import`
+  (each segment names its own module or item), a field or method name after `.`, a
+  variant, a field name in a struct literal or pattern, a local or parameter, or the
+  name in a declaration (which names the declaration itself). `Self` names the
+  interface it is written in, or the target type of the impl. A name that resolved to
+  nothing (poison) names nothing, and so does a built-in name (a scalar type, `Option`,
+  a built-in interface): it has no declaration in a file.
+* **`item`** is one of `module`, `fn` (functions, methods, `extern` functions),
+  `struct`, `enum`, `variant`, `field`, `interface`, `type` (aliases and associated
+  types), `const`, `static`, `test`, `generic` (a generic parameter), `param` and
+  `local` (any other binding).
+* **`path`** is the item's full path (§1): `app.net.Parser` for an item, the item's path
+  and the member's name for a field, a variant or a method of an interface
+  (`app.net.Parser.pos`), the target type's path and the method's name for a method of
+  an `impl` (`app.net.Parser.rest`), and the module path for a module. A test's path
+  is its module's path and its name as written, without quotes. A generic parameter, a
+  parameter and a local have their bare name.
+* **`span`** is the declared name; **`extent`** is the whole declaration, from its first
+  token (after its doc comment) to its last. A parameter or local has no `extent`.
+* **`signature`** is the declaration as written, without its body: what comes before
+  the `{` of a function's or test's block or of a struct's, enum's, interface's or
+  impl's members, with the space before it removed. A `const`, `static`, alias, field
+  or variant is written whole, without a final `;` or `,`. Parameters, locals,
+  generic parameters and modules have none.
+* **`doc`** is the doc comment (specification §1): the run of lines that start,
+  after spaces, with `///`, ending on the line just before the declaration's first
+  token. Each line loses its `///` and one following space; the lines are joined with
+  `\n`. Absent when there is none.
 
 ### `ingot query def`
 
 Where the thing named at the position is declared.
 
 ```json
-{"type":"definition","path":"t.parse.Parser.rest","item":"fn","span":{...},
+{"type":"definition","path":"t.parse.Parser.rest","item":"fn","span":{...},"extent":{...},
  "signature":"fn rest(self: &Parser) -> []u8 from self.*","doc":"..."}
 ```
 
@@ -283,6 +321,13 @@ The type of the expression or binding at the position.
  "properties":{"copy":false,"linear":false,"view":true,"send":true,"sync":true}}
 ```
 
+The answer is for the innermost expression whose span contains the selected token, or
+for the binding when the token is the name a pattern, `let`, `var`, parameter or loop
+binds. `span` is that expression or name. Only the bodies of the package that phase 7
+checked are looked at; a position elsewhere (a signature, a comment, a body of another
+package), or an expression whose type is unknown because of an error, gives no line.
+`of` is written as diagnostics write types.
+
 ### `ingot query borrows FILE:LINE`
 
 The loans that are live at the start of that line, in the function that contains it.
@@ -303,8 +348,13 @@ This is the question behind most E11xx and E12xx diagnostics.
 
 ### `ingot query symbols [PATH] [--match TEXT]`
 
-One `{"type":"symbol","path":P,"item":K,"span":S,"pub":B}` per item, public or not, in
-source order. `--match` keeps items whose path contains the text.
+One `{"type":"symbol","path":P,"item":K,"span":S,"extent":E,"pub":B}` per item, public
+or not, in source order. `--match` keeps items whose path contains the text. The items
+are the declarations of the package's files: functions, `extern` functions, structs and
+their fields, enums and their variants, interfaces and their members, the members of
+impls (an impl itself is not a symbol), constants, statics, aliases and tests. Modules,
+generic parameters, parameters and locals are not symbols. In server mode `PATH` is the
+argument `path`.
 
 ### `ingot rename FILE:LINE:COL NEW [--dry-run]`
 

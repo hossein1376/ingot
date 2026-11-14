@@ -86,8 +86,25 @@ server keeps running.
 **Code actions.** The fixes of the last published diagnostics whose span meets the
 requested range, each as a `quickfix` with a `WorkspaceEdit`.
 
-**Hover** shows the `query type` answer for an expression or binding, and the
-`query def` signature and doc comment for a name.
+**Queries (L3).** Definition, hover and symbol requests are answered after the batch's
+checks, with the same overlays, like code actions. Each runs the front end again; at a
+few milliseconds per run that needs no cache yet.
+
+**Go to definition** returns one `Location` per `definition` line, at its `span` (the
+name). No line gives `null`.
+
+**Hover** asks `query def` and `query type` at the position. The content is Markdown: the
+`signature` in an `ingot` code block (for a parameter or local: `name: type` from the
+type answer), then the `doc`, then `type: T` when the position is an expression whose
+type is not already the signature's subject. Its range is the `type_at` span, else the
+token's. Nothing found gives `null`.
+
+**Document symbols** come from `query symbols` on the document's file, as a flat list of
+`SymbolInformation` with `containerName` = the path without its last segment. (Zed's
+outline panel uses the grammar's `outline.scm`; LSP symbols serve the symbol search.)
+
+**Workspace symbols** run `query symbols --match TEXT` on each package that has an open
+document, in package order, and concatenate the results.
 
 ## Status
 
