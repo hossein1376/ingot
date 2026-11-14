@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 26.2
+
+fn f(v: f32x4) -> f32 {
+    return v[@lanes(f32x4)]; //~ E1502
+}

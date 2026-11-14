@@ -783,11 +783,11 @@ fn function_values_of_unsafe_and_extern_functions() {
         "extern \"c\" { fn puts(s: *u8) -> i32; }\nfn f() -> extern fn(*u8) -> i32 {\n    return puts;\n}\n",
     );
     assert_eq!(b.only_codes(), Vec::<String>::new());
-    // An `unsafe fn` value has no pointer type that keeps `unsafe` (a spec gap).
+    // An `unsafe fn` cannot be used as a value; the pointer could be called safely.
     let b = build("unsafe fn g() {}\nfn f() {\n    let p = g;\n    _ = p;\n}\n");
-    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.only_codes(), ["E1305"]);
     assert!(
-        b.ni()
+        !b.ni()
             .iter()
             .any(|m| m.contains("`unsafe fn` used as a value")),
         "{:?}",
@@ -909,6 +909,165 @@ fn a_static_assert_condition_that_depends_on_a_generic_is_left_for_instantiation
 fn vector_conversions_and_lane_indices() {
     let b = build(
         "fn widen(v: u8x16) -> u16x16 { return v as u16x16; }\nfn sat(v: f32x4) -> i32x4 { return @sat(i32x4, v); }\nfn wrap(v: u8x16) -> u16x16 { return @wrap(u16x16, v); }\nfn near(v: i32x4) -> f32x4 { return @nearest(f32x4, v); }\nfn same(v: u8x16) -> [16]u8 { return @bits([16]u8, v); }\nfn pick(m: boolx4, a: f32x4, b: f32x4) -> f32x4 { return @select(m, a, b); }\nfn lane(v: f32x4) -> f32 { return v[2]; }\nfn ins(v: f32x4) -> f32x4 { return @insert(v, 2, 1.0); }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn kernel_members_and_dispatch_are_typed() {
+    let b = build(
+        "import std.exec;\nkernel fn dot(i: Idx, x: []f32, y: []f32) -> f32 reduce(+) {\n    let p: i32 = i.pos();\n    let q: Idx = i.offset(-1);\n    return x[i] * y[i] + x.at_clamped(q) + x.at_or(i, 0.0) + @nearest(f32, p);\n}\nfn f(x: []f32, y: []f32) -> f32 {\n    return dispatch dot(x, y) over 0..4 on exec.simd;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(!b.body("dot").failed);
+    let body = b.body("f");
+    let dispatch = b.exprs("f", |e| matches!(e.kind, ExprKind::Dispatch { .. }));
+    let ExprRes::Dispatch(info) = &body.exprs[&dispatch[0]].res else {
+        panic!("dispatch info")
+    };
+    assert_eq!(info.kernel, b.def("dot"));
+    assert!(info.reduce);
+    assert_eq!(b.display(body.exprs[&dispatch[0]].ty), "f32");
+    assert_eq!(b.display(info.executor_ty), "Simd");
+    let _ = &info.lo;
+    let _ = &info.hi;
+}
+
+#[test]
+fn a_kernel_forbids_blocking_borrowing_closures_and_unsafe() {
+    let b = build(
+        "fn work() { }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    scope s { spawn work() in s; }\n    let r = &x[i];\n    let f = fn []() -> i32 { return 1; };\n    let n = f();\n    let u = unsafe(\"x is valid\") { x.ptr };\n    _ = u;\n    y[i] = r.* + @nearest(f32, n);\n}\n",
+    );
+    let codes = b.only_codes();
+    assert!(codes.iter().all(|c| c == "E1511"), "{codes:?}");
+    assert!(codes.len() >= 4, "{codes:?}");
+    assert!(
+        !b.ni()
+            .iter()
+            .any(|m| m.contains("spawn") || m.contains("par for")),
+        "{:?}",
+        b.ni()
+    );
+}
+
+#[test]
+fn a_closure_in_a_helper_is_reported_once() {
+    let b = build(
+        "fn h(a: f32) -> f32 { let c = fn[]() -> f32 { return 1.0; }; return a + c(); }\nkernel fn k(i: Idx, y: []mut f32) { y[i] = h(1.0); }\n",
+    );
+    assert_eq!(b.only_codes(), ["E1511"]);
+}
+
+#[test]
+fn a_kernel_statement_dispatch_is_recorded() {
+    let b = build(
+        "import std.exec;\nkernel fn saxpy(i: Idx, a: f32, x: []f32, y: []mut f32) {\n    y[i] = a * x[i] + y[i];\n}\nfn f(x: []f32, y: []mut f32) {\n    dispatch saxpy(2.0, x, y) over 0..4 on exec.simd;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    assert!(
+        body.stmts
+            .values()
+            .any(|s| matches!(s, StmtInfo::Dispatch(info) if !info.reduce))
+    );
+}
+
+#[test]
+fn kernel_calls_of_trapping_helpers_fail_only_the_kernel() {
+    let b = build(
+        "fn inc(a: i32) -> i32 { return a + 1; }\nkernel fn k(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\nkernel fn k2(i: Idx, n: i32) -> i32 reduce(+) { return inc(n); }\n",
+    );
+    assert_eq!(b.only_codes(), ["E1512"]);
+    assert!(b.body("k").failed);
+    assert!(b.body("k2").failed);
+    assert!(!b.body("inc").failed);
+}
+
+#[test]
+fn non_trapping_kernel_operations_are_accepted() {
+    let b = build(
+        "kernel fn k(i: Idx, n: i32, x: []i32, y: []mut i32) {\n    let a = @div_or(x[i], n, 0);\n    let b = @rem_or(a, n, 0);\n    let c = @shl(b, n);\n    y[i] = c +% 1;\n    let f: f32 = @nearest(f32, c);\n    _ = f;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn dispatch_storage_mismatch_is_e1518() {
+    let b = build(
+        "import std.exec;\nkernel fn k(i: Idx, x: []f32) { }\nfn f(x: f32) {\n    dispatch k(x) over 0..4 on exec.seq;\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E0401", "E1518"]);
+}
+
+#[test]
+fn lanes_is_a_constant_in_an_index() {
+    let b = build("fn f(v: f32x4) -> f32 {\n    return v[@lanes(f32x4) - 1];\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn an_extern_fn_pointer_call_uses_its_unsafe_block() {
+    let b = build(
+        "extern \"c\" { fn puts(s: *u8) -> i32; }\nfn f(s: *u8) -> i32 {\n    let p = puts;\n    return unsafe(\"p is puts\") { p(s) };\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn an_unsafe_fn_value_inside_unsafe_is_e1305_and_e1304() {
+    let b = build(
+        "unsafe fn g() { }\nfn f() {\n    let p = unsafe(\"nothing\") { g };\n    _ = p;\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1304", "E1305"]);
+}
+
+#[test]
+fn an_index_type_written_in_a_non_kernel_body_is_e1510() {
+    let b = build("fn f() {\n    let i: Idx = @zero;\n    _ = i;\n}\n");
+    assert_eq!(b.only_codes(), ["E1510"]);
+}
+
+#[test]
+fn float_arithmetic_and_constant_shifts_are_allowed_in_a_kernel() {
+    let b = build(
+        "kernel fn k(i: Idx, n: i32, x: []f32, y: []mut f32) {\n    let a = -x[i];\n    let b = x[i] / 2.0;\n    let c = n << 3;\n    y[i] = a + b + @nearest(f32, c);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn idx_has_the_properties_and_layout_of_a_kernel_index() {
+    let mut b = build("kernel fn k(i: Idx) {\n    let n: i64 = @sizeof(Idx);\n    _ = n;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("k");
+    let ty = body
+        .locals
+        .iter()
+        .find(|(l, _)| b.package().local(**l).name == "i")
+        .map(|(_, i)| i.ty)
+        .expect("the index parameter");
+    let p = b.bodies.declarations.props(ty);
+    assert_eq!(p.copy, crate::sigs::Tri::Yes);
+    assert_eq!(p.discard(), crate::sigs::Tri::Yes);
+    assert_eq!(p.send, crate::sigs::Tri::Yes);
+    assert_eq!(p.sync, crate::sigs::Tri::Yes);
+    assert_eq!(p.view, crate::sigs::Tri::No);
+    let layout = b.bodies.declarations.layout_of(ty).expect("a layout");
+    assert_eq!((layout.size, layout.align), (4, 4));
+}
+
+#[test]
+fn a_plain_helper_called_from_a_kernel_is_accepted() {
+    let b = build(
+        "fn scale(a: f32) -> f32 { return a * 2.0; }\nkernel fn k(i: Idx, x: []f32, y: []mut f32) {\n    y[i] = scale(x[i]);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn a_kernel_matches_a_payload_free_enum() {
+    let b = build(
+        "enum E { a, b }\nkernel fn k(i: Idx) {\n    let e: E = .a;\n    match e { .a => { } .b => { } }\n}\n",
     );
     assert_eq!(b.only_codes(), Vec::<String>::new());
 }

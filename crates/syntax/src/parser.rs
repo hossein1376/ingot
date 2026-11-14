@@ -714,7 +714,7 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.fn_name();
         let generics = self.generics();
         let (params, variadic) = self.params(in_extern);
-        let (ret, error, from, reduce) = self.result();
+        let (ret, error, from, reduce, reduce_span) = self.result();
         let body = if self.at(LBrace) {
             Some(self.block())
         } else {
@@ -730,6 +730,7 @@ impl<'a> Parser<'a> {
             error,
             from,
             reduce,
+            reduce_span,
             mods: FnMods {
                 public: mods.public,
                 inline: mods.inline,
@@ -871,11 +872,12 @@ impl<'a> Parser<'a> {
         (out, variadic)
     }
 
-    fn result(&mut self) -> (Ty, Option<Ty>, Vec<Origin>, Option<String>) {
+    fn result(&mut self) -> (Ty, Option<Ty>, Vec<Origin>, Option<String>, Option<Span>) {
         let mut ret = Ty::Scalar(ScalarTy::Void, self.span());
         let mut error = None;
         let mut from = Vec::new();
         let mut reduce = None;
+        let mut reduce_span = None;
         if self.eat(Arrow) {
             ret = self.ty();
             if self.eat(Bang) {
@@ -912,6 +914,7 @@ impl<'a> Parser<'a> {
                 self.unexpected();
             }
             if self.at_ident("reduce") && self.peek_at(1).kind.is_punct(LParen) {
+                let start = self.span().start;
                 self.bump();
                 self.bump();
                 let (op, _) = match self.kind().clone() {
@@ -931,10 +934,11 @@ impl<'a> Parser<'a> {
                     }
                 };
                 reduce = Some(op);
-                self.expect(RParen);
+                let close = self.expect(RParen);
+                reduce_span = Some(Span::new(start, close.end));
             }
         }
-        (ret, error, from, reduce)
+        (ret, error, from, reduce, reduce_span)
     }
 
     fn struct_decl(&mut self, kind: StructKind, public: bool, start: usize) -> StructDecl {
@@ -3326,7 +3330,7 @@ impl<'a> Parser<'a> {
             self.expect(RBracket);
         }
         let (params, _) = self.params(false);
-        let (ret, error, _, _) = self.result();
+        let (ret, error, _, _, _) = self.result();
         let body = self.block();
         let span = Span::new(start, body.span.end);
         Expr::new(

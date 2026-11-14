@@ -183,6 +183,10 @@ pub enum ExprRes {
     Try(TryInfo),
     /// `Builtin`: the type argument, when the builtin takes one.
     Builtin { type_arg: Option<TypeId> },
+    /// `Idx.pos()` or `Idx.offset(d)` (section 27.1).
+    IdxMethod(IdxMethod),
+    /// `in.at_clamped(j)` or `in.at_or(j, default)` on an input slice.
+    SliceAt { clamped: bool },
     /// `Closure`: see `TypedBody::closures`.
     Closure,
     /// `Deref`: the base is a borrow (`Borrow`) or a raw pointer (`Raw`).
@@ -191,8 +195,31 @@ pub enum ExprRes {
     Borrow(Mutability),
     /// `Spawn`: the type of the task, `Task[R]`, is the expression's type.
     Spawn,
-    /// `Dispatch`.
-    Dispatch,
+    /// `Dispatch`: see [`DispatchInfo`].
+    Dispatch(Box<DispatchInfo>),
+}
+
+/// `Idx.pos()` gives the position; `Idx.offset(d)` gives a neighboring index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdxMethod {
+    Pos,
+    Offset,
+}
+
+/// What later phases need for `dispatch kernel(args) over lo..hi on executor`.
+#[derive(Clone, Debug)]
+pub struct DispatchInfo {
+    pub kernel: DefId,
+    /// The kernel's generic arguments, in order.
+    pub kernel_args: Vec<GenericArg>,
+    pub executor_ty: TypeId,
+    /// The executor expression (an `ExprId` of the body's package).
+    pub executor: ExprId,
+    /// The domain, always one range of `i64` here.
+    pub lo: ExprId,
+    pub hi: ExprId,
+    /// The kernel has a `reduce` clause and therefore returns a value.
+    pub reduce: bool,
 }
 
 /// A reference to a function that is known at compile time.
@@ -402,6 +429,8 @@ pub enum StmtInfo {
     Scope { ty: TypeId },
     /// A compound assignment `place op= value`: the type of the place.
     Assign { ty: TypeId },
+    /// A statement-form `dispatch` (a kernel without `reduce`).
+    Dispatch(Box<DispatchInfo>),
 }
 
 #[derive(Clone, Debug)]

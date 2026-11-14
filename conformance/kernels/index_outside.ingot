@@ -1,0 +1,5 @@
+//! expect: reject
+//! section: 27.1
+
+fn f(i: Idx) { //~ E1510
+}

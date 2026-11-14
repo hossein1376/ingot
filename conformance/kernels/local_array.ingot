@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn k(i: Idx, y: []mut f32) {
+    let a: [4]f32 = @zero; //~ E1511
+    y[i] = a[0];
+}

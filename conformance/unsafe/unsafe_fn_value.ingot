@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 15
+
+unsafe fn danger() {
+}
+
+fn f() {
+    let p = danger; //~ E1305
+    _ = p;
+}

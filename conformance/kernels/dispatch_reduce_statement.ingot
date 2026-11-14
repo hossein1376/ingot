@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 27.2
+
+import std.exec;
+
+kernel fn dot(i: Idx, x: []f32, y: []f32) -> f32 reduce(+) {
+    return x[i] * y[i];
+}
+
+fn f(x: []f32, y: []f32) {
+    dispatch dot(x, y) over 0..4 on exec.simd; //~ E1519
+}

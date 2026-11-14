@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 27.1
+
+fn first(xs: []f32) -> f32 {
+    return xs[0];
+}
+
+kernel fn k(i: Idx, x: []f32) -> f32 reduce(+) {
+    return first(x) + x[i]; //~ E1511
+}

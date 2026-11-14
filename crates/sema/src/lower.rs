@@ -426,6 +426,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
             error,
             from,
             reduce: f.reduce.clone(),
+            reduce_span: f.reduce_span,
             variadic: f.variadic,
             abi,
             body,

@@ -151,7 +151,13 @@ impl Declarations {
                     &[("ok".to_string(), Some(a)), ("err".to_string(), Some(b))],
                 )
             }
-            TyKind::Adt(def, args) => self.adt_layout(ty, def, &args, stack),
+            TyKind::Adt(def, args) => {
+                if Some(def) == self.builtins.idx {
+                    Ok(Layout::scalar(4, 4))
+                } else {
+                    self.adt_layout(ty, def, &args, stack)
+                }
+            }
             TyKind::Param(_) | TyKind::Projection(..) => Err(LayoutError::Params),
             TyKind::Closure(..) => Err(LayoutError::Unspecified(
                 "the layout of a closure (the specification gives none)".to_string(),

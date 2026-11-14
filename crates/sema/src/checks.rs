@@ -27,6 +27,7 @@ impl Cx<'_> {
             iter: self.sema.builtin_def("Iter"),
             format: self.sema.builtin_def("Format"),
             executor: self.sema.builtin_def("Executor"),
+            idx: self.sema.builtin_def("Idx"),
         };
         self.lower_all();
         self.eval_constants();
@@ -35,6 +36,8 @@ impl Cx<'_> {
         self.check_functions();
         self.check_externs();
         self.check_types();
+        self.check_kernel_signatures();
+        self.check_index_type_uses();
         self.check_obligations();
         self.check_main();
         self.note_unchecked_bodies();
@@ -712,6 +715,346 @@ impl Cx<'_> {
     }
 
     // ------------------------------------------------------- functions
+
+    // ------------------------------------------------------- kernels (S4b)
+
+    /// The 1-D index type `Idx`.
+    pub(crate) fn is_idx_type(&self, t: TypeId) -> bool {
+        matches!(
+            self.d.types.kind(t),
+            TyKind::Adt(d, a) if a.is_empty() && Some(*d) == self.d.builtins.idx
+        )
+    }
+
+    /// Whether `Idx` occurs anywhere in `t`.
+    pub(crate) fn type_has_idx(&self, t: TypeId) -> bool {
+        fn go(cx: &Cx<'_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
+            if seen.contains(&t) {
+                return false;
+            }
+            seen.push(t);
+            match cx.d.types.kind(t) {
+                TyKind::Adt(d, a) => {
+                    (a.is_empty() && Some(*d) == cx.d.builtins.idx)
+                        || a.iter().any(|a| match a {
+                            GenericArg::Ty(t) => go(cx, *t, seen),
+                            GenericArg::Const(_) => false,
+                        })
+                }
+                TyKind::Ref(_, x)
+                | TyKind::Slice(_, x)
+                | TyKind::RawPtr(_, x)
+                | TyKind::Optional(x)
+                | TyKind::Array(x, _) => go(cx, *x, seen),
+                TyKind::Result(a, b) => go(cx, *a, seen) || go(cx, *b, seen),
+                TyKind::Tuple(ts) => ts.iter().any(|t| go(cx, *t, seen)),
+                TyKind::FnPtr(s) => {
+                    s.params.iter().any(|t| go(cx, *t, seen))
+                        || go(cx, s.ret, seen)
+                        || s.error.is_some_and(|t| go(cx, t, seen))
+                }
+                TyKind::Dyn(_, _, a) => a.iter().any(|a| match a {
+                    GenericArg::Ty(t) => go(cx, *t, seen),
+                    GenericArg::Const(_) => false,
+                }),
+                _ => false,
+            }
+        }
+        go(self, t, &mut Vec::new())
+    }
+
+    /// A scalar of §27.1: `i32 u32 f32 bool i64 u64 f64`.
+    pub(crate) fn kernel_scalar(&self, t: TypeId) -> bool {
+        match self.d.types.kind(t) {
+            TyKind::Int(i) => matches!(i, IntTy::I32 | IntTy::U32 | IntTy::I64 | IntTy::U64),
+            TyKind::Float(f) => matches!(f, FloatTy::F32 | FloatTy::F64),
+            TyKind::Bool => true,
+            _ => false,
+        }
+    }
+
+    /// A uniform or element type: a kernel scalar, a vector of at most four lanes of
+    /// them, or a `copy struct` of those, recursively. A type parameter is accepted and
+    /// checked per instance later (E1514, phase 11).
+    pub(crate) fn kernel_uniform(&mut self, t: TypeId, depth: u32) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        match self.d.types.kind(t).clone() {
+            TyKind::Param(_) => true,
+            TyKind::Vector(l, n) => {
+                n <= 4
+                    && match l {
+                        Lane::Int(i) => {
+                            matches!(i, IntTy::I32 | IntTy::U32 | IntTy::I64 | IntTy::U64)
+                        }
+                        Lane::Float(f) => matches!(f, FloatTy::F32 | FloatTy::F64),
+                    }
+            }
+            TyKind::Mask(n) => n <= 4,
+            TyKind::Adt(d, args) => {
+                let Some(sig) = self.d.struct_sig(d).cloned() else {
+                    return false;
+                };
+                if sig.kind != StructKind::Copy {
+                    return false;
+                }
+                let s = self.d.subst_for(d, &args);
+                sig.fields.iter().all(|f| {
+                    let ft = self.d.instantiate(f.ty, &s);
+                    self.kernel_uniform(ft, depth + 1)
+                })
+            }
+            _ => self.kernel_scalar(t),
+        }
+    }
+
+    pub(crate) fn kernel_payload_free_enum(&self, t: TypeId) -> bool {
+        match self.d.types.kind(t) {
+            TyKind::Adt(d, _) => self.d.is_payload_free_enum(*d),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn reduce_op_ok(&self, op: &str, t: TypeId) -> bool {
+        let op_ok = |op: &str, signed_int: bool, float: bool, boolean: bool| match op {
+            "+" | "*" => signed_int || float,
+            "min" | "max" => signed_int || float,
+            "&" | "|" | "^" => signed_int || boolean,
+            _ => false,
+        };
+        match self.d.types.kind(t) {
+            TyKind::Int(_) => op_ok(op, true, false, false),
+            TyKind::Float(_) => op_ok(op, false, true, false),
+            TyKind::Bool => op_ok(op, false, false, true),
+            TyKind::Vector(l, _) => match l {
+                Lane::Int(_) => op_ok(op, true, false, false),
+                Lane::Float(_) => op_ok(op, false, true, false),
+            },
+            TyKind::Mask(_) => op_ok(op, false, false, true),
+            TyKind::Param(_) => true,
+            _ => false,
+        }
+    }
+
+    /// E1510 and E1519 for every `kernel fn`, and E1519 for `reduce` on a function that
+    /// is not a kernel.
+    fn check_kernel_signatures(&mut self) {
+        let fns: Vec<FnSig> = self
+            .d
+            .items
+            .values()
+            .filter_map(|s| match s {
+                ItemSig::Fn(f) => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        for f in fns {
+            let file = self.file_of(f.def);
+            if let Some(reduce) = &f.reduce
+                && !f.mods.kernel
+            {
+                let span = f.reduce_span.unwrap_or(f.name_span);
+                self.error(
+                    "E1519",
+                    format!(
+                        "`{}` has `reduce({reduce})` but is not a `kernel fn`",
+                        f.name
+                    ),
+                    file,
+                    span,
+                );
+            }
+            if !f.mods.kernel {
+                continue;
+            }
+            let reduce_span = f.reduce_span.unwrap_or(f.name_span);
+            match f.params.first() {
+                None => {
+                    self.error(
+                        "E1510",
+                        format!(
+                            "`{}` has no parameters; the first parameter of a `kernel fn` must be \
+                             `Idx`",
+                            f.name
+                        ),
+                        file,
+                        f.name_span,
+                    );
+                }
+                Some(p) => {
+                    if !self.d.types.has_poison(p.ty) && !self.is_idx_type(p.ty) {
+                        self.error(
+                            "E1510",
+                            format!(
+                                "the first parameter of a `kernel fn` must be `Idx`, not `{}`",
+                                self.ty_name(p.ty)
+                            ),
+                            file,
+                            p.ty_span,
+                        );
+                    }
+                }
+            }
+            for p in f.params.iter().skip(1) {
+                if self.d.types.has_poison(p.ty) {
+                    continue;
+                }
+                let ok = self.kernel_uniform(p.ty, 0)
+                    || match self.d.types.kind(p.ty) {
+                        TyKind::Slice(_, el) => self.kernel_uniform(*el, 0),
+                        _ => false,
+                    };
+                if !ok {
+                    self.error(
+                        "E1510",
+                        format!(
+                            "this parameter has type `{}`; a `kernel fn` parameter must be \
+                             uniform, an input `[]T` or an output `[]mut T`",
+                            self.ty_name(p.ty)
+                        ),
+                        file,
+                        p.ty_span,
+                    );
+                }
+            }
+            if let Some(e) = f.error {
+                self.error(
+                    "E1510",
+                    format!(
+                        "`{}` has error type `{}`; a `kernel fn` has no error type",
+                        f.name,
+                        self.ty_name(e)
+                    ),
+                    file,
+                    f.error_span.unwrap_or(f.ret_span),
+                );
+            }
+            if f.reduce.is_some() {
+                if f.ret == self.d.types.void {
+                    self.error(
+                        "E1519",
+                        format!(
+                            "`{}` has `reduce` but no result; `reduce` needs a result to combine",
+                            f.name
+                        ),
+                        file,
+                        reduce_span,
+                    );
+                } else if !self.reduce_op_ok(f.reduce.as_deref().unwrap_or(""), f.ret) {
+                    self.error(
+                        "E1519",
+                        format!(
+                            "`reduce({})` is not defined for the result type `{}`",
+                            f.reduce.as_deref().unwrap_or(""),
+                            self.ty_name(f.ret)
+                        ),
+                        file,
+                        reduce_span,
+                    );
+                }
+            } else if f.ret != self.d.types.void {
+                self.error(
+                    "E1510",
+                    format!(
+                        "`{}` returns `{}` without `reduce`; a `kernel fn` has a result only with \
+                         `reduce`",
+                        f.name,
+                        self.ty_name(f.ret)
+                    ),
+                    file,
+                    f.ret_span,
+                );
+            }
+            if self.type_has_idx(f.ret) && f.ret != self.d.types.void {
+                let message = if self.is_idx_type(f.ret) {
+                    "the result type is `Idx`; an index type exists only inside a kernel"
+                        .to_string()
+                } else {
+                    format!(
+                        "the result type `{}` mentions `Idx`; an index type exists only inside a \
+                         kernel",
+                        self.ty_name(f.ret)
+                    )
+                };
+                self.error("E1510", message, file, f.ret_span);
+            }
+        }
+    }
+
+    /// E1510: `Idx` in a field, a non-kernel parameter or result, a `const`/`static`, or
+    /// a type alias.
+    fn check_index_type_uses(&mut self) {
+        let items: Vec<(DefId, ItemSig)> =
+            self.d.items.iter().map(|(d, s)| (*d, s.clone())).collect();
+        for (def, sig) in items {
+            let file = self.file_of(def);
+            match sig {
+                ItemSig::Fn(f) if !f.mods.kernel => {
+                    for p in &f.params {
+                        if self.type_has_idx(p.ty) {
+                            self.index_outside_kernel(p.ty, file, p.ty_span);
+                        }
+                    }
+                    if self.type_has_idx(f.ret) {
+                        self.index_outside_kernel(f.ret, file, f.ret_span);
+                    }
+                    if let Some(e) = f.error
+                        && self.type_has_idx(e)
+                    {
+                        self.index_outside_kernel(e, file, f.error_span.unwrap_or(f.ret_span));
+                    }
+                }
+                ItemSig::Struct(s) => {
+                    for f in &s.fields {
+                        if self.type_has_idx(f.ty) {
+                            self.index_outside_kernel(f.ty, file, f.ty_span);
+                        }
+                    }
+                }
+                ItemSig::Enum(e) => {
+                    for v in &e.variants {
+                        if let Some(t) = v.payload
+                            && self.type_has_idx(t)
+                        {
+                            self.index_outside_kernel(t, file, v.payload_span.unwrap_or(v.span));
+                        }
+                    }
+                }
+                ItemSig::Const(c) => {
+                    if self.type_has_idx(c.ty) {
+                        self.index_outside_kernel(c.ty, file, c.span);
+                    }
+                }
+                ItemSig::Static(s) => {
+                    if self.type_has_idx(s.ty) {
+                        self.index_outside_kernel(s.ty, file, s.span);
+                    }
+                }
+                ItemSig::Alias(a) => {
+                    if let Some(t) = a.ty
+                        && self.type_has_idx(t)
+                    {
+                        self.index_outside_kernel(t, file, a.span);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// E1510 for a type that mentions `Idx` outside a kernel.
+    fn index_outside_kernel(&mut self, ty: TypeId, file: usize, span: Span) {
+        let message = if self.is_idx_type(ty) {
+            "this type is `Idx`; an index type exists only inside a kernel".to_string()
+        } else {
+            format!(
+                "this type `{}` mentions `Idx`; an index type exists only inside a kernel",
+                self.ty_name(ty)
+            )
+        };
+        self.error("E1510", message, file, span);
+    }
 
     fn check_functions(&mut self) {
         let fns: Vec<FnSig> = self

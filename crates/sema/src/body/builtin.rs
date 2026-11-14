@@ -10,224 +10,6 @@ use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
 
-impl Checker<'_, '_> {
-    /// The spans of local variables, parameters and statics read inside `e`: values that
-    /// make it not a constant expression (E0807).
-    pub(crate) fn runtime_reads(&self, e: ExprId) -> Vec<Span> {
-        let mut out = Vec::new();
-        self.collect_runtime_reads(e, &mut out);
-        out
-    }
-
-    fn collect_runtime_reads(&self, e: ExprId, out: &mut Vec<Span>) {
-        use hir::ExprKind;
-        let expr = self.hir.expr(e);
-        match &expr.kind {
-            ExprKind::Int { .. }
-            | ExprKind::Float(_)
-            | ExprKind::Str(_)
-            | ExprKind::CStr(_)
-            | ExprKind::Bool(_)
-            | ExprKind::Poison => {}
-            ExprKind::Path(p) => {
-                let runtime = matches!(p.res, hir::Res::Local(_))
-                    || matches!(p.res, hir::Res::Def(d) if self.def_kind(d) == DefKind::Static);
-                if runtime {
-                    out.push(expr.span);
-                }
-            }
-            ExprKind::Builtin { args, .. } => {
-                for a in args {
-                    self.collect_runtime_reads(*a, out);
-                }
-            }
-            ExprKind::Unary { expr, .. }
-            | ExprKind::TypeApply { base: expr, .. }
-            | ExprKind::Field { base: expr, .. }
-            | ExprKind::TupleField { base: expr, .. }
-            | ExprKind::Deref { base: expr, .. } => self.collect_runtime_reads(*expr, out),
-            ExprKind::Binary { lhs, rhs, .. }
-            | ExprKind::Range {
-                lo: lhs, hi: rhs, ..
-            } => {
-                self.collect_runtime_reads(*lhs, out);
-                self.collect_runtime_reads(*rhs, out);
-            }
-            ExprKind::Call { callee, args, .. } => {
-                self.collect_runtime_reads(*callee, out);
-                for a in args {
-                    self.collect_runtime_reads(*a, out);
-                }
-            }
-            ExprKind::Index { base, index, .. } => {
-                self.collect_runtime_reads(*base, out);
-                self.collect_runtime_reads(*index, out);
-            }
-            ExprKind::Slice { base, lo, hi, .. } => {
-                self.collect_runtime_reads(*base, out);
-                self.collect_runtime_reads(*lo, out);
-                self.collect_runtime_reads(*hi, out);
-            }
-            ExprKind::Cast { expr, .. } => self.collect_runtime_reads(*expr, out),
-            ExprKind::StructLit { fields, .. } | ExprKind::StructShorthand { fields, .. } => {
-                for f in fields {
-                    self.collect_runtime_reads(f.value, out);
-                }
-            }
-            ExprKind::EnumLit { payload, .. } => {
-                if let Some(p) = payload {
-                    self.collect_runtime_reads(*p, out);
-                }
-            }
-            ExprKind::ArrayLit { len, elems, .. } => {
-                self.collect_runtime_reads(*len, out);
-                for x in elems {
-                    self.collect_runtime_reads(*x, out);
-                }
-            }
-            ExprKind::Tuple(elems) => {
-                for x in elems {
-                    self.collect_runtime_reads(*x, out);
-                }
-            }
-            ExprKind::Paren(inner) => self.collect_runtime_reads(*inner, out),
-            ExprKind::If {
-                cond,
-                then,
-                otherwise,
-            } => {
-                self.collect_runtime_reads(cond.expr, out);
-                self.collect_runtime_reads(*then, out);
-                self.collect_runtime_reads(*otherwise, out);
-            }
-            ExprKind::Match { scrutinee, arms } => {
-                self.collect_runtime_reads(*scrutinee, out);
-                for arm in arms {
-                    if let Some(g) = arm.guard {
-                        self.collect_runtime_reads(g, out);
-                    }
-                    match &arm.body {
-                        hir::ArmBody::Expr(x) => self.collect_runtime_reads(*x, out),
-                        hir::ArmBody::Block(b) => self.collect_runtime_reads_block(*b, out),
-                    }
-                }
-            }
-            ExprKind::Closure(c) => self.collect_runtime_reads_block(c.body, out),
-            ExprKind::Catch { value, handler, .. } | ExprKind::Orelse { value, handler, .. } => {
-                self.collect_runtime_reads(*value, out);
-                match handler {
-                    hir::Handler::Expr(x) => self.collect_runtime_reads(*x, out),
-                    hir::Handler::Block(b) => self.collect_runtime_reads_block(*b, out),
-                }
-            }
-            ExprKind::Spawn { call, scope } => {
-                self.collect_runtime_reads(*call, out);
-                self.collect_runtime_reads(*scope, out);
-            }
-            ExprKind::Dispatch {
-                call,
-                domain,
-                executor,
-            } => {
-                self.collect_runtime_reads(*call, out);
-                self.collect_runtime_reads(*domain, out);
-                self.collect_runtime_reads(*executor, out);
-            }
-            ExprKind::Unsafe { body, .. } => self.collect_runtime_reads(*body, out),
-        }
-    }
-
-    fn collect_runtime_reads_block(&self, b: hir::BlockId, out: &mut Vec<Span>) {
-        for s in &self.hir.block(b).stmts {
-            self.collect_runtime_reads_stmt(*s, out);
-        }
-    }
-
-    fn collect_runtime_reads_stmt(&self, s: hir::StmtId, out: &mut Vec<Span>) {
-        use hir::StmtKind;
-        match &self.hir.stmt(s).kind {
-            StmtKind::Let { init, .. } => self.collect_runtime_reads(*init, out),
-            StmtKind::Assign { place, value, .. } => {
-                self.collect_runtime_reads(*place, out);
-                self.collect_runtime_reads(*value, out);
-            }
-            StmtKind::Discard(e) | StmtKind::Expr(e) => self.collect_runtime_reads(*e, out),
-            StmtKind::Return(Some(e)) | StmtKind::Fail(e) => self.collect_runtime_reads(*e, out),
-            StmtKind::Return(None) | StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
-            StmtKind::Defer { body, .. } => self.collect_runtime_reads_block(*body, out),
-            StmtKind::Block(b) => self.collect_runtime_reads_block(*b, out),
-            StmtKind::If {
-                cond,
-                then,
-                otherwise,
-            } => {
-                self.collect_runtime_reads(cond.expr, out);
-                self.collect_runtime_reads_block(*then, out);
-                if let Some(o) = otherwise {
-                    self.collect_runtime_reads_stmt(*o, out);
-                }
-            }
-            StmtKind::While { cond, body, .. } => {
-                self.collect_runtime_reads(cond.expr, out);
-                self.collect_runtime_reads_block(*body, out);
-            }
-            StmtKind::Loop { body, .. } => self.collect_runtime_reads_block(*body, out),
-            StmtKind::For {
-                iter,
-                range_end,
-                step,
-                body,
-                ..
-            } => {
-                self.collect_runtime_reads(*iter, out);
-                if let Some((_, hi)) = range_end {
-                    self.collect_runtime_reads(*hi, out);
-                }
-                if let Some(st) = step {
-                    self.collect_runtime_reads(*st, out);
-                }
-                self.collect_runtime_reads_block(*body, out);
-            }
-            StmtKind::Match { scrutinee, arms } => {
-                self.collect_runtime_reads(*scrutinee, out);
-                for arm in arms {
-                    if let Some(g) = arm.guard {
-                        self.collect_runtime_reads(g, out);
-                    }
-                    match &arm.body {
-                        hir::ArmBody::Expr(x) => self.collect_runtime_reads(*x, out),
-                        hir::ArmBody::Block(b) => self.collect_runtime_reads_block(*b, out),
-                    }
-                }
-            }
-            StmtKind::Scope { body, .. } => self.collect_runtime_reads_block(*body, out),
-            StmtKind::Spawn { call, scope } => {
-                self.collect_runtime_reads(*call, out);
-                self.collect_runtime_reads(*scope, out);
-            }
-            StmtKind::Dispatch {
-                call,
-                domain,
-                executor,
-            } => {
-                self.collect_runtime_reads(*call, out);
-                self.collect_runtime_reads(*domain, out);
-                self.collect_runtime_reads(*executor, out);
-            }
-            StmtKind::Select { arms } => {
-                for arm in arms {
-                    if let Some(call) = arm.call {
-                        self.collect_runtime_reads(call, out);
-                    }
-                    self.collect_runtime_reads_block(arm.body, out);
-                }
-            }
-            StmtKind::Unsafe { body, .. } => self.collect_runtime_reads_block(*body, out),
-            StmtKind::Poison => {}
-        }
-    }
-}
-
 /// A builtin that the specification lists as needing `unsafe` (section 15).
 fn unsafe_builtin(name: &str) -> bool {
     matches!(name, "uninit" | "assume")
@@ -308,7 +90,7 @@ impl Checker<'_, '_> {
         if unsafe_builtin(name) {
             let inside = self.requires_unsafe(span, &format!("`@{name}`"));
             self.blind_args(args);
-            if inside {
+            if inside && !self.kernel {
                 // The specification gives no precise signature for these builtins yet.
                 self.ni(format!(
                     "`@{name}`: the specification does not give its signature precisely"
@@ -571,7 +353,7 @@ impl Checker<'_, '_> {
                 }
                 // A local, a parameter or a static makes the condition not constant
                 // (E0807), at the read.
-                let reads = self.runtime_reads(condition);
+                let reads = crate::consteval::runtime_reads(self.hir, self.cx.sema, condition);
                 if !reads.is_empty() {
                     for at in reads {
                         self.err(
@@ -1178,10 +960,50 @@ impl Checker<'_, '_> {
                 };
                 (ty, None)
             }
-            "fma" | "sqrt" | "abs" | "min" | "max" | "floor" | "ceil" | "round" | "rem"
-            | "div_or" => {
+            "div_or" | "rem_or" => {
+                if !self.arity(e, name, args, 3) {
+                    return (poison, None);
+                }
+                let (a, b) = self.operands(args[0], args[1], None);
+                if self.is_poison(a) || self.is_poison(b) {
+                    self.expr(args[2], None);
+                    return (poison, None);
+                }
+                if matches!(self.kind(a), TyKind::Vector(..))
+                    || matches!(self.kind(b), TyKind::Vector(..))
+                {
+                    self.expr(args[2], None);
+                    self.ni(format!(
+                        "`@{name}` on an integer vector (the specification gives it for integer \
+                         types)"
+                    ));
+                    return (poison, None);
+                }
+                let c = self.expr(args[2], Some(a));
+                if a != b {
+                    self.mismatch(args[1], b, a);
+                    return (poison, None);
+                }
+                if a != c {
+                    self.mismatch(args[2], c, a);
+                    return (poison, None);
+                }
+                if !matches!(self.kind(a), TyKind::Int(_)) {
+                    if matches!(self.kind(a), TyKind::Vector(..)) {
+                        self.ni(format!(
+                            "`@{name}` on an integer vector (the specification gives it for \
+                             integer types)"
+                        ));
+                    } else {
+                        self.builtin_type_error(e, name, "integers", a);
+                    }
+                    return (poison, None);
+                }
+                (a, None)
+            }
+            "fma" | "sqrt" | "abs" | "min" | "max" | "floor" | "ceil" | "round" | "rem" => {
                 let n = match name {
-                    "fma" | "div_or" => 3,
+                    "fma" => 3,
                     "sqrt" | "abs" | "floor" | "ceil" | "round" => 1,
                     _ => 2,
                 };
@@ -1205,8 +1027,7 @@ impl Checker<'_, '_> {
                 let scalar_float = matches!(self.kind(first), TyKind::Float(_));
                 let valid = match (name, self.kind(first)) {
                     ("fma" | "rem", TyKind::Float(_)) => true,
-                    ("div_or", TyKind::Int(_)) => true,
-                    (_, TyKind::Vector(..)) => name != "rem" && name != "div_or",
+                    (_, TyKind::Vector(..)) => name != "rem",
                     _ => false,
                 };
                 if !valid {
@@ -1235,9 +1056,15 @@ impl Checker<'_, '_> {
                 if self.is_poison(x) || self.is_poison(n) {
                     return (poison, None);
                 }
-                if !matches!(self.kind(x), TyKind::Int(_))
-                    || !matches!(self.kind(n), TyKind::Int(_))
-                {
+                let (xk, nk) = (self.kind(x), self.kind(n));
+                if matches!(xk, TyKind::Vector(..)) || matches!(nk, TyKind::Vector(..)) {
+                    self.ni(format!(
+                        "`@{name}` on an integer vector (the specification gives it for \
+                         integer types)"
+                    ));
+                    return (poison, None);
+                }
+                if !matches!(xk, TyKind::Int(_)) || !matches!(nk, TyKind::Int(_)) {
                     self.builtin_type_error(e, name, "integers", x);
                     return (poison, None);
                 }

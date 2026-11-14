@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 27.2
+
+import std.exec;
+
+fn plain(x: []f32) {
+}
+
+fn f(x: []f32) {
+    dispatch plain(x) over 0..4 on exec.seq; //~ E1515
+}

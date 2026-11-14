@@ -99,6 +99,8 @@ pub(crate) struct Checker<'c, 'a> {
     pub poisoned: bool,
     /// The generic parameter definitions in scope (the function's and its impl's).
     pub in_item_init: bool,
+    /// The body is a `kernel fn` (section 27.1).
+    pub kernel: bool,
 }
 
 impl<'c, 'a> Checker<'c, 'a> {
@@ -163,6 +165,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             errors: 0,
             poisoned: false,
             in_item_init: matches!(kind, BodyKind::Const | BodyKind::Static),
+            kernel: false,
         }
     }
 
@@ -284,6 +287,15 @@ impl<'c, 'a> Checker<'c, 'a> {
 
     pub(crate) fn is_result(&self, t: TypeId) -> bool {
         matches!(self.cx.d.types.kind(t), TyKind::Result(..))
+    }
+
+    /// Whether `t` is the 1-D kernel index type `Idx`.
+    pub(crate) fn is_idx_type(&self, t: TypeId) -> bool {
+        matches!(
+            self.kind(t),
+            TyKind::Adt(d, a) if a.is_empty()
+                && Some(d) == self.cx.d.builtins.idx
+        )
     }
 
     /// Strip every borrow from the front of `t`: the type under them, and how many
@@ -413,7 +425,82 @@ impl<'c, 'a> Checker<'c, 'a> {
 
     /// Lower a type written in the body.
     pub(crate) fn lower(&mut self, t: &hir::Ty) -> TypeId {
-        self.cx.lower_ty(t)
+        let at = if self.kernel {
+            None
+        } else {
+            self.idx_type_span(t)
+        };
+        let ty = self.cx.lower_ty(t);
+        if let Some(span) = at {
+            let message = if self.cx.is_idx_type(ty) {
+                "this type is `Idx`; an index type exists only inside a kernel".to_string()
+            } else {
+                let name = self.cx.ty_name(ty);
+                format!(
+                    "this type `{name}` mentions `Idx`; an index type exists only inside a kernel"
+                )
+            };
+            self.err("E1510", message, span);
+        }
+        ty
+    }
+
+    /// The span of the first `Idx` named by a type written in a body.
+    fn idx_type_span(&self, t: &hir::Ty) -> Option<Span> {
+        fn path(this: &Checker<'_, '_>, p: &hir::PathRef, out: &mut Option<Span>) {
+            if out.is_some() {
+                return;
+            }
+            if let hir::Res::Def(d) = p.res
+                && matches!(
+                    this.def_kind(d),
+                    DefKind::Builtin(crate::defs::Builtin::Idx)
+                )
+            {
+                *out = Some(p.span);
+                return;
+            }
+            for a in &p.args {
+                if let hir::GenericArg::Ty(t) = a {
+                    ty(this, t, out);
+                }
+            }
+        }
+        fn ty(this: &Checker<'_, '_>, t: &hir::Ty, out: &mut Option<Span>) {
+            use hir::TyKind as K;
+            if out.is_some() {
+                return;
+            }
+            match &t.kind {
+                K::Path(p) => path(this, p, out),
+                K::Borrow { inner, .. }
+                | K::Slice { elem: inner, .. }
+                | K::Ptr { inner, .. }
+                | K::Optional(inner) => ty(this, inner, out),
+                K::Array { elem, .. } => ty(this, elem, out),
+                K::Tuple(ts) => {
+                    for t in ts {
+                        ty(this, t, out);
+                    }
+                }
+                K::Fn {
+                    params, ret, error, ..
+                } => {
+                    for t in params {
+                        ty(this, t, out);
+                    }
+                    ty(this, ret, out);
+                    if let Some(e) = error {
+                        ty(this, e, out);
+                    }
+                }
+                K::Dyn { interface, .. } => path(this, interface, out),
+                K::Poison => {}
+            }
+        }
+        let mut out = None;
+        ty(self, t, &mut out);
+        out
     }
 
     /// The type a path names (a struct, enum, alias, generic parameter, `Self`, scalar).
@@ -422,7 +509,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             kind: hir::TyKind::Path(p.clone()),
             span: p.span,
         };
-        self.cx.lower_ty(&ty)
+        self.lower(&ty)
     }
 
     /// The generic arguments of `def`'s generics from a substitution, in order. A
@@ -519,9 +606,7 @@ impl Cx<'_> {
             error,
         );
         c.fns[0].error_span = sig.error_span;
-        if f.mods.kernel {
-            c.ni("kernel shape rules E1510 to E1519 of a `kernel fn` body (S4b)");
-        }
+        c.kernel = f.mods.kernel;
         for (p, s) in f.params.iter().zip(&sig.params) {
             let mode = if c.is_copy(s.ty) {
                 BindMode::Copy

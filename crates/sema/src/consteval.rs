@@ -12,7 +12,7 @@
 //! guessed. `ConstValue` is the value type; a later step adds floats, aggregates and
 //! enum values to it.
 
-use crate::defs::{DefId, DefKind};
+use crate::defs::{DefId, DefKind, Sema};
 use crate::hir::{self, ExprId, ExprKind, Res};
 use crate::lowering::{Cur, Cx};
 use crate::sigs::ItemSig;
@@ -284,7 +284,9 @@ impl Cx<'_> {
                     )),
                 }
             }
-            ExprKind::Builtin { name, .. } if name == "sizeof" || name == "alignof" => {
+            ExprKind::Builtin { name, .. }
+                if name == "sizeof" || name == "alignof" || name == "lanes" =>
+            {
                 Ok(Some(ValTy::Int(IntTy::I64)))
             }
             ExprKind::Field { base, name, .. } if self.is_target(pkg, *base) => {
@@ -503,6 +505,35 @@ impl Cx<'_> {
                     ty: IntTy::I64,
                     value: i128::from(value),
                 })
+            }
+            ExprKind::Builtin {
+                name,
+                type_arg,
+                args,
+            } if name == "lanes" && args.is_empty() => {
+                let Some(t) = type_arg else {
+                    return self.not_in_subset(pkg, e);
+                };
+                let ty = self.lower_ty_in(pkg, t);
+                if self.d.types.has_params(ty) {
+                    return Err(Fail::Generic);
+                }
+                match self.d.types.kind(ty) {
+                    TyKind::Vector(_, n) | TyKind::Mask(n) => Ok(ConstValue::Int {
+                        ty: IntTy::I64,
+                        value: i128::from(*n),
+                    }),
+                    TyKind::Poison => Err(Fail::Reported),
+                    _ => {
+                        self.error(
+                            "E0401",
+                            "`@lanes` needs a vector or mask type",
+                            file,
+                            t.span,
+                        );
+                        Err(Fail::Reported)
+                    }
+                }
             }
             ExprKind::Field { base, name, .. } if self.is_target(pkg, *base) => {
                 let t = self.target;
@@ -819,5 +850,238 @@ impl Cx<'_> {
                 ConstArg::Poison
             }
         }
+    }
+}
+
+// ------------------------------------------------------- runtime reads
+
+/// The spans of the locals, parameters and statics read inside `e`: values that make it
+/// not a constant expression (E0807).
+pub(crate) fn runtime_reads(pkg: &hir::Package, sema: &Sema, e: ExprId) -> Vec<Span> {
+    let mut out = Vec::new();
+    collect_runtime_reads(pkg, sema, e, &mut out);
+    out
+}
+
+fn collect_runtime_reads(pkg: &hir::Package, sema: &Sema, e: ExprId, out: &mut Vec<Span>) {
+    let expr = pkg.expr(e);
+    match &expr.kind {
+        ExprKind::Path(p) => {
+            let runtime = matches!(p.res, Res::Local(_))
+                || matches!(p.res, Res::Def(d) if sema.def(d).kind == DefKind::Static);
+            if runtime {
+                out.push(expr.span);
+            }
+        }
+        ExprKind::Builtin { args, .. } => {
+            for a in args {
+                collect_runtime_reads(pkg, sema, *a, out);
+            }
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::TypeApply { base: expr, .. }
+        | ExprKind::Field { base: expr, .. }
+        | ExprKind::TupleField { base: expr, .. }
+        | ExprKind::Deref { base: expr, .. }
+        | ExprKind::Cast { expr, .. } => collect_runtime_reads(pkg, sema, *expr, out),
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Range {
+            lo: lhs, hi: rhs, ..
+        } => {
+            collect_runtime_reads(pkg, sema, *lhs, out);
+            collect_runtime_reads(pkg, sema, *rhs, out);
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_runtime_reads(pkg, sema, *callee, out);
+            for a in args {
+                collect_runtime_reads(pkg, sema, *a, out);
+            }
+        }
+        ExprKind::Index { base, index, .. } => {
+            collect_runtime_reads(pkg, sema, *base, out);
+            collect_runtime_reads(pkg, sema, *index, out);
+        }
+        ExprKind::Slice { base, lo, hi, .. } => {
+            collect_runtime_reads(pkg, sema, *base, out);
+            collect_runtime_reads(pkg, sema, *lo, out);
+            collect_runtime_reads(pkg, sema, *hi, out);
+        }
+        ExprKind::StructLit { fields, .. } | ExprKind::StructShorthand { fields, .. } => {
+            for f in fields {
+                collect_runtime_reads(pkg, sema, f.value, out);
+            }
+        }
+        ExprKind::EnumLit { payload, .. } => {
+            if let Some(p) = payload {
+                collect_runtime_reads(pkg, sema, *p, out);
+            }
+        }
+        ExprKind::ArrayLit { len, elems, .. } => {
+            collect_runtime_reads(pkg, sema, *len, out);
+            for x in elems {
+                collect_runtime_reads(pkg, sema, *x, out);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for x in elems {
+                collect_runtime_reads(pkg, sema, *x, out);
+            }
+        }
+        ExprKind::Paren(inner) => collect_runtime_reads(pkg, sema, *inner, out),
+        ExprKind::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            collect_runtime_reads(pkg, sema, cond.expr, out);
+            collect_runtime_reads(pkg, sema, *then, out);
+            collect_runtime_reads(pkg, sema, *otherwise, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_runtime_reads(pkg, sema, *scrutinee, out);
+            for arm in arms {
+                if let Some(g) = arm.guard {
+                    collect_runtime_reads(pkg, sema, g, out);
+                }
+                match &arm.body {
+                    hir::ArmBody::Expr(x) => collect_runtime_reads(pkg, sema, *x, out),
+                    hir::ArmBody::Block(b) => collect_runtime_reads_block(pkg, sema, *b, out),
+                }
+            }
+        }
+        ExprKind::Closure(c) => collect_runtime_reads_block(pkg, sema, c.body, out),
+        ExprKind::Catch { value, handler, .. } | ExprKind::Orelse { value, handler, .. } => {
+            collect_runtime_reads(pkg, sema, *value, out);
+            match handler {
+                hir::Handler::Expr(x) => collect_runtime_reads(pkg, sema, *x, out),
+                hir::Handler::Block(b) => collect_runtime_reads_block(pkg, sema, *b, out),
+            }
+        }
+        ExprKind::Spawn { call, scope } => {
+            collect_runtime_reads(pkg, sema, *call, out);
+            collect_runtime_reads(pkg, sema, *scope, out);
+        }
+        ExprKind::Dispatch {
+            call,
+            domain,
+            executor,
+        } => {
+            collect_runtime_reads(pkg, sema, *call, out);
+            collect_runtime_reads(pkg, sema, *domain, out);
+            collect_runtime_reads(pkg, sema, *executor, out);
+        }
+        ExprKind::Unsafe { body, .. } => collect_runtime_reads(pkg, sema, *body, out),
+        ExprKind::Int { .. }
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::CStr(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Poison => {}
+    }
+}
+
+fn collect_runtime_reads_block(
+    pkg: &hir::Package,
+    sema: &Sema,
+    b: hir::BlockId,
+    out: &mut Vec<Span>,
+) {
+    for s in &pkg.block(b).stmts {
+        collect_runtime_reads_stmt(pkg, sema, *s, out);
+    }
+}
+
+fn collect_runtime_reads_stmt(
+    pkg: &hir::Package,
+    sema: &Sema,
+    s: hir::StmtId,
+    out: &mut Vec<Span>,
+) {
+    match &pkg.stmt(s).kind {
+        hir::StmtKind::Let { init, .. } => collect_runtime_reads(pkg, sema, *init, out),
+        hir::StmtKind::Assign { place, value, .. } => {
+            collect_runtime_reads(pkg, sema, *place, out);
+            collect_runtime_reads(pkg, sema, *value, out);
+        }
+        hir::StmtKind::Discard(e) | hir::StmtKind::Expr(e) => {
+            collect_runtime_reads(pkg, sema, *e, out)
+        }
+        hir::StmtKind::Return(Some(e)) | hir::StmtKind::Fail(e) => {
+            collect_runtime_reads(pkg, sema, *e, out)
+        }
+        hir::StmtKind::Return(None)
+        | hir::StmtKind::Break { .. }
+        | hir::StmtKind::Continue { .. } => {}
+        hir::StmtKind::Defer { body, .. } | hir::StmtKind::Block(body) => {
+            collect_runtime_reads_block(pkg, sema, *body, out)
+        }
+        hir::StmtKind::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            collect_runtime_reads(pkg, sema, cond.expr, out);
+            collect_runtime_reads_block(pkg, sema, *then, out);
+            if let Some(o) = otherwise {
+                collect_runtime_reads_stmt(pkg, sema, *o, out);
+            }
+        }
+        hir::StmtKind::While { cond, body, .. } => {
+            collect_runtime_reads(pkg, sema, cond.expr, out);
+            collect_runtime_reads_block(pkg, sema, *body, out);
+        }
+        hir::StmtKind::Loop { body, .. } => collect_runtime_reads_block(pkg, sema, *body, out),
+        hir::StmtKind::For {
+            iter,
+            range_end,
+            step,
+            body,
+            ..
+        } => {
+            collect_runtime_reads(pkg, sema, *iter, out);
+            if let Some((_, hi)) = range_end {
+                collect_runtime_reads(pkg, sema, *hi, out);
+            }
+            if let Some(st) = step {
+                collect_runtime_reads(pkg, sema, *st, out);
+            }
+            collect_runtime_reads_block(pkg, sema, *body, out);
+        }
+        hir::StmtKind::Match { scrutinee, arms } => {
+            collect_runtime_reads(pkg, sema, *scrutinee, out);
+            for arm in arms {
+                if let Some(g) = arm.guard {
+                    collect_runtime_reads(pkg, sema, g, out);
+                }
+                match &arm.body {
+                    hir::ArmBody::Expr(x) => collect_runtime_reads(pkg, sema, *x, out),
+                    hir::ArmBody::Block(b) => collect_runtime_reads_block(pkg, sema, *b, out),
+                }
+            }
+        }
+        hir::StmtKind::Scope { body, .. } => collect_runtime_reads_block(pkg, sema, *body, out),
+        hir::StmtKind::Spawn { call, scope } => {
+            collect_runtime_reads(pkg, sema, *call, out);
+            collect_runtime_reads(pkg, sema, *scope, out);
+        }
+        hir::StmtKind::Dispatch {
+            call,
+            domain,
+            executor,
+        } => {
+            collect_runtime_reads(pkg, sema, *call, out);
+            collect_runtime_reads(pkg, sema, *domain, out);
+            collect_runtime_reads(pkg, sema, *executor, out);
+        }
+        hir::StmtKind::Select { arms } => {
+            for arm in arms {
+                if let Some(call) = arm.call {
+                    collect_runtime_reads(pkg, sema, call, out);
+                }
+                collect_runtime_reads_block(pkg, sema, arm.body, out);
+            }
+        }
+        hir::StmtKind::Unsafe { body, .. } => collect_runtime_reads_block(pkg, sema, *body, out),
+        hir::StmtKind::Poison => {}
     }
 }

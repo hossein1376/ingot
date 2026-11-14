@@ -127,6 +127,9 @@ pub struct FnSig {
     pub error: Option<TypeId>,
     pub error_span: Option<Span>,
     pub from: Vec<OriginSig>,
+    pub reduce: Option<String>,
+    /// The span of the `reduce(op)` clause.
+    pub reduce_span: Option<Span>,
     pub variadic: bool,
     pub abi: Option<String>,
     pub has_body: bool,
@@ -489,6 +492,8 @@ pub struct BuiltinNames {
     pub iter: Option<DefId>,
     pub format: Option<DefId>,
     pub executor: Option<DefId>,
+    /// `Idx`, the 1-D kernel index type.
+    pub idx: Option<DefId>,
 }
 
 /// Everything phase 6 knows. Phase 7 starts from this.

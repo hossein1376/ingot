@@ -16,6 +16,7 @@ mod checks;
 pub mod consteval;
 pub mod defs;
 pub mod hir;
+mod kernel;
 mod layout;
 mod lower;
 pub mod lowering;
@@ -220,7 +221,8 @@ pub fn check_bodies(
         target,
         checked,
     );
-    let bodies = cx.check_bodies();
+    let mut bodies = cx.check_bodies();
+    cx.check_kernels(&mut bodies);
     // Only function and test bodies become CFGs; the initializer of a constant or static
     // is typed here and evaluated by constant evaluation.
     if bodies

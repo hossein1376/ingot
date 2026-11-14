@@ -539,12 +539,25 @@ impl Checker<'_, '_> {
             args.push(GenericArg::Ty(*t));
         }
         // An `extern` function's value has the `extern fn` type, which says what it is.
-        // An `unsafe fn` would become a plain `fn` pointer whose calls need no `unsafe`;
-        // the specification has no pointer type that keeps it.
+        if sig.mods.kernel {
+            let name = sig.name.clone();
+            self.err(
+                "E1515",
+                format!(
+                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not used as a value"
+                ),
+                self.span_of(e),
+            );
+            return (self.poison(), ExprRes::None);
+        }
+        // An `unsafe fn` cannot be used as a value: the pointer could be called without
+        // `unsafe` (section 15).
         if sig.mods.unsafe_ {
-            self.ni(
-                "an `unsafe fn` used as a value (the specification has no function pointer \
-                 type that keeps `unsafe`)",
+            let name = sig.name.clone();
+            self.err(
+                "E1305",
+                format!("`{name}` is an `unsafe fn`; it can only be called, not used as a value"),
+                self.span_of(e),
             );
             return (self.poison(), ExprRes::None);
         }
@@ -824,13 +837,15 @@ impl Checker<'_, '_> {
             return;
         }
         // The index of a kernel (section 27.1) indexes slices and grids.
-        if let TyKind::Adt(d, _) = self.kind(t)
-            && matches!(
-                self.def_kind(d),
-                DefKind::Builtin(Builtin::Idx | Builtin::Idx2 | Builtin::Idx3)
-            )
-        {
-            self.ni("E1513 bad_kernel_index: where a kernel index may be used (S4b)");
+        if self.is_idx_type(t) {
+            if !self.kernel {
+                self.err(
+                    "E1513",
+                    "`Idx` appears outside a kernel; an `Idx` indexes a kernel input or output \
+                     only at the kernel's own index",
+                    self.span_of(e),
+                );
+            }
             return;
         }
         if self.unhandled_result(e, t) {
@@ -861,7 +876,7 @@ impl Checker<'_, '_> {
         }
         let span = self.span_of(index);
         let out_of_range = || format!("the lane index must be a constant in `0..{lanes}`");
-        if !self.runtime_reads(index).is_empty() {
+        if !crate::consteval::runtime_reads(self.hir, self.cx.sema, index).is_empty() {
             self.err("E1502", out_of_range(), span);
             return false;
         }
@@ -1586,6 +1601,14 @@ impl Checker<'_, '_> {
         };
         let ctx = self.fnctx();
         self.reject_try_in_consuming_loop(Span::new(op_span.start, op_span.start + 3));
+        if self.kernel {
+            self.err(
+                "E1511",
+                "a kernel cannot use `try` or a fallible operation",
+                op_span,
+            );
+            return (ok, ExprRes::None);
+        }
         if self.defer_depth > ctx.defer_base {
             self.err(
                 "E0708",

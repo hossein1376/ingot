@@ -119,6 +119,8 @@ pub struct FnDecl {
     pub error: Option<Ty>,
     pub from: Vec<Origin>,
     pub reduce: Option<String>,
+    /// The span of the `reduce(op)` clause.
+    pub reduce_span: Option<Span>,
     pub mods: FnMods,
     pub generics: Vec<GenericParam>,
     pub body: Option<Block>,

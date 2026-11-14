@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn shift(i: Idx, x: []f32, y: []mut f32) {
+    let j = i;
+    y[j] = x[i]; //~ E1513
+}

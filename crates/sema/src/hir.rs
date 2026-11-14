@@ -585,6 +585,8 @@ pub struct FnItem {
     pub error: Option<Ty>,
     pub from: Vec<Origin>,
     pub reduce: Option<String>,
+    /// The span of the `reduce(op)` clause.
+    pub reduce_span: Option<Span>,
     pub variadic: bool,
     /// Extern functions: the ABI string of the block they are declared in.
     pub abi: Option<String>,

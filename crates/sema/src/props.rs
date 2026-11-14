@@ -223,6 +223,17 @@ impl Declarations {
             // table when the closure is typed (phase 7), before any use of the type.
             TyKind::Closure(..) => self.props.get(&t).copied().unwrap_or_else(Props::unknown),
             TyKind::Adt(def, args) => {
+                if self.builtins.idx == Some(def) && args.is_empty() {
+                    return Props {
+                        copy: Tri::Yes,
+                        linear: Tri::No,
+                        maybe_linear: Tri::No,
+                        view: Tri::No,
+                        maybe_view: Tri::No,
+                        send: Tri::Yes,
+                        sync: Tri::Yes,
+                    };
+                }
                 let Some(parts) = self.adt_parts(def, &args) else {
                     // A built-in type without a declaration (`Idx`, `Grid[T]`): its
                     // properties are not defined by the specification.

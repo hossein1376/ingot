@@ -49,6 +49,7 @@ pub const BUILTINS: &[&str] = &[
     "reduce_min",
     "reduce_or",
     "rem",
+    "rem_or",
     "replace",
     "round",
     "sat",

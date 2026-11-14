@@ -394,6 +394,7 @@ pub fn name_of(code: &str) -> &'static str {
         "E1302" => "missing_unsafe_reason",
         "E1303" => "unsafe_impl_mismatch",
         "E1304" => "unneeded_unsafe",
+        "E1305" => "unsafe_fn_value",
         "E1401" => "not_send",
         "E1402" => "capture_not_sync",
         "E1403" => "task_borrows_scope_local",

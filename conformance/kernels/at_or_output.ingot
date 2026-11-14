@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn k(i: Idx, y: []mut f32) {
+    y[i] = y.at_or(i, 0.0); //~ E0314
+}

@@ -358,6 +358,8 @@ impl<'a> Cx<'a> {
                     span: o.span,
                 })
                 .collect(),
+            reduce: f.reduce.clone(),
+            reduce_span: f.reduce_span,
             variadic: f.variadic,
             abi: f.abi.clone(),
             has_body: f.body.is_some(),
@@ -1147,19 +1149,25 @@ impl<'a> Cx<'a> {
                     _ => poison,
                 }
             }
-            DefKind::Builtin(Builtin::Idx | Builtin::Idx2 | Builtin::Idx3) => {
+            DefKind::Builtin(Builtin::Idx) => {
                 if !p.args.is_empty() {
                     self.not_generic(p);
                     return poison;
                 }
                 self.d.types.intern(TyKind::Adt(def, Vec::new()))
             }
+            DefKind::Builtin(Builtin::Idx2 | Builtin::Idx3) => {
+                if !p.args.is_empty() {
+                    self.not_generic(p);
+                }
+                self.ni("grid kernels (`Idx2` and `Idx3`) are reserved for a later step");
+                poison
+            }
             DefKind::Builtin(Builtin::Grid | Builtin::GridMut) => {
                 let descs = self.generic_descs(def);
-                match self.lower_args(p, def, &descs) {
-                    Some(args) => self.d.types.intern(TyKind::Adt(def, args)),
-                    None => poison,
-                }
+                let _ = self.lower_args(p, def, &descs);
+                self.ni("grid kernels (`Grid` and `GridMut`) are reserved for a later step");
+                poison
             }
             DefKind::Builtin(_) | DefKind::Interface => {
                 let name = self.sema.def(def).name.clone();

@@ -176,7 +176,14 @@ impl Checker<'_, '_> {
             return (self.poison(), ExprRes::None);
         };
         if sig.mods.kernel {
-            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4b)");
+            let name = sig.name.clone();
+            self.err(
+                "E1515",
+                format!(
+                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not called directly"
+                ),
+                name_span,
+            );
         }
         self.note_unsafe_callee(&sig, self.span_of(e));
         let target = CallTarget {
@@ -639,7 +646,6 @@ impl Checker<'_, '_> {
         args: &[ExprId],
         args_span: Span,
     ) -> (TypeId, ExprRes) {
-        let _ = e;
         let ct = self.expr(callee, None);
         if self.is_poison(ct) || self.is_never(ct) {
             self.blind_args(args);
@@ -649,10 +655,7 @@ impl Checker<'_, '_> {
         let found: Option<(FnPtrSig, ValueCall)> = match self.kind(t) {
             TyKind::FnPtr(s) => {
                 if s.ext {
-                    self.ni(
-                        "whether a call through an `extern fn` pointer needs `unsafe` (section \
-                         15 names calls of `extern` functions, section 29 the pointer type)",
-                    );
+                    self.requires_unsafe(self.span_of(e), "calling through an `extern fn` pointer");
                 }
                 Some((s, ValueCall::FnPtr))
             }
@@ -1155,6 +1158,118 @@ impl Checker<'_, '_> {
 
     // ------------------------------------------------------------ method calls
 
+    /// Methods that belong to a built-in type without a declaration: `Idx.pos`,
+    /// `Idx.offset` and the input-slice `at_clamped`/`at_or` (section 27.1).
+    #[allow(clippy::too_many_arguments)]
+    fn builtin_method(
+        &mut self,
+        callee: ExprId,
+        t0: TypeId,
+        name: &str,
+        name_span: Span,
+        args: &[ExprId],
+        args_span: Span,
+    ) -> Option<(TypeId, ExprRes)> {
+        if let Some(idx) = self.cx.d.builtins.idx
+            && matches!(self.kind(t0), TyKind::Adt(def, ref a) if def == idx && a.is_empty())
+        {
+            let i32_ = self.mk(TyKind::Int(IntTy::I32));
+            let (ret, method, params) = match name {
+                "pos" => (i32_, IdxMethod::Pos, Vec::new()),
+                "offset" => (t0, IdxMethod::Offset, vec![i32_]),
+                _ => {
+                    self.unknown_member(
+                        name,
+                        name_span,
+                        &["pos".to_string(), "offset".to_string()],
+                        t0,
+                    );
+                    self.blind_args(args);
+                    return Some((self.poison(), ExprRes::None));
+                }
+            };
+            if args.len() != params.len() {
+                self.err(
+                    "E0410",
+                    format!(
+                        "`Idx.{name}` takes {} argument(s) but {} {} given",
+                        params.len(),
+                        args.len(),
+                        if args.len() == 1 { "was" } else { "were" }
+                    ),
+                    args_span,
+                );
+                self.blind_args(args);
+                return Some((self.poison(), ExprRes::None));
+            }
+            for (a, p) in args.iter().zip(&params) {
+                self.expect(*a, *p);
+            }
+            let sig = FnPtrSig {
+                ext: false,
+                params: params.clone(),
+                ret,
+                error: None,
+            };
+            let ft = self.mk(TyKind::FnPtr(sig));
+            self.set(callee, ft, ExprRes::None);
+            return Some((ret, ExprRes::IdxMethod(method)));
+        }
+        let TyKind::Slice(m, el) = self.kind(t0) else {
+            return None;
+        };
+        if !matches!(name, "at_clamped" | "at_or") {
+            return None;
+        }
+        if m != Mutability::Shared {
+            self.unknown_member(name, name_span, &[], t0);
+            self.blind_args(args);
+            return Some((self.poison(), ExprRes::None));
+        }
+        let want = if name == "at_clamped" { 1 } else { 2 };
+        if args.len() != want {
+            self.err(
+                "E0410",
+                format!(
+                    "`{name}` takes {want} argument(s) but {} {} given",
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
+                args_span,
+            );
+            self.blind_args(args);
+            return Some((self.poison(), ExprRes::None));
+        }
+        let Some(idx) = self.cx.d.builtins.idx else {
+            self.ni("the builtin type `Idx` is not declared");
+            self.blind_args(args);
+            return Some((self.poison(), ExprRes::None));
+        };
+        let idx_ty = self.mk(TyKind::Adt(idx, Vec::new()));
+        self.expect(args[0], idx_ty);
+        if let Some(default) = args.get(1) {
+            self.expect(*default, el);
+        }
+        let sig = FnPtrSig {
+            ext: false,
+            params: if want == 1 {
+                vec![idx_ty]
+            } else {
+                vec![idx_ty, el]
+            },
+            ret: el,
+            error: None,
+        };
+        let ft = self.mk(TyKind::FnPtr(sig));
+        self.set(callee, ft, ExprRes::None);
+        Some((
+            el,
+            ExprRes::SliceAt {
+                clamped: name == "at_clamped",
+            },
+        ))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn method_call(
         &mut self,
@@ -1184,6 +1299,9 @@ impl Checker<'_, '_> {
             .fix("dereference the pointer first", edit);
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
+        }
+        if let Some(r) = self.builtin_method(callee, t0, name, name_span, args, args_span) {
+            return r;
         }
         let Some(c) = self.select_candidate(t0, name, name_span, true) else {
             self.blind_args(args);
@@ -1224,7 +1342,14 @@ impl Checker<'_, '_> {
         };
         self.note_unsafe_callee(&sig, self.span_of(e));
         if sig.mods.kernel {
-            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4b)");
+            let name = sig.name.clone();
+            self.err(
+                "E1515",
+                format!(
+                    "`{name}` is a `kernel fn`; it is run only by `dispatch`, not called directly"
+                ),
+                name_span,
+            );
         }
         let (source, subst, extra) = self.fn_ref_from(&c, self_ty);
         // The receiver: look through `derefs` borrows, then pass it as `self` says.
@@ -1627,7 +1752,9 @@ impl Checker<'_, '_> {
         value: bool,
     ) -> (TypeId, ExprRes) {
         let _ = e;
-        self.ni("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
+        if !self.kernel {
+            self.ni("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
+        }
         let ct = self.expr(call, None);
         let st = self.expr(scope, None);
         if !self.is_poison(st) && !self.is_never(st) {
@@ -1682,39 +1809,21 @@ impl Checker<'_, '_> {
         executor: ExprId,
     ) -> (TypeId, ExprRes) {
         let _ = e;
-        let t = self.dispatch_value(call, domain, executor);
-        (t, ExprRes::Dispatch)
+        let (t, info) = self.dispatch_call(call, domain, executor);
+        match info {
+            Some(info) => (t, ExprRes::Dispatch(Box::new(info))),
+            None => (t, ExprRes::None),
+        }
     }
 
-    /// The value of `dispatch k(args) over domain on executor`: the kernel's reduced
-    /// value, or `void`. The rules of kernels (E1510 to E1519) belong to the next step.
-    pub(crate) fn dispatch_value(
+    /// The value of `dispatch k(args) over domain on executor` and what later phases need.
+    pub(crate) fn dispatch_call(
         &mut self,
         call: ExprId,
         domain: ExprId,
         executor: ExprId,
-    ) -> TypeId {
-        self.ni("the rules of `dispatch` and kernels: E1510 to E1519 (S4b)");
+    ) -> (TypeId, Option<DispatchInfo>) {
         let hir = self.hir;
-        // The domain: a range, or a tuple of ranges, of `i64`.
-        let mut ranges = Vec::new();
-        match &hir.expr(domain).kind {
-            ExprKind::Range { lo, hi, .. } => ranges.push((*lo, *hi)),
-            ExprKind::Tuple(items) => {
-                for x in items {
-                    if let ExprKind::Range { lo, hi, .. } = &hir.expr(*x).kind {
-                        ranges.push((*lo, *hi));
-                    }
-                }
-            }
-            _ => {}
-        }
-        let i64_ = self.i64_();
-        for (lo, hi) in ranges {
-            self.expect(lo, i64_);
-            self.expect(hi, i64_);
-        }
-        self.expr(executor, None);
         let ExprKind::Call {
             callee,
             args,
@@ -1722,22 +1831,120 @@ impl Checker<'_, '_> {
         } = &hir.expr(call).kind
         else {
             self.expr(call, None);
-            return self.poison();
+            return (self.poison(), None);
         };
         let ExprKind::Path(p) = &hir.expr(*callee).kind else {
+            let span = self.span_of(*callee);
+            self.err(
+                "E1515",
+                "this is not the name of a `kernel fn`; `dispatch` names a `kernel fn` directly",
+                span,
+            );
             self.blind_args(args);
-            self.expr(*callee, None);
-            return self.poison();
+            return (self.poison(), None);
         };
         let Res::Def(d) = p.res else {
             self.blind_args(args);
-            return self.poison();
-        };
-        let Some(sig) = self.fn_sig(d) else {
-            self.blind_args(args);
-            return self.poison();
+            return (self.poison(), None);
         };
         let name_span = p.segments.last().map(|(_, s)| *s).unwrap_or(p.span);
+        let Some(sig) = self.fn_sig(d) else {
+            self.blind_args(args);
+            return (self.poison(), None);
+        };
+        if !sig.mods.kernel {
+            let name = sig.name.clone();
+            self.err(
+                "E1515",
+                format!("`{name}` is not a `kernel fn`; `dispatch` runs a `kernel fn`"),
+                name_span,
+            );
+            self.blind_args(args);
+            return (self.poison(), None);
+        }
+        // The domain: exactly one range of `i64` here (grids are reserved).
+        let mut ranges = Vec::new();
+        let mut other_domain = false;
+        match &hir.expr(domain).kind {
+            ExprKind::Range { lo, hi, .. } => ranges.push((*lo, *hi)),
+            ExprKind::Tuple(items) => {
+                for x in items {
+                    if let ExprKind::Range { lo, hi, .. } = &hir.expr(*x).kind {
+                        ranges.push((*lo, *hi));
+                    } else {
+                        other_domain = true;
+                        self.expr(*x, None);
+                    }
+                }
+            }
+            _ => other_domain = true,
+        }
+        let first_idx = sig
+            .params
+            .first()
+            .map(|p| p.ty)
+            .is_some_and(|t| self.is_idx_type(t));
+        if ranges.len() > 1 {
+            if first_idx {
+                self.err(
+                    "E1517",
+                    format!(
+                        "this domain has {} ranges; a `kernel fn` with `Idx` has one index \
+                         dimension",
+                        ranges.len()
+                    ),
+                    self.span_of(domain),
+                );
+            } else {
+                self.ni("grid kernels (a domain of more than one range) are reserved");
+            }
+        } else if ranges.is_empty() || other_domain {
+            self.err(
+                "E1517",
+                "this is not one range `lo..hi`; the domain of a `dispatch` is one range",
+                self.span_of(domain),
+            );
+            if other_domain {
+                self.expr(domain, None);
+            }
+        }
+        let i64_ = self.i64_();
+        for (lo, hi) in &ranges {
+            self.expect(*lo, i64_);
+            self.expect(*hi, i64_);
+        }
+        let exec_ty = self.expr(executor, None);
+        if !self.is_poison(exec_ty) && !self.is_never(exec_ty) {
+            match self.cx.d.builtins.executor {
+                Some(iface) => {
+                    match self
+                        .cx
+                        .d
+                        .satisfies(exec_ty, &Bound::Interface(iface, Vec::new()))
+                    {
+                        Tri::Yes => {}
+                        Tri::No => {
+                            let n = self.name(exec_ty);
+                            self.err(
+                                "E1516",
+                                format!("`{n}` does not implement `Executor`"),
+                                self.span_of(executor),
+                            );
+                        }
+                        Tri::Unknown => self.ni(
+                            "whether the executor type implements `Executor` (the specification \
+                             does not define it for this type)",
+                        ),
+                    }
+                }
+                None => self.ni("the builtin interface `Executor` is not declared"),
+            }
+        }
+        if ranges.len() != 1 {
+            self.blind_args(args);
+            return (self.poison(), None);
+        }
+        let (lo, hi) = ranges[0];
         let target = CallTarget {
             def: d,
             sig: sig.clone(),
@@ -1753,17 +1960,41 @@ impl Checker<'_, '_> {
             name_span,
             known: BTreeMap::new(),
         };
-        let reduce = matches!(self.cx.hir_item(d), Some(hir::Item::Fn(f)) if f.reduce.is_some());
-        match self.apply_call(&target, &site) {
-            Some(r) => {
-                if reduce {
-                    r.ty
-                } else {
-                    self.void()
-                }
+        let Some(r) = self.apply_call(&target, &site) else {
+            return (self.poison(), None);
+        };
+        // On a CPU executor an input or output is a slice (section 27.2). GPU buffers
+        // are not written yet.
+        for (i, p) in sig.params.iter().enumerate().skip(1) {
+            if !matches!(self.kind(p.ty), TyKind::Slice(..)) {
+                continue;
             }
-            None => self.poison(),
+            let Some(arg) = args.get(i - 1) else { continue };
+            let at = self.ty_of(*arg);
+            if self.is_poison(at) || self.is_never(at) {
+                continue;
+            }
+            if !matches!(self.kind(at), TyKind::Slice(..)) {
+                let n = self.name(at);
+                self.err(
+                    "E1518",
+                    format!("a `dispatch` input or output is a slice, not `{n}`"),
+                    self.span_of(*arg),
+                );
+            }
         }
+        let reduce = sig.reduce.is_some();
+        let ty = if reduce { r.ty } else { self.void() };
+        let info = DispatchInfo {
+            kernel: d,
+            kernel_args: r.fn_args.clone(),
+            executor_ty: exec_ty,
+            executor,
+            lo,
+            hi,
+            reduce,
+        };
+        (ty, Some(info))
     }
 
     /// The type the body of a function mentions: used by the unit tests.

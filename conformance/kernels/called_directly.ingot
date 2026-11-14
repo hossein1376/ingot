@@ -5,6 +5,6 @@ kernel fn twice(i: Idx, x: []f32, y: []mut f32) {
     y[i] = x[i] * 2.0;
 }
 
-fn f(i: Idx, x: []f32, y: []mut f32) {
+kernel fn caller(i: Idx, x: []f32, y: []mut f32) {
     twice(i, x, y); //~ E1515
 }

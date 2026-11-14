@@ -273,11 +273,17 @@ impl Checker<'_, '_> {
                 domain,
                 executor,
             } => {
-                let t = self.dispatch_value(*call, *domain, *executor);
+                let (t, info) = self.dispatch_call(*call, *domain, *executor);
+                if let Some(info) = info {
+                    self.out.stmts.insert(s, StmtInfo::Dispatch(Box::new(info)));
+                }
                 if t != self.void() && !self.is_poison(t) {
-                    self.ni(
-                        "a `dispatch` statement whose kernel returns a value (the specification \
-                         does not say it may be discarded)",
+                    let kw = Span::new(stmt.span.start, stmt.span.start + 8);
+                    self.err(
+                        "E1519",
+                        "this `dispatch` is a statement, but a `reduce` kernel returns a value \
+                         that must be used",
+                        kw,
                     );
                 }
                 true
@@ -499,6 +505,11 @@ impl Checker<'_, '_> {
         }
         let kw = Span::new(stmt_span.start, stmt_span.start + 4);
         self.reject_exit_of_consuming_loop(kw);
+        if self.kernel {
+            self.err("E1511", "a kernel cannot fail", kw);
+            self.expr(e, None);
+            return;
+        }
         match ctx.error {
             Some(et) => {
                 let t = self.expr(e, Some(et));
@@ -610,7 +621,7 @@ impl Checker<'_, '_> {
         step: Option<ExprId>,
         body: BlockId,
     ) {
-        if par {
+        if par && !self.kernel {
             self.ni(
                 "E1401 not_send, E1402 capture_not_sync and E1407 par_for_outer_mutation \
                  (phase 9, S6 to S9)",
@@ -635,10 +646,12 @@ impl Checker<'_, '_> {
                     } else if matches!(self.kind(t), TyKind::Slice(..)) {
                         self.for_collection_typed(iter, t)
                     } else {
-                        self.ni(
-                            "E1406 par_for_not_splittable: whether this type implements \
-                             `par.Split`, which the standard library does not declare yet",
-                        );
+                        if !self.kernel {
+                            self.ni(
+                                "E1406 par_for_not_splittable: whether this type implements \
+                                 `par.Split`, which the standard library does not declare yet",
+                            );
+                        }
                         (None, false)
                     }
                 } else {
