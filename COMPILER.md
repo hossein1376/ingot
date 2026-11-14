@@ -125,8 +125,11 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S1 | Sonnet | `ingot-sema` skeleton, defs, module scopes, imports and visibility, consts/statics/aliases as names, `when` (phase 4) for the selected target, poisoning; E03xx, E0612, E1606, E17xx | `names/*`; new tests for the uncovered E03xx/E17xx codes |
 | S2 | Sonnet | Type table, signatures, generics and bounds, interfaces and impls, type properties, layout (§25); E05xx, E0516, signature-level E08xx, E16xx | new E05xx/E16xx tests |
 | S3 | Sonnet | Bodies: expressions, expected types and literals, operators, conversions, calls and method lookup, structs, enums, `match` exhaustiveness, statements; E04xx, E06xx | `types/*`, `syntax/*` semantics |
-| S4 | Sonnet | Bodies: errors and cleanup (E07xx), generic bodies (E0801–E0803), constant evaluation (E0806–E0810), `unsafe` (E13xx), concurrency/SIMD/kernel shape rules | `errors/*` reject tests, `arith/*` constant tests |
+| S3b | relay | Phase-7 spec decisions: integer literal as float, array `.len`, `&T` to `&dyn I`, `..` in struct patterns, module-qualified builtin type argument | done (78d86f5) |
+| S4 | relay | Bodies: errors and cleanup (E07xx), `unsafe` (E13xx), the phase-7 concurrency shape rules (E1404–E1406, E1408–E1410), `@static_assert` (E0810), vector lane and shape rules (E1502, E1503) | `errors/*`, `unsafe/*` reject tests |
+| S4b | relay | Kernels and `dispatch` (E1510–E1519), after the `Idx`/`Grid` members are specified | `kernels/*` |
 | S5 | Sonnet | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | dumps for every lowering rule |
+| S5b | relay | Constant evaluation of function calls over the CFG (E0806–E0808) | `arith/*` constant tests |
 | S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
 | S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
