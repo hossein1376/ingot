@@ -344,6 +344,12 @@ assignment the target place is evaluated before the value.
 Unary `-` is defined for signed integers and floats, and `-%` for every integer type.
 A shift count may have any integer type.
 
+Builtins that cannot trap, for code that must not (kernels, section 27):
+`@div_or(a, b, fallback)` and `@rem_or(a, b, fallback)` give `a / b` and `a % b`, or
+`fallback` when `b` is zero or the division overflows (`MIN / -1`); `@shl(x, n)` and
+`@shr(x, n)` shift by `n` modulo the bit width. The operands of each have one integer
+type, and the count of a shift may have any integer type.
+
 The behavior is identical in every build. The compiler removes an overflow check when it
 can prove the result is in range (section 31 says exactly when it must), and `ingot cost`
 lists the checks that remain. Code that wants wrapping says so with `+%`.

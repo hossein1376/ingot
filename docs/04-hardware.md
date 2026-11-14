@@ -208,38 +208,80 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
 
 ### 27.1 Rules for a kernel
 
-* The first parameter is the index: `Idx` for one dimension, `Idx2` or `Idx3` for a
-  grid. These are built-in types and need no import. An index is opaque: `i.pos()`
-  gives its position as an `i32` (`.x()`, `.y()`, `.z()` on a grid index), and
-  `i.offset(d)` gives a neighboring index for use with `at_clamped` and `at_or`.
-  Only the kernel's own index parameter, unchanged, may be used with `[]`. The others are **uniforms** (`Copy` scalars, vectors and structs of them),
-  **inputs** (`[]T`, `Grid[T]`) and **outputs** (`[]mut T`, `GridMut[T]`).
+* The first parameter is the index: `Idx` for one dimension. `Idx` is a built-in type
+  and needs no import. An index is opaque: `i.pos()` gives its position as an `i32`, and
+  `i.offset(d)` (with `d: i32`) gives the `Idx` that is `d` positions away, for use with
+  `at_clamped` and `at_or`. Only the kernel's own index parameter, unchanged, may be used
+  with `[]`.
+* An index type exists only inside a kernel: as its first parameter, and as the type of
+  a local or an expression in its body. A field, another parameter, a result or a
+  function that is not a kernel cannot mention it.
+* **Grid kernels are reserved.** `Idx2`, `Idx3`, `Grid[T]`, `GridMut[T]`, the members
+  `.x()`, `.y()` and `.z()`, and a domain of more than one range are for kernels over two
+  and three dimensions. Their layout and members are not specified yet, and a program
+  that uses them is not accepted.
+* The other parameters are **uniforms** (`Copy` scalars, vectors and `copy struct`s of
+  them, by value), **inputs** (`[]T`) and **outputs** (`[]mut T`).
+* A kernel has a result only with `reduce` (below). It has no error type.
 * An output may be written only at the kernel's own index: `out[i] = ...`. It may be
   read at its own index.
 * An input may be read at the kernel's own index with `in[i]`, and elsewhere only with
-  `in.at_clamped(j)` or `in.at_or(j, default)`. There is no way to write an
-  out-of-bounds access, so no bounds trap is needed on any executor.
+  `in.at_clamped(j)`, the element at `j`'s position clamped to `0..in.len`, or
+  `in.at_or(j, default)`, the element at `j`'s position or `default` when that position
+  is outside the input. Both take an `Idx`, so only kernels can use them. There is no way
+  to write an out-of-bounds access, so no bounds trap is needed on any executor.
 * Element and uniform types are built from `i32 u32 f32 bool`, vectors of up to four
   lanes of those, and `copy struct`s of those. `i64 u64 f64` are allowed if the executor
-  supports them, which is known at compile time (Metal does not have `f64`).
-* The body may use `let`, `var`, `if`, `match` on payload-free enums, `for` over a
-  constant range, `while`, and calls to other functions that meet these rules. It may
-  not allocate, borrow, recurse, call through a pointer, spawn, block or fail.
-* Nothing in a kernel traps. Integer `+ - *` and `/ %` are errors inside a kernel: write
-  `+%`, `+|`, `@div_or(a, b, fallback)`. A shift by a count that is not a constant is
-  written `@shl(x, n)` or `@shr(x, n)`, which take the count modulo the width.
-  `@assert`, `@panic` and `@narrow` are not available.
+  supports them, which is known at compile time: `exec.seq`, `exec.simd` and `exec.par`
+  support all three, and section 28 says which a GPU supports (Metal does not have
+  `f64`). Every local and every value computed in a kernel body has one of these types:
+  there are no arrays, borrows, optionals or results in a kernel.
+* The body may use `let`, `var`, `if`, `match` on integers, `bool` and payload-free
+  enums, `for` over a constant range, `while`, `loop`, `break`, `continue`, `return`, the
+  builtins of sections 5 and 26 that cannot trap, and calls to other functions that meet
+  these rules. It may not allocate, borrow (`&`, `&mut`, or a call whose receiver or
+  parameter is a borrow), recurse directly or through other functions, call through a
+  function value, a closure, `&dyn` or an interface bound, write a closure, spawn or
+  open a `scope`, use `par for`, `dispatch` or `select`, block, fail (`try`, `fail`,
+  `catch`, `orelse`, or a call of a fallible function), use `defer` or `unsafe`, or loop
+  with `for` over a range that is not constant.
+* A function that a kernel calls, directly or through other calls, follows the same
+  rules, and its parameters and result have uniform types. The compiler checks this over
+  the call graph once every body has been type-checked, and reports a violation at the
+  construct, with the chain of calls from the kernel.
+* Nothing in a kernel traps. Integer `+ - *`, unary `-` and `/ %` are errors inside a
+  kernel: write `+%`, `+|`, `-%x`, `@div_or(a, b, fallback)`, `@rem_or(a, b, fallback)`
+  (section 5.2). A shift by a count that is not a constant is written `@shl(x, n)` or
+  `@shr(x, n)`, which take the count modulo the width. `@assert`, `@panic`,
+  `@unreachable` and `@narrow` are not available.
 * A kernel with `reduce(op)` returns one value per index, and the dispatch combines them
-  with `op`, one of `+ * min max & | ^`. The combination order is chosen by the
-  executor. For floats this is the one place in the language where the association
-  order is not fixed, and the signature says so.
+  with `op`, one of `+ * min max & | ^`. `+` and `*` take numbers and wrap for integers,
+  `min` and `max` take numbers, and `& | ^` take integers and `bool`; on vectors each is
+  lane-wise. The combination order is chosen by the executor. For floats this is the one
+  place in the language where the association order is not fixed, and the signature says
+  so. A dispatch over an empty range gives the identity of `op`: `0` for `+ | ^`, `1` for
+  `*`, all bits set (`true`) for `&`, the largest value (`+inf` for floats) for `min` and
+  the smallest (`-inf`) for `max`.
 
 ### 27.2 Dispatch
 
 `dispatch k(args) over range on executor` first checks, once, that every input and
 output covers the range (a trap otherwise), then runs the kernel for every index, and
 returns when all of them are done. The executor expression has a type that implements
-the built-in `Executor` interface:
+the built-in `Executor` interface.
+
+* `k` is a `kernel fn`, named directly. A kernel is never called directly or used as a
+  value; `dispatch` is the only way to run one.
+* The range is `lo..hi` of `i64` with `0 <= lo <= hi`. Since a position is an `i32`, `hi`
+  must not exceed `2^31 - 1`, and every input and output must have a length of at least
+  `hi`. The check traps (T16) otherwise.
+* On `exec.seq`, `exec.simd` and `exec.par`, an input is passed as `[]T` and an output as
+  `[]mut T`; a GPU dispatch takes buffers instead (section 28).
+* The value of a `dispatch` is `void` for a kernel without `reduce`, and the combined
+  result for one with it. A `dispatch` of a `reduce` kernel is an expression whose value
+  must be used: it cannot be a statement.
+
+The executors:
 
 | Executor | Runs the kernel as |
 |---|---|
@@ -318,7 +360,8 @@ export fn ingot_checksum(data: *u8, len: i64) -> u32 {
 }
 ```
 
-* An `extern` block declares C functions. Calling one is allowed only in `unsafe`.
+* An `extern` block declares C functions. Calling one is allowed only in `unsafe`, and
+  so is a call through an `extern fn` pointer, which may point to any C function.
 * `export fn` defines a function with the platform C ABI and an unmangled symbol. Its
   parameters and result must be FFI types.
 * **The platform C ABI** is the target's: Apple arm64 on macOS, System V AMD64 on Linux,

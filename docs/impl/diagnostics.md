@@ -272,10 +272,11 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E1301 | `needs_unsafe` | outside `unsafe`: a raw pointer dereference, a call of an `unsafe fn` or `extern` function, `@uninit`, `@assume`, an `@unchecked_*` or `@*_from_raw` builtin, or a read of a slice's `.ptr` | the operation | — |
+| E1301 | `needs_unsafe` | outside `unsafe`: a raw pointer dereference, a call of an `unsafe fn` or `extern` function or through an `extern fn` pointer, `@uninit`, `@assume`, an `@unchecked_*` or `@*_from_raw` builtin, or a read of a slice's `.ptr` | the operation | — |
 | E1302 | `missing_unsafe_reason` | the reason string of an `unsafe` block is empty or only white space | the string | — |
 | E1303 | `unsafe_impl_mismatch` | `impl Send`/`impl Sync` without `unsafe`, or `unsafe impl` of any other interface | the `impl` | — |
 | E1304 | `unneeded_unsafe` | an `unsafe` block contains no operation that E1301 would reject. An operation counts only for the innermost `unsafe` block around it, so an outer block whose only such operations are inside an inner one is reported | the `unsafe` keyword | — |
+| E1305 | `unsafe_fn_value` | an `unsafe fn` used as a value rather than called | the name | — |
 
 ## 14. Concurrency (E14xx)
 
@@ -303,16 +304,16 @@ with a `spawn` related span.
 | E1502 | `bad_lane_index` | `v[k]` or `@insert(v, k, x)` with `k` not a constant in range | the index | — |
 | E1503 | `vector_shape_mismatch` | operands, a mask or a conversion with different lane counts, or `@bits` with different sizes where either type is a vector or a mask | the operation | — |
 | E1504 | `bad_shuffle` | `@shuffle` indices that are not constant or out of range | the index array | — |
-| E1510 | `bad_kernel_signature` | a kernel whose first parameter is not `Idx`, `Idx2` or `Idx3`, or with a parameter that is not a uniform, input or output (§27.1) | the parameter | — |
-| E1511 | `forbidden_in_kernel` | a kernel body, or a function it calls, allocates, borrows, recurses, calls through a pointer, spawns, blocks, fails, or loops with `for` over a non-constant range | the construct (`callee` chain if in a called function) | — |
-| E1512 | `trapping_op_in_kernel` | integer `+ - * / %`, a shift by a non-constant count, `@assert`, `@panic` or `@narrow` in a kernel or a function it calls | the operation | — (the message names the wrapping, saturating and masking forms) |
+| E1510 | `bad_kernel_signature` | a kernel whose first parameter is not `Idx`, or with a parameter that is not a uniform, input or output, a result without `reduce`, or an error type (§27.1); an index type anywhere but inside a kernel | the parameter, the result type, or the type that names the index | — |
+| E1511 | `forbidden_in_kernel` | a kernel body, or a function it calls, does something §27.1 does not allow: allocates, borrows, recurses, calls through a function value, closure, `&dyn` or interface bound, writes a closure, spawns, blocks, fails, uses `defer` or `unsafe`, loops with `for` over a non-constant range, or has a local of a type that is not an element or uniform type; or a function a kernel calls has a parameter or result that is not a uniform type | the construct (`callee` chain if in a called function) | — |
+| E1512 | `trapping_op_in_kernel` | integer `+ - * / %` or unary `-`, a shift by a non-constant count, `@assert`, `@panic`, `@unreachable` or `@narrow` in a kernel or a function it calls | the operation (`callee` chain if in a called function) | — (the message names the wrapping, saturating and masking forms) |
 | E1513 | `bad_kernel_index` | an output written or read at anything but the kernel's own index, or an input indexed with `[]` at anything but the kernel's own index | the index expression | — |
 | E1514 | `kernel_type_unsupported` | an element or uniform type outside §27.1, or one the dispatch's executor does not support | the type, or the `dispatch` | — |
-| E1515 | `not_a_kernel` | `dispatch` of a function that is not a `kernel fn`, or a direct call of one that is | the callee | — |
+| E1515 | `not_a_kernel` | `dispatch` of a function that is not a `kernel fn`, or a direct call of one that is, or one used as a value | the callee | — |
 | E1516 | `not_an_executor` | the expression after `on` does not implement `Executor` | the expression | — |
 | E1517 | `domain_mismatch` | the number of ranges in the domain differs from the kernel's index dimension | the domain | — |
 | E1518 | `dispatch_argument_mismatch` | an argument's storage does not match the executor: a slice for a GPU executor, a buffer for a CPU one | the argument | — |
-| E1519 | `bad_reduce` | `reduce` on a function that is not a kernel, on a kernel with no result, or with an operator its result type does not support | the clause | — |
+| E1519 | `bad_reduce` | `reduce` on a function that is not a kernel, on a kernel with no result, or with an operator its result type does not support; a `dispatch` of a `reduce` kernel used as a statement | the clause, or the `dispatch` | — |
 
 ## 16. Foreign functions and targets (E16xx)
 
@@ -367,7 +368,7 @@ fixed as below, with the bracketed parts filled in.
 | T13 | `deadlock` | the scheduler | `deadlock: all {n} tasks are waiting`, followed on the same line by nothing else. The list of tasks follows on further lines |
 | T14 | `vector_access_out_of_bounds` | `@load`, `@store`, `@load_tail`, `@store_tail`, `@gather`, `@scatter` | `vector access at {i} out of bounds for length {len}` |
 | T15 | `scatter_index_repeated` | `@scatter` | `scatter index {i} occurs twice` |
-| T16 | `dispatch_out_of_bounds` | `dispatch` | `dispatch range {lo}..{hi} exceeds a buffer of length {len}` |
+| T16 | `dispatch_out_of_bounds` | `dispatch` | `dispatch range {lo}..{hi} exceeds a buffer of length {len}`, or `dispatch range {lo}..{hi} is outside 0..2147483647` |
 | T17 | `not_on_a_task` | a blocking operation, `spawn` or `par for` on a thread the runtime did not create | `blocking operation outside a task` |
 
 T13 is the one trap that prints more than one line. For T11, T12, T13 and T17 the

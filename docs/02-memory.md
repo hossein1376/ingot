@@ -354,6 +354,9 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   the innermost `unsafe` block around it, so a block that only encloses another one is
   also an error.
 * An `unsafe fn` documents its preconditions in its doc comment. `ingot api` shows them.
+* An `unsafe fn` can only be called. It cannot be used as a value, because a `fn` pointer
+  to it could then be called without `unsafe`. A closure or a safe function that calls
+  it inside an `unsafe` block is the value to pass instead.
 * A module that contains `unsafe` is responsible for making its `pub` surface safe for
   every possible safe caller.
 * A borrow made from a raw pointer has no origins. The checker accepts it wherever a

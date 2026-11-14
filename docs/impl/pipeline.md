@@ -25,6 +25,7 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 5 | Resolve | all ASTs of a package | every name bound to a declaration | E03xx |
 | 6 | Signatures | item headers | types of all items, layouts, interface tables, type properties | E05xx, E08xx, E1206, E1303, E1410, E15xx (signatures), E16xx |
 | 7 | Type-check | function bodies | typed tree | E04xx, E06xx, E07xx, E08xx, E13xx, E14xx (shape rules), E15xx |
+| 7k | Kernel closure | the typed bodies of kernels and of every function they reach | each kernel accepted or failed | E1511, E1512 in called functions |
 | 8 | Lower | typed tree | one CFG per function, checks explicit | none |
 | 9 | Ownership | CFG | the same CFG, verified | E10xx, E11xx, E12xx, E1401 to E1403, E1407 |
 | 10 | Check removal | CFG | CFG without the checks §31 requires gone, and the cost items | none |
@@ -33,7 +34,7 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 13 | Emit | | object code, kernel shaders | none |
 | 14 | Link | | executable | linker failures, reported as the compiler's own exit status 2 |
 
-`ingot check` runs phases 1 to 10 and, for the three post-instantiation codes, as much
+`ingot check` runs phases 1 to 10 and, for the post-instantiation codes, as much
 of phase 11 as is needed to find them. It needs no `main` and no linker.
 
 ### Requirements on the order
@@ -49,7 +50,9 @@ of phase 11 as is needed to find them. It needs no `main` and no linker.
 * **Phase 6 finishes for all items before phase 7 starts for any body.** A body is
   checked against signatures only, never against another body. This is what "all
   checking is local to one function" means in the implementation: phases 7 to 10 can run
-  for every function independently and in any order.
+  for every function independently and in any order. The one exception is phase 7k: a
+  kernel is checked together with the typed bodies of the functions it reaches (§27.1),
+  which it may do only after phase 7 has finished for all of them.
 * **Generic bodies go through phases 7 to 10 once, uninstantiated**, with type
   parameters as opaque types that have exactly the properties their bounds grant.
   Phase 11 must not be able to produce any diagnostic except E0806 (a constant
@@ -87,8 +90,8 @@ The compiler reports every independent error and nothing that merely follows fro
   failed to resolve is bound to a poison declaration. Any operation with a poison
   operand yields poison and reports nothing. A function whose signature contains poison
   is callable, and calls to it yield poison.
-* **Phase gates.** A function body with any error from phase 7 does not enter phases 8
-  to 10. Other functions do. So one type error never produces ownership errors in the
+* **Phase gates.** A function body with any error from phase 7, or a kernel that phase 7k
+  rejects, does not enter phases 8 to 10. Other functions do. So one type error never produces ownership errors in the
   same function, and never hides ownership errors in others.
 * **One diagnostic per cause.** For a given loan and a given conflicting access, one
   E11xx is reported, at the first conflicting access in source order. For a given moved
