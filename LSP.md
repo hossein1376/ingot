@@ -66,7 +66,10 @@ for a file that had diagnostics and no longer does.
 
 **Change handling.** A reader thread parses frames into a channel (a thread and `mpsc`,
 no `Arc`). The main loop takes every message already waiting, applies all `didChange`s
-as overlays, then runs one check: typing fast gives one check per pause, not per key.
+as overlays, then runs one check per package: typing fast gives one check per pause,
+not per key. A batch that changes anything checks every package with an open document,
+not only the changed file's: editing `std` changes what every open package imports, and
+a check costs about a millisecond.
 `didClose` clears the overlay (the file on disk is used again).
 
 **Sync kind** is full text. Incremental text sync is a later optimisation.
@@ -91,5 +94,5 @@ requested range, each as a `quickfix` with a `WorkspaceEdit`.
 | Step | State |
 |---|---|
 | L1 | done |
-| L2 | design |
+| L2 | done |
 | L3 | design |

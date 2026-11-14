@@ -26,6 +26,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-lsp"
+version = "0.1.0"
+dependencies = [
+ "ingot-diag",
+ "ingot-driver",
+]
+
+[[package]]
 name = "ingot-sema"
 version = "0.1.0"
 dependencies = [

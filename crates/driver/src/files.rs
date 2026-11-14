@@ -56,22 +56,29 @@ impl Overlays {
 
 /// The normalised key of `path`: an absolute path whose directory is canonical. A
 /// directory that does not exist cannot be canonicalised, so the absolute path is used
-/// unchanged.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        match std::env::current_dir() {
-            Ok(cwd) => cwd.join(path),
-            Err(_) => path.to_path_buf(),
-        }
-    };
+/// unchanged. Used for overlay and document identity; overlays call it themselves, so a
+/// caller never builds an overlay key by hand.
+pub fn normalize(path: &Path) -> PathBuf {
+    let absolute = absolute_path(path);
     let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) else {
         return absolute;
     };
     match parent.canonicalize() {
         Ok(canonical) => canonical.join(name),
         Err(_) => absolute,
+    }
+}
+
+/// `path` as an absolute path: relative paths are joined to the current directory.
+/// The directory part is not canonicalised.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => path.to_path_buf(),
+        }
     }
 }
 

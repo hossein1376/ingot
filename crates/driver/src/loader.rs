@@ -98,12 +98,14 @@ fn load_with_files(path: &Path, files: &Files, harness: bool) -> std::io::Result
     }
 }
 
-fn load_file(path: &Path, files: &Files, harness: bool) -> std::io::Result<LoadedPackage> {
-    // A file inside a package is checked as part of that package: walk up to the
-    // directory with `ingot.toml`. A bare file name has the empty path as its
-    // parent, which means the current directory.
-    // The walk starts from the absolute directory, so a relative path such as
-    // `other.ingot` or `sub/other.ingot` still reaches a manifest above it.
+/// The directory of the nearest `ingot.toml` at or above `path` (the package rule of
+/// tools.md §1): the file's own directory, then its ancestors. `None` means `path` has
+/// no manifest above it and is a package of its own. Overlays count, so an open,
+/// unsaved `ingot.toml` creates a package for the adapter too.
+pub fn manifest_dir(path: &Path, files: &Files) -> Option<PathBuf> {
+    // A bare file name has the empty path as its parent, which means the current
+    // directory. The walk starts from the absolute directory, so a relative path such
+    // as `other.ingot` or `sub/other.ingot` still reaches a manifest above it.
     let start = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -112,9 +114,19 @@ fn load_file(path: &Path, files: &Files, harness: bool) -> std::io::Result<Loade
     let mut dir = Some(start.as_path());
     while let Some(d) = dir {
         if files.is_dir(d) && files.exists(&d.join("ingot.toml")) {
-            return load_dir_files(d, files, harness, "");
+            return Some(d.to_path_buf());
         }
         dir = d.parent();
+    }
+    None
+}
+
+fn load_file(path: &Path, files: &Files, harness: bool) -> std::io::Result<LoadedPackage> {
+    // A file inside a package is checked as part of that package: walk up to the
+    // directory with `ingot.toml`. A bare file name has the empty path as its
+    // parent, which means the current directory.
+    if let Some(dir) = manifest_dir(path, files) {
+        return load_dir_files(&dir, files, harness, "");
     }
     let text = files.read_to_string(path)?;
     // A single file is its own package root, so its path is relative to the

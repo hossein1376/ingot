@@ -1,6 +1,6 @@
 id = "ingot"
 name = "Ingot"
-description = "Tree-sitter highlighting for the Ingot language"
+description = "Highlighting and language server support for the Ingot language"
 version = "0.1.0"
 schema_version = 1
 authors = ["Hossein Yazdani <hosseinyazdani1376@gmail.com>"]
@@ -10,3 +10,7 @@ repository = "https://github.com/hossein1376/ingot"
 repository = "file:///Users/hossein/Code/ingot"
 rev = "bfd91dcf6294ddb71226d87622969702582ab7ee"
 path = "editors/tree-sitter-ingot"
+
+[language_servers.ingot-lsp]
+name = "Ingot LSP"
+languages = ["Ingot"]

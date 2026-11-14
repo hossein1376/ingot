@@ -48,6 +48,7 @@ rebuilt here from the specification.
 | `ingot-cfg` | 8–10 | lowering to a CFG, constant evaluation by interpreting CFGs, the ownership checker, check removal and cost items |
 | `ingot-codegen` | 11–14 | instantiation, LLVM IR text, linking with `clang` |
 | `ingot-driver` | 1 | loading, the pipeline, `ingot` CLI, fix engine, conformance runner |
+| `ingot-lsp` | — | the language server: LSP ↔ `ingot serve` adapter (crates/lsp) |
 
 A crate depends only on crates above it in this table.
 
