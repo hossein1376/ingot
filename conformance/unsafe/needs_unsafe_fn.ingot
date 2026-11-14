@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 15
+
+unsafe fn danger() -> i64 {
+    return 1;
+}
+
+fn f() -> i64 {
+    return danger(); //~ E1301
+}

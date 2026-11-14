@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 19
+
+fn f() {
+    par for i in 0..4 {
+        _ = i;
+        break; //~ E1408
+    }
+}

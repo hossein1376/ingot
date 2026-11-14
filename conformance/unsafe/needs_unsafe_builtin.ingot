@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 15
+
+fn f() -> *i64 {
+    let p: *i64 = @uninit(*i64); //~ E1301
+    return p;
+}

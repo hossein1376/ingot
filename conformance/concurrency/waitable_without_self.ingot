@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 21
+
+waitable fn wait() -> i64 { //~ E1410
+    return 1;
+}

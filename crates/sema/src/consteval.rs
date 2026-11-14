@@ -27,6 +27,9 @@ pub enum Fail {
     Reported,
     /// The step that evaluates this does not exist yet.
     NotImplemented(String),
+    /// The value depends on a type or constant generic parameter, so it is known only
+    /// for each instance (phase 11).
+    Generic,
     /// An integer literal does not fit the type its context gives it (E0405 belongs to
     /// the expression checker; enum tags report it as E0505).
     OutOfRange(Span),
@@ -327,10 +330,7 @@ impl Cx<'_> {
                 DefKind::Static => Err(Fail::NotImplemented(
                     "constant evaluation of a reference to a static".to_string(),
                 )),
-                DefKind::GenericParam { .. } => Err(Fail::NotImplemented(
-                    "constant evaluation of an expression over a constant generic parameter"
-                        .to_string(),
-                )),
+                DefKind::GenericParam { .. } => Err(Fail::Generic),
                 _ => self.not_in_subset(pkg, e),
             },
             _ => self.not_in_subset(pkg, e),
@@ -715,11 +715,7 @@ impl Cx<'_> {
             return Err(Fail::Reported);
         }
         if self.d.types.has_params(ty) {
-            return Err(Fail::NotImplemented(
-                "constant evaluation of the layout of a type that depends on a generic \
-                 parameter (computed per instance)"
-                    .to_string(),
-            ));
+            return Err(Fail::Generic);
         }
         match self.layout_of_checked(ty) {
             Some(l) => Ok((l.size, l.align)),
@@ -790,6 +786,10 @@ impl Cx<'_> {
         match f {
             Fail::Reported => {}
             Fail::NotImplemented(m) => self.ni(m.clone()),
+            Fail::Generic => self.ni(
+                "constant evaluation of an expression over a generic parameter (computed per \
+                 instance)",
+            ),
             Fail::OutOfRange(_) => self.ni(
                 "type checking of a constant expression (an integer literal that does not fit \
                  its type, E0405)",

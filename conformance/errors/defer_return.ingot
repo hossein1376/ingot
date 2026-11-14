@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 6.4
+
+fn f() -> i64 {
+    defer { return 0; } //~ E0708
+    return 1;
+}

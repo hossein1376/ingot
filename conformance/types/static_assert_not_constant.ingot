@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 9
+
+fn f(x: bool) {
+    @static_assert(x, "x is not constant"); //~ E0807
+}

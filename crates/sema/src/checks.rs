@@ -311,6 +311,34 @@ impl Cx<'_> {
             let Some(sig) = self.d.impl_sig(def).cloned() else {
                 continue;
             };
+            let file = self.file_of(def);
+            // E1303: property impls state a property and need `unsafe`; every other
+            // interface implementation is safe and must not say `unsafe`.
+            if let ImplOf::Prop(p) = sig.of {
+                let wants_unsafe = matches!(p, PropBound::Send | PropBound::Sync);
+                if wants_unsafe != sig.unsafe_ {
+                    let what = if wants_unsafe {
+                        format!("`impl {}` without `unsafe`", p.name())
+                    } else {
+                        format!("`unsafe impl {}`", p.name())
+                    };
+                    self.error(
+                        "E1303",
+                        format!("{what}: `unsafe` is required only on `Send` and `Sync`"),
+                        file,
+                        sig.header,
+                    );
+                }
+                continue;
+            }
+            if sig.unsafe_ && matches!(sig.of, ImplOf::Interface(..)) {
+                self.error(
+                    "E1303",
+                    "`unsafe impl` of an interface that is not `Send` or `Sync`",
+                    file,
+                    sig.header,
+                );
+            }
             let ImplOf::Interface(iface, args) = sig.of.clone() else {
                 continue;
             };
@@ -321,7 +349,6 @@ impl Cx<'_> {
             let Some(isig) = self.d.interface_sig(iface).cloned() else {
                 continue;
             };
-            let file = self.file_of(def);
             if self.d.types.has_poison(sig.target) || args.iter().any(|a| self.arg_has_poison(a)) {
                 continue;
             }
@@ -774,6 +801,32 @@ impl Cx<'_> {
                     "`self` is only a parameter of a function in an `impl` or an interface"
                 };
                 self.error("E0517", msg, file, p.ty_span);
+            }
+        }
+        // E1410: a waitable function waits without consuming, so its receiver is a shared
+        // borrow, and it must have one.
+        if f.mods.waitable {
+            match f.params.first() {
+                Some(p) if p.name == "self" => {
+                    if !self.d.types.has_poison(p.ty)
+                        && !matches!(self.d.types.kind(p.ty), TyKind::Ref(Mutability::Shared, _))
+                    {
+                        self.error(
+                            "E1410",
+                            "the receiver of a `waitable fn` is a shared borrow `&self`",
+                            file,
+                            p.name_span,
+                        );
+                    }
+                }
+                _ => {
+                    self.error(
+                        "E1410",
+                        "a `waitable fn` must take its receiver as a shared borrow `&self`",
+                        file,
+                        f.name_span,
+                    );
+                }
             }
         }
         // E1206 (the part about names)

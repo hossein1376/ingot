@@ -326,7 +326,7 @@ impl Checker<'_, '_> {
         hint: Option<TypeId>,
     ) -> (TypeId, TypeId) {
         let (lu, ru) = (self.untyped(lhs), self.untyped(rhs));
-        if lu && !ru {
+        let (l, r) = if lu && !ru {
             let r = self.expr(rhs, hint);
             let l = self.expr(lhs, Some(r));
             (l, r)
@@ -334,7 +334,19 @@ impl Checker<'_, '_> {
             let l = self.expr(lhs, hint);
             let r = self.expr(rhs, Some(l));
             (l, r)
-        }
+        };
+        let poison = self.poison();
+        let l = if self.unhandled_result(lhs, l) {
+            poison
+        } else {
+            l
+        };
+        let r = if self.unhandled_result(rhs, r) {
+            poison
+        } else {
+            r
+        };
+        (l, r)
     }
 
     /// A condition: `bool`, or E0403.
@@ -347,7 +359,7 @@ impl Checker<'_, '_> {
     }
 
     pub(crate) fn not_bool(&mut self, e: ExprId, t: TypeId) {
-        if self.unhandled_result_operand(t) {
+        if self.unhandled_result(e, t) {
             return;
         }
         let span = self.span_of(e);
@@ -402,6 +414,9 @@ impl Checker<'_, '_> {
             }
             UnOp::Neg | UnOp::NegWrap | UnOp::BitNot => {
                 let t = self.expr(operand, hint);
+                if self.unhandled_result(operand, t) {
+                    return (self.poison(), ExprRes::None);
+                }
                 (self.unary_arith(op, t, op_span), ExprRes::None)
             }
         }
@@ -437,20 +452,8 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// A result where a plain value is wanted is E0701, which belongs to the next step.
-    pub(crate) fn unhandled_result_operand(&mut self, t: TypeId) -> bool {
-        if self.is_result(t) {
-            self.ni("E0701 unhandled_result: a result used as an operand (S4)");
-            return true;
-        }
-        false
-    }
-
     fn unary_arith(&mut self, op: UnOp, t: TypeId, op_span: Span) -> TypeId {
         if self.is_poison(t) || self.is_never(t) {
-            return self.poison();
-        }
-        if self.unhandled_result_operand(t) {
             return self.poison();
         }
         let sym = match op {
@@ -554,6 +557,9 @@ impl Checker<'_, '_> {
             BinOp::Shl | BinOp::Shr => {
                 let l = self.expr(lhs, hint);
                 let r = self.expr(rhs, None);
+                if self.unhandled_result(lhs, l) || self.unhandled_result(rhs, r) {
+                    return (self.poison(), ExprRes::None);
+                }
                 (self.shift(op, l, r, op_span), ExprRes::None)
             }
             _ if op.is_comparison() => {
@@ -571,9 +577,6 @@ impl Checker<'_, '_> {
     /// error. Used by compound assignment too.
     pub(crate) fn arith(&mut self, op: BinOp, l: TypeId, r: TypeId, op_span: Span) -> TypeId {
         if self.is_poison(l) || self.is_poison(r) {
-            return self.poison();
-        }
-        if self.unhandled_result_operand(l) || self.unhandled_result_operand(r) {
             return self.poison();
         }
         if self.is_never(l) || self.is_never(r) {
@@ -690,9 +693,6 @@ impl Checker<'_, '_> {
         if self.is_poison(l) || self.is_poison(r) || self.is_never(l) || self.is_never(r) {
             return self.poison();
         }
-        if self.unhandled_result_operand(l) || self.unhandled_result_operand(r) {
-            return self.poison();
-        }
         let sym = op.symbol();
         // The count may have any integer type.
         let count_ok = match self.kind(r) {
@@ -757,9 +757,6 @@ impl Checker<'_, '_> {
         op_span: Span,
     ) -> TypeId {
         if self.is_poison(l) || self.is_poison(r) || self.is_never(l) || self.is_never(r) {
-            return self.poison();
-        }
-        if self.unhandled_result_operand(l) || self.unhandled_result_operand(r) {
             return self.poison();
         }
         let sym = op.symbol();
@@ -889,6 +886,14 @@ impl Checker<'_, '_> {
                 );
                 (target, ExprRes::Cast(CastKind::Identity))
             }
+            Err(CastError::Shape) => {
+                self.err(
+                    "E1503",
+                    "`as` between vectors needs the same lane count",
+                    as_span,
+                );
+                (target, ExprRes::Cast(CastKind::Identity))
+            }
             Err(CastError::Unspecified(what)) => {
                 self.ni(what);
                 (self.poison(), ExprRes::Cast(CastKind::Identity))
@@ -971,10 +976,31 @@ impl Checker<'_, '_> {
                  when a conversion is lossless for every instance)"
                     .to_string(),
             )),
-            (TyKind::Vector(..) | TyKind::Mask(_), _)
-            | (_, TyKind::Vector(..) | TyKind::Mask(_)) => Err(CastError::Unspecified(
-                "`as` between vectors (lane-count rule E1503, S4)".to_string(),
+            (TyKind::Vector(a, n), TyKind::Vector(b, m)) => {
+                if n != m {
+                    return Err(CastError::Shape);
+                }
+                let (from_lane, to_lane) = (self.lane_ty(*a), self.lane_ty(*b));
+                match self.cast_kind(from_lane, to_lane) {
+                    Ok(k) => Ok(k),
+                    Err(CastError::Lossy) => Err(CastError::Lossy),
+                    Err(CastError::PayloadEnum) => Err(CastError::PayloadEnum),
+                    Err(CastError::Shape) => Err(CastError::Shape),
+                    Err(CastError::Unspecified(_)) => Err(CastError::Unspecified(
+                        "`as` between vectors of one lane count with an undefined lane \
+                         conversion"
+                            .to_string(),
+                    )),
+                }
+            }
+            (TyKind::Mask(_), _) | (_, TyKind::Mask(_)) => Err(CastError::Unspecified(
+                "`as` from or to a mask (section 26.2 gives the conversions between vectors \
+                 only)"
+                    .to_string(),
             )),
+            // Section 5.4 lists no conversion between a vector and a scalar or another
+            // kind of type, so `as` does not compile (E0402).
+            (TyKind::Vector(..), _) | (_, TyKind::Vector(..)) => Err(CastError::Lossy),
             _ => Err(CastError::Lossy),
         }
     }
@@ -1024,5 +1050,7 @@ impl Checker<'_, '_> {
 pub(crate) enum CastError {
     Lossy,
     PayloadEnum,
+    /// Two vectors with different lane counts (E1503).
+    Shape,
     Unspecified(String),
 }

@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 21
+
+fn job() -> i64 {
+    return 1;
+}
+
+fn f() -> i64 {
+    select {
+        x = job() => { return x; } //~ E1409
+    }
+}

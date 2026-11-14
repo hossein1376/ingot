@@ -78,7 +78,7 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-267 test files: 62 `accept` (of which 33 are fix results), 182 `reject`, 13 `run`,
+306 test files: 65 `accept` (of which 36 are fix results), 218 `reject`, 13 `run`,
 6 `trap`, 4 `cost`.
 
 | Group | Codes with a test | Codes without one |
@@ -89,14 +89,14 @@ trailing white space from both. The fixed file is also a test of its own and exp
 | E04xx | 21 of 21 | |
 | E05xx | 23 of 23 | |
 | E06xx | 13 of 13 | |
-| E07xx | 4 of 10 | E0702, E0704, E0706, E0708, E0709, E0710 |
-| E08xx | 9 of 13 | E0807, E0808, E0809, E0810 |
+| E07xx | 10 of 10 | |
+| E08xx | 11 of 13 | E0808, E0809 |
 | E10xx | 5 of 6 | E1006 |
 | E11xx | 4 of 5 | E1104 |
 | E12xx | 5 of 7 | E1205, E1207 |
-| E13xx | 3 of 4 | E1303 |
-| E14xx | 3 of 10 | E1402, E1404, E1405, E1406, E1408, E1409, E1410 |
-| E15xx | 4 of 14 | E1502, E1503, E1504, E1510, E1511, E1514, E1516, E1517, E1518, E1519 |
+| E13xx | 4 of 4 | |
+| E14xx | 8 of 10 | E1402, E1406 |
+| E15xx | 6 of 14 | E1504, E1510, E1511, E1514, E1516, E1517, E1518, E1519 |
 | E16xx | 5 of 6 | E1605 |
 | E17xx | 5 of 7 | E1703, E1704 |
 | traps | 6 of 17 | T02, T05, T08, T09, T10, T11, T12, T13, T15, T16, T17 |
@@ -104,7 +104,7 @@ trailing white space from both. The fixed file is also a test of its own and exp
 Retired codes are not counted: the catalog marks E0512 and E0513 as retired, so they
 appear in no row and in no total below.
 
-133 of 197 catalog codes have a test.
+149 of 197 catalog codes have a test.
 
 E1701 for a *missing* `ingot.toml` has no conformance test, because the harness supplies
 a manifest by convention; `crates/driver/tests/cli.rs` covers it. The other cases of

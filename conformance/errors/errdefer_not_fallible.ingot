@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 6.4
+
+fn f() {
+    errdefer { } //~ E0709
+}

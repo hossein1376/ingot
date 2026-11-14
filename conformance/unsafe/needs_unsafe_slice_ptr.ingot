@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(s: []u8) -> *u8 {
+    return s.ptr; //~ E1301
+}

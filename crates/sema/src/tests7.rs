@@ -722,6 +722,198 @@ fn a_dyn_field_payload_and_exclusive_borrow() {
 }
 
 #[test]
+fn par_for_rejects_fail_and_try() {
+    let b = build(
+        "enum E { e }\nfn f() -> i64 ! E {\n    par for i in 0..2 { _ = i; fail .e; }\n    return 0;\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1408"]);
+    let b = build(
+        "enum E { e }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 ! E {\n    par for i in 0..2 { _ = i; let x = try g(); @assert(x == 1); }\n    return 0;\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1408"]);
+}
+
+#[test]
+fn a_select_arm_calling_a_waitable_fn_is_accepted() {
+    let b = build(
+        "struct Service { n: i64 }\nimpl Service {\n    waitable fn wait(self: &Service) -> i64 { return self.n; }\n}\nfn f(s: &Service) -> i64 {\n    select {\n        x = s.wait() => { return x; }\n    }\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn a_select_arm_calling_a_value_is_not_waitable() {
+    let b = build(
+        "fn f() -> i64 {\n    let job = fn []() -> i64 { return 1; };\n    select {\n        x = job() => { return x; }\n    }\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1409"]);
+}
+
+#[test]
+fn a_test_body_may_try_any_error() {
+    let b = build(
+        "enum A { a }\nfn g() -> i64 ! A { return 1; }\ntest \"t\" {\n    let v = try g();\n    @assert(v == 1);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn an_operation_belongs_only_to_the_innermost_unsafe_block() {
+    let b = build(
+        "fn f(p: *i64) -> i64 {\n    return unsafe(\"outer\") { unsafe(\"inner\") { p.* } };\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1304"]);
+    let b = build("fn f(p: *i64) -> i64 {\n    return unsafe(\"one\") { p.* };\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn a_raw_pointer_member_uses_its_unsafe_block() {
+    // The fix of E0418 inserts the dereference the block is for: no E1304 as well.
+    let b = build(
+        "struct C { x: i64 }\nfn f(p: *C) -> i64 {\n    return unsafe(\"live\") { p.x };\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E0418"]);
+}
+
+#[test]
+fn function_values_of_unsafe_and_extern_functions() {
+    // An `extern` function's value has the `extern fn` type: taking it needs nothing.
+    let b = build(
+        "extern \"c\" { fn puts(s: *u8) -> i32; }\nfn f() -> extern fn(*u8) -> i32 {\n    return puts;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // An `unsafe fn` value has no pointer type that keeps `unsafe` (a spec gap).
+    let b = build("unsafe fn g() {}\nfn f() {\n    let p = g;\n    _ = p;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(
+        b.ni()
+            .iter()
+            .any(|m| m.contains("`unsafe fn` used as a value")),
+        "{:?}",
+        b.ni()
+    );
+}
+
+#[test]
+fn catch_and_orelse_on_the_wrong_value_point_at_the_operator() {
+    for (src, word) in [
+        (
+            "fn f(x: i64) -> i64 {\n    return x catch _ => 0;\n}\n",
+            "catch",
+        ),
+        (
+            "fn f(x: i64) -> i64 {\n    return x orelse 0;\n}\n",
+            "orelse",
+        ),
+    ] {
+        let b = build(src);
+        assert_eq!(b.only_codes(), ["E0704"]);
+        let at = b.bodies.diagnostics[0].span;
+        assert_eq!(&src[at.start..at.end], word);
+    }
+}
+
+#[test]
+fn select_and_conversions_between_vectors_and_other_types() {
+    // Same lane count, different lane types: a plain mismatch.
+    let b =
+        build("fn f(m: boolx4, a: f32x4, b: i32x4) -> f32x4 {\n    return @select(m, a, b);\n}\n");
+    assert_eq!(b.only_codes(), ["E0401"]);
+    // Different lane counts: E1503, with a mask or with a `bool`.
+    let b =
+        build("fn f(c: bool, a: f32x4, b: f32x8) -> f32x4 {\n    return @select(c, a, b);\n}\n");
+    assert_eq!(b.only_codes(), ["E1503"]);
+    let b =
+        build("fn f(m: boolx8, a: f32x4, b: f32x4) -> f32x4 {\n    return @select(m, a, b);\n}\n");
+    assert_eq!(b.only_codes(), ["E1503"]);
+    // A `bool` picks a whole vector.
+    let b =
+        build("fn f(c: bool, a: f32x4, b: f32x4) -> f32x4 {\n    return @select(c, a, b);\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // Section 5.4 has no `as` between a vector and a scalar.
+    let b = build("fn f(x: i32) -> f32x4 {\n    return x as f32x4;\n}\n");
+    assert_eq!(b.only_codes(), ["E0402"]);
+}
+
+#[test]
+fn a_conversion_builtin_names_a_wrong_target_type() {
+    for (src, want) in [
+        (
+            "fn f(x: i32) -> f32 {\n    return @wrap(f32, x);\n}\n",
+            "an integer type, not `f32`",
+        ),
+        (
+            "fn f(x: f64) -> f32 {\n    return @sat(f32, x);\n}\n",
+            "an integer type, not `f32`",
+        ),
+        (
+            "fn f(x: i32) -> i32 {\n    return @nearest(i32, x);\n}\n",
+            "a float type, not `i32`",
+        ),
+    ] {
+        let b = build(src);
+        assert_eq!(b.only_codes(), ["E0401"], "{src}");
+        let m = &b.bodies.diagnostics[0].message;
+        assert!(m.contains(want), "{src}: {m}");
+    }
+}
+
+#[test]
+fn unsafe_is_lexical_inside_a_closure() {
+    let b = build(
+        "fn f(p: *i64) -> i64 {\n    let g = unsafe(\"p is valid\") { fn [p]() -> i64 { return p.*; } };\n    return g();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build(
+        "fn f(p: *i64) -> i64 {\n    let g = fn [p]() -> i64 { return p.*; };\n    return g();\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E1301"]);
+}
+
+#[test]
+fn closures_reset_defer_and_par_for_exits() {
+    let b = build(
+        "fn f() -> i64 {\n    defer { let g = fn []() -> i64 { return 1; }; @assert(g() == 1); }\n    return 0;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build(
+        "fn f() -> i64 {\n    par for i in 0..2 {\n        _ = i;\n        let g = fn []() -> i64 { return 1; };\n        @assert(g() == 1);\n    }\n    return 0;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build("fn f() {\n    par for i in 0..2 { _ = i; continue; }\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build("fn f() {\n    par for i in 0..2 { _ = i; loop { break; } }\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
+fn a_static_assert_condition_that_depends_on_a_generic_is_left_for_instantiation() {
+    let b = build(
+        "fn f[T]() {\n    @static_assert(@sizeof(T) > 0, \"nonempty\");\n}\nfn g[const N: i64]() {\n    @static_assert(N > 0, \"positive\");\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert!(
+        !b.ni()
+            .iter()
+            .any(|m| m.contains("static_assert") || m.contains("S5b")),
+        "{:?}",
+        b.ni()
+    );
+    let b = build("fn f() {\n    @static_assert(false, \"boom\");\n}\n");
+    assert_eq!(b.only_codes(), ["E0810"]);
+    assert!(b.bodies.diagnostics[0].message.contains("boom"));
+}
+
+#[test]
+fn vector_conversions_and_lane_indices() {
+    let b = build(
+        "fn widen(v: u8x16) -> u16x16 { return v as u16x16; }\nfn sat(v: f32x4) -> i32x4 { return @sat(i32x4, v); }\nfn wrap(v: u8x16) -> u16x16 { return @wrap(u16x16, v); }\nfn near(v: i32x4) -> f32x4 { return @nearest(f32x4, v); }\nfn same(v: u8x16) -> [16]u8 { return @bits([16]u8, v); }\nfn pick(m: boolx4, a: f32x4, b: f32x4) -> f32x4 { return @select(m, a, b); }\nfn lane(v: f32x4) -> f32 { return v[2]; }\nfn ins(v: f32x4) -> f32x4 { return @insert(v, 2, 1.0); }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
 fn a_rest_pattern_records_the_fields_it_leaves_out() {
     let b = build(
         "copy struct P { x: i64, y: i64, z: i64 }\nfn f(p: P) -> i64 {\n    let P.{ x, .. } = p;\n    return x;\n}\n",
@@ -829,17 +1021,16 @@ fn a_capture_by_exclusive_borrow_needs_a_var() {
 }
 
 #[test]
-fn rules_of_the_next_step_are_recorded_not_guessed() {
+fn the_rules_of_this_step_are_errors() {
     let b = build(
         "enum E { bad }\nfn g() -> i64 ! E { return 1; }\nfn f() -> i64 {\n    return try g();\n}\n",
     );
-    assert_eq!(b.only_codes(), Vec::<String>::new());
-    assert!(b.ni().iter().any(|m| m.contains("E0702")), "{:?}", b.ni());
+    assert_eq!(b.only_codes(), ["E0702"]);
     assert!(b.body("f").exprs.values().any(|_| true));
     let b = build("fn f() -> i64 {\n    return unsafe(\"nothing\") { 1 };\n}\n");
-    assert!(b.ni().iter().any(|m| m.contains("E1304")), "{:?}", b.ni());
+    assert_eq!(b.only_codes(), ["E1304"]);
     let b = build("enum E { bad }\nfn g() -> i64 ! E { return 1; }\nfn f() {\n    g();\n}\n");
-    assert!(b.ni().iter().any(|m| m.contains("E0701")), "{:?}", b.ni());
+    assert_eq!(b.only_codes(), ["E0701"]);
 }
 
 #[test]

@@ -155,9 +155,10 @@ pub enum ExprRes {
         index: usize,
         def: DefId,
     },
-    /// `Field` on a slice (`.len` or `.ptr`): the base is looked through `derefs`
-    /// borrows first.
+    /// `Field` `.len` on a slice: the base is looked through `derefs` borrows first.
     SliceLen { derefs: u32 },
+    /// `Field` `.ptr` on a slice: E1301 outside `unsafe`.
+    SlicePtr { derefs: u32 },
     /// `Field` `.len` on an array: the length is the array's constant `N`, which may be
     /// a constant generic parameter.
     ArrayLen { derefs: u32, len: ConstArg },

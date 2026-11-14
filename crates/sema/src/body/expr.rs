@@ -115,6 +115,46 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// Whether this function can propagate an error of type `err` with `try`: its own
+    /// error type is `err`, or an enum with a variant `from err`; a test body may try any
+    /// error (section 4.6).
+    pub(crate) fn can_propagate(&mut self, err: TypeId) -> bool {
+        let ctx = self.fnctx();
+        if ctx.kind == super::CtxKind::Test {
+            return true;
+        }
+        match ctx.error {
+            None => false,
+            Some(fe) if fe == err || self.is_poison(fe) => true,
+            Some(fe) => self.variant_from(fe, err).is_some(),
+        }
+    }
+
+    /// E0701: a `T ! E` value where `T` is expected, or as a statement. The fix inserts
+    /// `try ` only when the enclosing function can propagate `E`.
+    pub(crate) fn unhandled_result(&mut self, e: ExprId, t: TypeId) -> bool {
+        let TyKind::Result(ok_ty, err_ty) = self.kind(t) else {
+            return false;
+        };
+        let (ok, err) = (self.name(ok_ty), self.name(err_ty));
+        let span = self.span_of(e);
+        let edit = self
+            .can_propagate(err_ty)
+            .then(|| self.edit(Span::empty(span.start), "try "));
+        let d = self.err(
+            "E0701",
+            format!(
+                "a value of the result type `{ok} ! {err}` is used here; handle it with `try`, \
+                 `catch` or `match`"
+            ),
+            span,
+        );
+        if let Some(edit) = edit {
+            d.fix("propagate the error with `try`", edit);
+        }
+        true
+    }
+
     /// An expression of type `found` where `expected` is required (E0401 and the more
     /// specific codes that replace it).
     pub(crate) fn mismatch(&mut self, e: ExprId, found: TypeId, expected: TypeId) {
@@ -152,9 +192,7 @@ impl Checker<'_, '_> {
                 return;
             }
             (TyKind::Result(..), _) if !matches!(ek, TyKind::Result(..)) => {
-                self.ni(
-                    "E0701 unhandled_result: a result where its success value is expected (S4)",
-                );
+                self.unhandled_result(e, found);
                 return;
             }
             (TyKind::Closure(..), TyKind::FnPtr(_)) => {
@@ -346,18 +384,36 @@ impl Checker<'_, '_> {
                 value,
                 binding,
                 handler,
-                ..
-            } => self.catch_expr(*value, *binding, handler, hint),
-            ExprKind::Orelse { value, handler, .. } => self.orelse_expr(*value, handler, hint),
+                catch_span,
+            } => self.catch_expr(*value, *binding, handler, hint, *catch_span),
+            ExprKind::Orelse {
+                value,
+                handler,
+                orelse_span,
+            } => self.orelse_expr(*value, handler, hint, *orelse_span),
             ExprKind::Spawn { call, scope } => self.spawn(e, *call, *scope, true),
             ExprKind::Dispatch {
                 call,
                 domain,
                 executor,
             } => self.dispatch(e, *call, *domain, *executor),
-            ExprKind::Unsafe { body, .. } => {
-                self.ni("the rules of `unsafe`: E1301, E1302 and E1304 (S4)");
+            ExprKind::Unsafe {
+                reason,
+                reason_span,
+                body,
+            } => {
+                self.check_unsafe_reason(reason, *reason_span);
+                self.unsafe_used.push(false);
                 let t = self.expr(*body, hint);
+                let used = self.unsafe_used.pop().expect("an unsafe block");
+                if !used {
+                    let kw = Span::new(expr.span.start, expr.span.start + 6);
+                    self.err(
+                        "E1304",
+                        "this `unsafe` block contains no operation that needs it",
+                        kw,
+                    );
+                }
                 (t, ExprRes::None)
             }
             ExprKind::Poison => (self.poison(), ExprRes::None),
@@ -482,7 +538,16 @@ impl Checker<'_, '_> {
             s.insert(g.def, GenericArg::Ty(*t));
             args.push(GenericArg::Ty(*t));
         }
-        self.note_unsafe_callee(&sig);
+        // An `extern` function's value has the `extern fn` type, which says what it is.
+        // An `unsafe fn` would become a plain `fn` pointer whose calls need no `unsafe`;
+        // the specification has no pointer type that keeps it.
+        if sig.mods.unsafe_ {
+            self.ni(
+                "an `unsafe fn` used as a value (the specification has no function pointer \
+                 type that keeps `unsafe`)",
+            );
+            return (self.poison(), ExprRes::None);
+        }
         let params: Vec<TypeId> = sig
             .params
             .iter()
@@ -507,10 +572,15 @@ impl Checker<'_, '_> {
         )
     }
 
-    /// Calling an `unsafe fn` or an `extern` function needs `unsafe` (E1301, S4).
-    pub(crate) fn note_unsafe_callee(&mut self, sig: &FnSig) {
+    /// Calling an `unsafe fn` or an `extern` function needs `unsafe` (E1301, section 15).
+    pub(crate) fn note_unsafe_callee(&mut self, sig: &FnSig, span: Span) {
         if sig.mods.unsafe_ || self.def_kind(sig.def) == DefKind::ExternFn {
-            self.ni("E1301 needs_unsafe: a call of an `unsafe fn` or `extern` function (S4)");
+            let what = if sig.mods.unsafe_ {
+                "calling an `unsafe fn`"
+            } else {
+                "calling an `extern` function"
+            };
+            self.requires_unsafe(span, what);
         }
     }
 
@@ -599,6 +669,7 @@ impl Checker<'_, '_> {
     fn raw_pointer_member(&mut self, at: usize, what: &str) {
         let span = Span::new(at, at + 1);
         let edit = self.edit(Span::empty(at), ".*");
+        self.note_raw_access();
         self.err(
             "E0418",
             format!("{what} on a raw pointer: write `.*` first"),
@@ -672,10 +743,10 @@ impl Checker<'_, '_> {
             TyKind::Slice(m, elem) => match name {
                 "len" => (self.i64_(), ExprRes::SliceLen { derefs }),
                 "ptr" => {
-                    self.ni("E1301 needs_unsafe: reading a slice's `.ptr` (S4)");
+                    self.requires_unsafe(self.span_of(e), "reading a slice's `.ptr`");
                     (
                         self.mk(TyKind::RawPtr(m, elem)),
-                        ExprRes::SliceLen { derefs },
+                        ExprRes::SlicePtr { derefs },
                     )
                 }
                 _ => {
@@ -730,7 +801,7 @@ impl Checker<'_, '_> {
         match self.kind(bt) {
             TyKind::Ref(_, t) => (t, ExprRes::Deref { raw: false }),
             TyKind::RawPtr(_, t) => {
-                self.ni("E1301 needs_unsafe: dereferencing a raw pointer (S4)");
+                self.requires_unsafe(op_span, "dereferencing a raw pointer");
                 (t, ExprRes::Deref { raw: true })
             }
             _ => {
@@ -759,10 +830,10 @@ impl Checker<'_, '_> {
                 DefKind::Builtin(Builtin::Idx | Builtin::Idx2 | Builtin::Idx3)
             )
         {
-            self.ni("E1513 bad_kernel_index: where a kernel index may be used (S4)");
+            self.ni("E1513 bad_kernel_index: where a kernel index may be used (S4b)");
             return;
         }
-        if self.unhandled_result_operand(t) {
+        if self.unhandled_result(e, t) {
             return;
         }
         let span = self.span_of(e);
@@ -779,6 +850,43 @@ impl Checker<'_, '_> {
         );
         if let Some(edits) = fix {
             d.fix_edits("convert with `as i64`", edits);
+        }
+    }
+
+    /// E1502: a vector lane index or `@insert` lane must be a constant in `0..lanes`.
+    /// The index has already been typed (`index_operand`).
+    pub(crate) fn check_lane_index(&mut self, index: ExprId, lanes: u32) -> bool {
+        if !self.compatible(self.ty_of(index), self.i64_()) {
+            return false;
+        }
+        let span = self.span_of(index);
+        let out_of_range = || format!("the lane index must be a constant in `0..{lanes}`");
+        if !self.runtime_reads(index).is_empty() {
+            self.err("E1502", out_of_range(), span);
+            return false;
+        }
+        match self.cx.eval_expr(self.pkg, self.file, index, None) {
+            Ok(ConstValue::Int { value, .. }) if value >= 0 && value < i128::from(lanes) => true,
+            Ok(_) => {
+                self.err("E1502", out_of_range(), span);
+                false
+            }
+            Err(crate::consteval::Fail::Reported) => {
+                self.errors += 1;
+                false
+            }
+            Err(crate::consteval::Fail::OutOfRange(_)) => {
+                self.err("E1502", out_of_range(), span);
+                false
+            }
+            Err(crate::consteval::Fail::NotImplemented(reason)) => {
+                self.ni(format!("{reason} (lane index)"));
+                false
+            }
+            Err(crate::consteval::Fail::Generic) => {
+                self.ni("a lane index that depends on a generic parameter");
+                false
+            }
         }
     }
 
@@ -800,16 +908,7 @@ impl Checker<'_, '_> {
         match self.kind(t) {
             TyKind::Array(el, _) | TyKind::Slice(_, el) => (el, ExprRes::Index { derefs }),
             TyKind::Vector(lane, n) => {
-                let lit = match &self.hir.expr(self.unparen(index)).kind {
-                    ExprKind::Int {
-                        value, negative, ..
-                    } => Some((*value, *negative)),
-                    _ => None,
-                };
-                match lit {
-                    Some((v, false)) if v < u128::from(n) => {}
-                    _ => self.ni("E1502 bad_lane_index: the lane index of a vector must be a constant in range (S4)"),
-                }
+                self.check_lane_index(index, n);
                 let el = match lane {
                     Lane::Int(i) => self.mk(TyKind::Int(i)),
                     Lane::Float(f) => self.mk(TyKind::Float(f)),
@@ -818,6 +917,7 @@ impl Checker<'_, '_> {
             }
             TyKind::RawPtr(..) => {
                 let edit = self.edit(Span::empty(bracket.start), ".*");
+                self.note_raw_access();
                 self.err("E0418", "indexing a raw pointer: write `.*` first", at)
                     .fix("dereference the pointer first", edit);
                 (self.poison(), ExprRes::None)
@@ -890,6 +990,7 @@ impl Checker<'_, '_> {
             },
             TyKind::RawPtr(..) => {
                 let edit = self.edit(Span::empty(bracket.start), ".*");
+                self.note_raw_access();
                 self.err("E0418", "slicing a raw pointer: write `.*` first", at)
                     .fix("dereference the pointer first", edit);
                 (self.poison(), ExprRes::None)
@@ -1363,9 +1464,9 @@ impl Checker<'_, '_> {
         binding: Option<hir::LocalId>,
         handler: &Handler,
         hint: Option<TypeId>,
+        catch_span: Span,
     ) -> (TypeId, ExprRes) {
         let vt = self.expr(value, None);
-        let span = self.span_of(value);
         let (ok, err) = match self.kind(vt) {
             TyKind::Result(ok, err) => (ok, err),
             TyKind::Poison => {
@@ -1373,8 +1474,12 @@ impl Checker<'_, '_> {
                 return (self.poison(), ExprRes::None);
             }
             _ => {
-                let _ = span;
-                self.ni("E0704 not_a_result: `catch` on a value that is not a result (S4)");
+                let n = self.name(vt);
+                self.err(
+                    "E0704",
+                    format!("`catch` needs a result (`T ! E`), not `{n}`"),
+                    catch_span,
+                );
                 self.catch_handler_blind(binding, handler);
                 return (self.poison(), ExprRes::None);
             }
@@ -1382,7 +1487,7 @@ impl Checker<'_, '_> {
         if let Some(b) = binding {
             self.bind_local(b, err, BindMode::Move);
         }
-        self.handler(handler, ok, hint, "E0707 handler_falls_through: a `catch` block that can reach its end although a value is needed (S4)");
+        self.handler(handler, ok, hint, "`catch`");
         (ok, ExprRes::None)
     }
 
@@ -1406,6 +1511,7 @@ impl Checker<'_, '_> {
         value: ExprId,
         handler: &Handler,
         hint: Option<TypeId>,
+        orelse_span: Span,
     ) -> (TypeId, ExprRes) {
         let vt = self.expr(value, None);
         let some = match self.kind(vt) {
@@ -1415,18 +1521,23 @@ impl Checker<'_, '_> {
                 return (self.poison(), ExprRes::None);
             }
             _ => {
-                self.ni("E0704 not_a_result: `orelse` on a value that is not optional (S4)");
+                let n = self.name(vt);
+                self.err(
+                    "E0704",
+                    format!("`orelse` needs an optional (`?T`), not `{n}`"),
+                    orelse_span,
+                );
                 self.catch_handler_blind(None, handler);
                 return (self.poison(), ExprRes::None);
             }
         };
-        self.handler(handler, some, hint, "E0707 handler_falls_through: an `orelse` block that can reach its end although a value is needed (S4)");
+        self.handler(handler, some, hint, "`orelse`");
         (some, ExprRes::None)
     }
 
     /// The handler of `catch` or `orelse`: an expression of the success type, or a
     /// block that must leave unless the success type is `void`.
-    fn handler(&mut self, h: &Handler, ok: TypeId, hint: Option<TypeId>, rule: &str) {
+    fn handler(&mut self, h: &Handler, ok: TypeId, hint: Option<TypeId>, what: &str) {
         match h {
             Handler::Expr(x) => {
                 let t = self.expr(*x, Some(ok).or(hint));
@@ -1437,7 +1548,16 @@ impl Checker<'_, '_> {
             Handler::Block(b) => {
                 let completes = self.block(*b);
                 if completes && ok != self.void() && !self.is_poison(ok) {
-                    self.ni(rule);
+                    let span = self.hir.block(*b).span;
+                    let at = Span::new(span.end.saturating_sub(1), span.end);
+                    self.err(
+                        "E0707",
+                        format!(
+                            "this {what} block can reach its end although a value is needed; \
+                             leave it with `return`, `fail`, `break`, `continue` or a trap"
+                        ),
+                        at,
+                    );
                 }
             }
         }
@@ -1456,36 +1576,56 @@ impl Checker<'_, '_> {
             TyKind::Result(ok, err) => (ok, err),
             TyKind::Poison => return (self.poison(), ExprRes::None),
             _ => {
-                self.ni("E0704 not_a_result: `try` on a value that is not a result (S4)");
+                self.err(
+                    "E0704",
+                    "`try` needs a result (`T ! E`), not this value",
+                    op_span,
+                );
                 return (self.poison(), ExprRes::None);
             }
         };
         let ctx = self.fnctx();
         self.reject_try_in_consuming_loop(Span::new(op_span.start, op_span.start + 3));
         if self.defer_depth > ctx.defer_base {
-            self.ni("E0708 exit_in_deferred_block: `try` inside a `defer` block (S4)");
+            self.err(
+                "E0708",
+                "`try` inside a deferred block: its error cannot be handled after the block leaves",
+                op_span,
+            );
         }
         if self.par_depth > 0 {
-            self.ni("E1408 par_for_exit: `try` inside a `par for` body (S4)");
+            self.err("E1408", "`try` inside a `par for` body", op_span);
         }
         let conversion = match ctx.kind {
             super::CtxKind::Test => Some(TryConversion::Identity),
-            _ => {
-                match ctx.error {
+            _ => match ctx.error {
+                None => {
+                    self.err(
+                        "E0702",
+                        "`try` in a function that is not fallible; there is no error type to propagate it to",
+                        op_span,
+                    );
+                    None
+                }
+                Some(fe) if fe == err || self.is_poison(fe) => Some(TryConversion::Identity),
+                Some(fe) => match self.variant_from(fe, err) {
+                    Some(v) => Some(TryConversion::FromVariant(v)),
                     None => {
-                        self.ni("E0702 try_cannot_propagate: `try` in a function that is not fallible (S4)");
+                        let path = self.file_path();
+                        let sig = ctx.error_span;
+                        let d = self.err(
+                            "E0703",
+                            "the error of this `try` is neither the function's error type nor \
+                             convertible to it",
+                            op_span,
+                        );
+                        if let Some(sig) = sig {
+                            d.relate_in("signature", &path, sig);
+                        }
                         None
                     }
-                    Some(fe) if fe == err || self.is_poison(fe) => Some(TryConversion::Identity),
-                    Some(fe) => match self.variant_from(fe, err) {
-                        Some(v) => Some(TryConversion::FromVariant(v)),
-                        None => {
-                            self.ni("E0703 try_error_mismatch: the error of a `try` is neither the function's error nor convertible to it (S4)");
-                            None
-                        }
-                    },
-                }
-            }
+                },
+            },
         };
         match conversion {
             Some(conversion) => (ok, ExprRes::Try(TryInfo { conversion })),
@@ -1494,7 +1634,7 @@ impl Checker<'_, '_> {
     }
 
     /// The variant of the enum `fe` that is declared `from` the type `err`.
-    fn variant_from(&mut self, fe: TypeId, err: TypeId) -> Option<VariantRef> {
+    pub(crate) fn variant_from(&mut self, fe: TypeId, err: TypeId) -> Option<VariantRef> {
         let TyKind::Adt(def, args) = self.kind(fe) else {
             return None;
         };

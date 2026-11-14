@@ -154,7 +154,14 @@ impl Checker<'_, '_> {
             StmtKind::Defer { err, body } => {
                 if *err && self.fnctx().error.is_none() && self.fnctx().kind != super::CtxKind::Test
                 {
-                    self.ni("E0709 errdefer_not_fallible: `errdefer` in a function that is not fallible (S4)");
+                    let kw = Span::new(stmt.span.start, stmt.span.start + 8);
+                    let edit = self.edit(kw, "defer");
+                    self.err(
+                        "E0709",
+                        "`errdefer` in a function that is not fallible: it would never run",
+                        kw,
+                    )
+                    .fix("replace `errdefer` with `defer`", edit);
                 }
                 self.defer_depth += 1;
                 self.block(*body);
@@ -276,22 +283,75 @@ impl Checker<'_, '_> {
                 true
             }
             StmtKind::Select { arms } => {
-                self.ni("E1409 not_waitable and E1410 bad_waitable: the arms of a `select` (S4)");
                 let mut completes = false;
                 for arm in arms {
                     if let Some(call) = arm.call {
                         let t = self.expr(call, None);
+                        if !self.is_poison(t) {
+                            self.check_waitable_call(call);
+                        }
                         self.pattern(arm.pattern, t);
                     }
                     completes |= self.block(arm.body);
                 }
                 completes
             }
-            StmtKind::Unsafe { body, .. } => {
-                self.ni("the rules of `unsafe`: E1301, E1302 and E1304 (S4)");
-                self.block(*body)
+            StmtKind::Unsafe {
+                reason,
+                reason_span,
+                body,
+            } => {
+                self.check_unsafe_reason(reason, *reason_span);
+                self.unsafe_used.push(false);
+                let completes = self.block(*body);
+                let used = self.unsafe_used.pop().expect("an unsafe block");
+                if !used {
+                    let kw = Span::new(stmt.span.start, stmt.span.start + 6);
+                    self.err(
+                        "E1304",
+                        "this `unsafe` block contains no operation that needs it",
+                        kw,
+                    );
+                }
+                completes
             }
             StmtKind::Poison => true,
+        }
+    }
+
+    /// E1409: a `select` arm must call a `waitable fn` directly.
+    fn check_waitable_call(&mut self, call: ExprId) {
+        let res = self.out.exprs.get(&call).map(|i| i.res.clone());
+        let mut callee = None;
+        let ok = match &res {
+            Some(ExprRes::Call(info)) => match &info.callee {
+                Callee::Fn(f) => {
+                    if let Some(sig) = self.fn_sig(f.def) {
+                        let waitable = sig.mods.waitable;
+                        if !waitable {
+                            let file = self.cx.file_of(f.def);
+                            callee = Some((self.cx.sources.get(file).path.clone(), sig.name_span));
+                        }
+                        waitable
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if ok {
+            return;
+        }
+        let span = self.span_of(call);
+        let d = self.err(
+            "E1409",
+            "a `select` arm's operation is not a call of a `waitable fn`",
+            span,
+        );
+        if let Some((file, at)) = callee {
+            d.relate_in("callee", &file, at);
         }
     }
 
@@ -302,7 +362,7 @@ impl Checker<'_, '_> {
             return !self.is_never(t);
         }
         if self.is_result(t) {
-            self.ni("E0701 unhandled_result: a result used as a statement (S4)");
+            self.unhandled_result(e, t);
             return true;
         }
         let span = self.span_of(e);
@@ -343,6 +403,9 @@ impl Checker<'_, '_> {
                 if poison_place {
                     return;
                 }
+                if self.unhandled_result(place, pt) || self.unhandled_result(value, vt) {
+                    return;
+                }
                 let op_span = self.hir.stmt(s).span;
                 let at = Span::new(self.span_of(place).end, self.span_of(value).start);
                 let _ = op_span;
@@ -367,10 +430,14 @@ impl Checker<'_, '_> {
             self.ni("`return` in the initializer of a constant or static");
         }
         if self.defer_depth > ctx.defer_base {
-            self.ni("E0708 exit_in_deferred_block: `return` inside a `defer` block (S4)");
+            self.err(
+                "E0708",
+                "`return` inside a deferred block: the block runs on the way out and cannot leave again",
+                kw,
+            );
         }
         if self.par_depth > 0 {
-            self.ni("E1408 par_for_exit: `return` inside a `par for` body (S4)");
+            self.err("E1408", "`return` inside a `par for` body", kw);
         }
         self.reject_exit_of_consuming_loop(kw);
         let void = self.void();
@@ -389,7 +456,14 @@ impl Checker<'_, '_> {
                 if !self.compatible(t, ctx.ret) {
                     let own = ctx.error.map(|er| self.mk(TyKind::Result(ctx.ret, er)));
                     if own == Some(t) {
-                        self.ni("E0710 return_of_result: `return` of the function's own result type (S4)");
+                        let span = self.span_of(e);
+                        let edit = self.edit(Span::empty(span.start), "try ");
+                        self.err(
+                            "E0710",
+                            "`return` of a value of the function's own result type; use `try`",
+                            span,
+                        )
+                        .fix("insert `try`", edit);
                     } else if self.dyn_coerce(e, t, ctx.ret).is_none() {
                         self.mismatch(e, t, ctx.ret);
                     }
@@ -410,10 +484,18 @@ impl Checker<'_, '_> {
     fn fail_stmt(&mut self, stmt_span: Span, e: ExprId) {
         let ctx = self.fnctx();
         if self.defer_depth > ctx.defer_base {
-            self.ni("E0708 exit_in_deferred_block: `fail` inside a `defer` block (S4)");
+            self.err(
+                "E0708",
+                "`fail` inside a deferred block: the block runs on the way out and cannot leave again",
+                Span::new(stmt_span.start, stmt_span.start + 4),
+            );
         }
         if self.par_depth > 0 {
-            self.ni("E1408 par_for_exit: `fail` inside a `par for` body (S4)");
+            self.err(
+                "E1408",
+                "`fail` inside a `par for` body",
+                Span::new(stmt_span.start, stmt_span.start + 4),
+            );
         }
         let kw = Span::new(stmt_span.start, stmt_span.start + 4);
         self.reject_exit_of_consuming_loop(kw);
@@ -421,12 +503,33 @@ impl Checker<'_, '_> {
             Some(et) => {
                 let t = self.expr(e, Some(et));
                 if !self.compatible(t, et) {
-                    self.ni("E0706 fail_type_mismatch: the operand of `fail` is not the function's error type (S4)");
+                    let span = self.span_of(e);
+                    let path = self.file_path();
+                    let sig = ctx.error_span;
+                    let fix = self.variant_from(et, t).map(|v| {
+                        let text = self.text(span).to_string();
+                        let name = v
+                            .def
+                            .map(|d| self.cx.sema.def(d).name.clone())
+                            .unwrap_or_default();
+                        self.edit(span, format!(".{name}({text})"))
+                    });
+                    let d = self.err(
+                        "E0706",
+                        "the operand of `fail` is not the function's error type",
+                        span,
+                    );
+                    if let Some(edit) = fix {
+                        d.fix("wrap it in the `from` variant", edit);
+                    }
+                    if let Some(sig) = sig {
+                        d.relate_in("signature", &path, sig);
+                    }
                 }
             }
             None => {
                 self.blind_expr(e);
-                self.ni("E0705 fail_not_fallible: `fail` in a function that is not fallible (S4)");
+                self.err("E0705", "`fail` in a function that is not fallible", kw);
             }
         }
     }
@@ -485,12 +588,10 @@ impl Checker<'_, '_> {
         let par_leave =
             self.loops[idx + 1..].iter().any(|l| l.par) || (is_break && self.loops[idx].par);
         if par_leave {
-            self.ni("E1408 par_for_exit: `break` or `continue` out of a `par for` body (S4)");
+            self.err("E1408", format!("`{word}` leaves a `par for` body"), kw);
         }
         if self.loops[idx].defer_depth < self.defer_depth {
-            self.ni(
-                "E0708 exit_in_deferred_block: `break` or `continue` leaving a `defer` block (S4)",
-            );
+            self.err("E0708", format!("`{word}` leaves a deferred block"), kw);
         }
     }
 
@@ -510,7 +611,10 @@ impl Checker<'_, '_> {
         body: BlockId,
     ) {
         if par {
-            self.ni("the rules of `par for`: E1401, E1402, E1406, E1407, E1408 (S4)");
+            self.ni(
+                "E1401 not_send, E1402 capture_not_sync and E1407 par_for_outer_mutation \
+                 (phase 9, S6 to S9)",
+            );
         }
         if let Some(g) = grain {
             let i64_ = self.i64_();
@@ -524,7 +628,22 @@ impl Checker<'_, '_> {
                     self.expr(st, None);
                     self.ni("`step` on a `for` that is not over a range");
                 }
-                self.for_collection(iter)
+                if par {
+                    let t = self.expr(iter, None);
+                    if self.is_poison(t) || self.is_never(t) {
+                        (None, false)
+                    } else if matches!(self.kind(t), TyKind::Slice(..)) {
+                        self.for_collection_typed(iter, t)
+                    } else {
+                        self.ni(
+                            "E1406 par_for_not_splittable: whether this type implements \
+                             `par.Split`, which the standard library does not declare yet",
+                        );
+                        (None, false)
+                    }
+                } else {
+                    self.for_collection(iter)
+                }
             }
         };
         let item = info.as_ref().map(|i| i.item).unwrap_or(poison);
@@ -659,6 +778,9 @@ impl Checker<'_, '_> {
             Err(crate::consteval::Fail::NotImplemented(m)) => {
                 self.ni(m);
             }
+            Err(crate::consteval::Fail::Generic) => {
+                self.ni("a `step` that depends on a generic parameter");
+            }
             Err(crate::consteval::Fail::OutOfRange(sp)) => {
                 self.err("E0405", "the step does not fit the type of the range", sp);
             }
@@ -669,6 +791,10 @@ impl Checker<'_, '_> {
     /// array of linear elements.
     fn for_collection(&mut self, iter: ExprId) -> (Option<ForInfo>, bool) {
         let t = self.expr(iter, None);
+        self.for_collection_typed(iter, t)
+    }
+
+    fn for_collection_typed(&mut self, iter: ExprId, t: TypeId) -> (Option<ForInfo>, bool) {
         if self.is_poison(t) || self.is_never(t) {
             return (None, false);
         }

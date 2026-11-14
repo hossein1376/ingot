@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 20
+
+struct Buf { n: i64 }
+
+impl Send for Buf {} //~ E1303

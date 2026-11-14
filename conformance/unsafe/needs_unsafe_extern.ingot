@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 15, 29
+
+extern "c" {
+    fn ext() -> i64;
+}
+
+fn f() -> i64 {
+    return ext(); //~ E1301
+}

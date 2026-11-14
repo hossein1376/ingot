@@ -49,6 +49,8 @@ pub(crate) enum CtxKind {
 pub(crate) struct FnCtx {
     pub ret: TypeId,
     pub error: Option<TypeId>,
+    /// The span of the error type in the signature, for the `signature` related span.
+    pub error_span: Option<Span>,
     pub kind: CtxKind,
     /// The length of the loop stack when the function was entered: `break` and
     /// `continue` see only the loops above it.
@@ -86,6 +88,9 @@ pub(crate) struct Checker<'c, 'a> {
     pub let_of: BTreeMap<LocalId, StmtId>,
     pub defer_depth: u32,
     pub par_depth: u32,
+    /// One entry per `unsafe` block around the current expression; `true` once an
+    /// operation that needs the block has been checked inside it (E1304).
+    pub unsafe_used: Vec<bool>,
     /// Patterns that were reported: exhaustiveness says nothing about a `match` that
     /// has one.
     pub failed_pats: BTreeSet<crate::hir::PatId>,
@@ -142,6 +147,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             fns: vec![FnCtx {
                 ret,
                 error,
+                error_span: None,
                 kind: ctx_kind,
                 loop_base: 0,
                 defer_base: 0,
@@ -152,6 +158,7 @@ impl<'c, 'a> Checker<'c, 'a> {
             let_of: BTreeMap::new(),
             defer_depth: 0,
             par_depth: 0,
+            unsafe_used: Vec::new(),
             failed_pats: BTreeSet::new(),
             errors: 0,
             poisoned: false,
@@ -363,6 +370,39 @@ impl<'c, 'a> Checker<'c, 'a> {
         *self.fns.last().expect("a function context")
     }
 
+    /// An operation that E1301 requires `unsafe` for (section 15). Inside a block it
+    /// belongs to the innermost one, which then is not E1304; outside, it is E1301.
+    /// Returns whether the operation was inside an `unsafe` block.
+    pub(crate) fn requires_unsafe(&mut self, span: Span, what: &str) -> bool {
+        if let Some(used) = self.unsafe_used.last_mut() {
+            *used = true;
+            true
+        } else {
+            self.err("E1301", format!("{what} needs an `unsafe` block"), span);
+            false
+        }
+    }
+
+    /// An access through a raw pointer that is E0418 stands for the dereference its fix
+    /// inserts, so it uses the innermost `unsafe` block around it: that block is not
+    /// also E1304.
+    pub(crate) fn note_raw_access(&mut self) {
+        if let Some(used) = self.unsafe_used.last_mut() {
+            *used = true;
+        }
+    }
+
+    /// The reason of an `unsafe` block must say what it relies on (E1302).
+    pub(crate) fn check_unsafe_reason(&mut self, reason: &str, span: Span) {
+        if reason.trim().is_empty() {
+            self.err(
+                "E1302",
+                "the reason of an `unsafe` block must say what invariant it relies on",
+                span,
+            );
+        }
+    }
+
     // -------------------------------------------------------------- std items
 
     /// A type declared in a module of `std`, by module path and name.
@@ -478,14 +518,9 @@ impl Cx<'_> {
             sig.ret,
             error,
         );
+        c.fns[0].error_span = sig.error_span;
         if f.mods.kernel {
-            c.ni("kernel shape rules E1510 to E1519 of a `kernel fn` body (S4)");
-        }
-        if f.mods.waitable {
-            c.ni("the `waitable fn` rule E1410 (S4)");
-        }
-        if f.mods.unsafe_ {
-            c.ni("the rules of an `unsafe fn` body, E1301 and E1304 (S4)");
+            c.ni("kernel shape rules E1510 to E1519 of a `kernel fn` body (S4b)");
         }
         for (p, s) in f.params.iter().zip(&sig.params) {
             let mode = if c.is_copy(s.ty) {

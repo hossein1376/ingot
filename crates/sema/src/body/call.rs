@@ -176,9 +176,9 @@ impl Checker<'_, '_> {
             return (self.poison(), ExprRes::None);
         };
         if sig.mods.kernel {
-            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4)");
+            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4b)");
         }
-        self.note_unsafe_callee(&sig);
+        self.note_unsafe_callee(&sig, self.span_of(e));
         let target = CallTarget {
             def: d,
             sig: sig.clone(),
@@ -647,7 +647,15 @@ impl Checker<'_, '_> {
         }
         let (t, _) = self.strip_refs(ct);
         let found: Option<(FnPtrSig, ValueCall)> = match self.kind(t) {
-            TyKind::FnPtr(s) => Some((s, ValueCall::FnPtr)),
+            TyKind::FnPtr(s) => {
+                if s.ext {
+                    self.ni(
+                        "whether a call through an `extern fn` pointer needs `unsafe` (section \
+                         15 names calls of `extern` functions, section 29 the pointer type)",
+                    );
+                }
+                Some((s, ValueCall::FnPtr))
+            }
             TyKind::Closure(_, idx) => self
                 .out
                 .closures
@@ -1167,6 +1175,7 @@ impl Checker<'_, '_> {
         if let TyKind::RawPtr(..) = self.kind(t0) {
             let at = self.dot_before(name_span);
             let edit = self.edit(Span::empty(at), ".*");
+            self.note_raw_access();
             self.err(
                 "E0418",
                 "a method call on a raw pointer: write `.*` first",
@@ -1213,9 +1222,9 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         };
-        self.note_unsafe_callee(&sig);
+        self.note_unsafe_callee(&sig, self.span_of(e));
         if sig.mods.kernel {
-            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4)");
+            self.ni("E1515 not_a_kernel: a direct call of a `kernel fn` (S4b)");
         }
         let (source, subst, extra) = self.fn_ref_from(&c, self_ty);
         // The receiver: look through `derefs` borrows, then pass it as `self` says.
@@ -1314,6 +1323,7 @@ impl Checker<'_, '_> {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
         };
+        self.note_unsafe_callee(&sig, self.span_of(e));
         let Some(isig) = self.cx.d.interface_sig(iface).cloned() else {
             self.blind_args(args);
             return (self.poison(), ExprRes::None);
@@ -1543,6 +1553,7 @@ impl Checker<'_, '_> {
         self.fns.push(FnCtx {
             ret,
             error,
+            error_span: c.error.as_ref().map(|t| t.span),
             kind: CtxKind::Closure,
             loop_base: self.loops.len(),
             defer_base: self.defer_depth,
@@ -1606,8 +1617,8 @@ impl Checker<'_, '_> {
 
     // ------------------------------------------------- spawn, dispatch (typed)
 
-    /// `spawn call in scope`. The rules of `spawn` (E1401, E1403, E1404, E1405) belong
-    /// to the next step; the types are decided here.
+    /// `spawn call in scope`. The rules of `spawn` that need the ownership checker
+    /// (E1401, E1403) belong to phase 9; E1404 and E1405 are decided here.
     pub(crate) fn spawn(
         &mut self,
         e: ExprId,
@@ -1616,11 +1627,35 @@ impl Checker<'_, '_> {
         value: bool,
     ) -> (TypeId, ExprRes) {
         let _ = e;
-        self.ni("the rules of `spawn`: E1401, E1403, E1404, E1405 (S4)");
+        self.ni("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
         let ct = self.expr(call, None);
         let st = self.expr(scope, None);
-        let _ = st;
+        if !self.is_poison(st) && !self.is_never(st) {
+            let expected = self
+                .std_type("std.task", "Scope")
+                .map(|d| {
+                    let t = self.mk(TyKind::Adt(d, Vec::new()));
+                    self.ref_to(Mutability::Shared, t)
+                })
+                .unwrap_or_else(|| self.poison());
+            if !self.compatible(st, expected) {
+                let sn = self.name(st);
+                self.err(
+                    "E1405",
+                    format!("the scope of a `spawn` is a `&Scope`, not `{sn}`"),
+                    self.span_of(scope),
+                );
+            }
+        }
         if !value {
+            if !self.is_poison(ct) && !self.is_never(ct) && ct != self.void() {
+                let n = self.name(ct);
+                self.err(
+                    "E1404",
+                    format!("a statement-form `spawn` needs a call that returns `void`, not `{n}`"),
+                    self.span_of(call),
+                );
+            }
             return (self.void(), ExprRes::Spawn);
         }
         match self.std_type("std.task", "Task") {
@@ -1659,7 +1694,7 @@ impl Checker<'_, '_> {
         domain: ExprId,
         executor: ExprId,
     ) -> TypeId {
-        self.ni("the rules of `dispatch` and kernels: E1510 to E1519 (S4)");
+        self.ni("the rules of `dispatch` and kernels: E1510 to E1519 (S4b)");
         let hir = self.hir;
         // The domain: a range, or a tuple of ranges, of `i64`.
         let mut ranges = Vec::new();

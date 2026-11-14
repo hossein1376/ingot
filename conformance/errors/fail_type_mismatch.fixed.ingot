@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 6.3
+
+enum Inner { bad }
+
+enum Outer { inner: from Inner, other }
+
+fn f() -> i64 ! Outer {
+    fail .inner(Inner.bad);
+}

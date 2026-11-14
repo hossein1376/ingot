@@ -512,8 +512,8 @@ fn only_an_unsafe_impl_states_send_or_sync() {
          impl Send for Holder {}\n\
          struct Safe { p: *u8 }\n\
          unsafe impl Send for Safe {}\n");
-    // Without `unsafe` the impl is E1303 (a later step) and grants nothing.
-    assert_eq!(d.codes(), vec![]);
+    // Without `unsafe` the impl is E1303 and grants nothing.
+    assert_eq!(d.codes(), vec![("E1303".to_string(), 2)]);
     let holder = d.adt("Holder");
     assert_eq!(d.decls.props(holder).send, Tri::No);
     let safe = d.adt("Safe");

@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 19
+
+fn f() {
+    outer: for i in 0..4 {
+        par for j in 0..4 {
+            _ = j;
+            continue outer; //~ E1408
+        }
+        _ = i;
+    }
+}
