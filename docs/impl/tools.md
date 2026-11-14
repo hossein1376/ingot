@@ -20,6 +20,10 @@ Section 33 of the specification lists the commands. This file fixes their output
 
 * **Exit status.** 0 when `ok` is true, 1 when the command ran and found problems, 2 when
   the compiler itself failed. A consumer should trust `ok`, not the absence of lines.
+* **Failures.** A command that stops with status 2 for a reason it can name (a path
+  that does not exist, a part of the compiler that is not written yet) writes
+  `{"type":"error","message":M}` and then its summary, with `ok` false. Only a crash
+  leaves the summary out.
 * **Compatibility.** `protocol` is 1. Within a protocol version, fields are added but
   never removed, renamed or given another type. Consumers must ignore unknown fields.
 * **Paths** are relative to the package root and use `/` on every system. When `PATH`
@@ -328,12 +332,19 @@ adapters that need unsaved text.
 → {"id":2,"command":"query","args":{"kind":"borrows","at":"src/io.ingot:41"}}
 ```
 
-* One request per line. Every response line carries the request's `id`. A request is
-  finished when its `summary` arrives.
-* `args` are the command's flags with the leading dashes removed and `-` written `_`.
+* One request per line. Every response line carries the request's `id`, as its first
+  field, written back as the request gave it. A request is finished when its `summary`
+  arrives. Every request has one, the extra requests below included.
+* `args` are the command's flags with the leading dashes removed and `-` written `_`,
+  and `path` for the positional argument. A path in a request is absolute or relative
+  to the server's working directory, as on the command line.
 * **A server is a cache, not a second implementation.** For the same file contents it
-  must print exactly what the one-shot command prints. The conformance suite is run in
-  both modes.
+  must print exactly what the one-shot command prints, except for the `id` field and,
+  in each summary, an `exit` field: the status the one-shot command would have exited
+  with. The conformance suite is run in both modes.
+* A request the server cannot read (not a JSON object, no `command`, a command or
+  argument it does not know) is answered with an `error` line and a summary with
+  `"exit":2`. Its `id` is `null` when the request has none or cannot be read.
 * The server reads files when a request needs them and compares them with what it has.
   It does not need to be told about saved changes.
 * Extra requests:
@@ -344,7 +355,14 @@ adapters that need unsaved text.
   | `cancel` with `target` | stop request `target`. Its summary has `"canceled":true` |
   | `shutdown` | finish and exit with status 0 |
 
-* Requests are answered in order. A `cancel` is acted on at once.
+* An overlay applies to every read of that file, in any package, `std` included. An
+  overlay for a file that does not exist on disk makes it exist for the server: a
+  directory listing that would contain it does.
+* Requests are answered in order. A `cancel` is acted on at once: a target that has not
+  started is answered by its summary alone, with `"canceled":true`. A running target
+  may be stopped, and is then answered the same way; one that is not stopped, or has
+  already finished, is answered in full. The `cancel` itself always succeeds.
+* The end of standard input is a `shutdown`.
 * **Incremental work.** After a change inside one function body, the server should not
   repeat pipeline phases 7 to 10 for any other function. After a change to a signature,
   only functions that name the changed item are checked again. This follows from the
