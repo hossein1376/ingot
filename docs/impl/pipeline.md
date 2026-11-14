@@ -276,7 +276,7 @@ else can change it (invariant I2). Facts come from:
 
 | §31 rule | Remove the check when |
 |---|---|
-| 1 | it guards the element access generated for `for x in xs` |
+| 1 | it guards the element access generated for `for x in xs`. Lowering (section 5) emits no such check, so this rule holds by construction |
 | 2, 3 | it is a bounds check on index `e` against `len(p)` and the facts give `0 <= e` and `e < len(p)`. For a slice range or vector access of width `k`: `0 <= e` and `e + k <= len(p)` |
 | 4 | it is an overflow check on `a op b` and the facts bound the exact result inside the type's range |
 | 5 | both operands are constants. The operation is folded; an overflow is E0806 |
