@@ -52,7 +52,9 @@ need.
 ## Decisions inside the steps
 
 **Settled with the user (2026-11-14).** No dependencies, as for the compiler. Zed is
-the only editor wired up (`zed-ingot`, outside this repository). The branch `lsp`
+the only editor wired up. Its extension is `editors/zed/` and the grammar
+`editors/tree-sitter-ingot/`, both in this repository (moved in from untracked folders
+on 2026-11-14). The branch `lsp`
 starts at 775fdde and is rebased onto `compiler` once S5 is committed. The serve
 protocol gaps (error lines, `exit` in serve summaries, request paths, cancel, end of
 input) are filled in tools.md §1 and §6.
