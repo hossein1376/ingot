@@ -1,0 +1,4 @@
+# Built by Zed: the grammar it clones and compiles, and the extension module.
+grammars/
+*.wasm
+target/
