@@ -226,8 +226,18 @@ placeholder is `{}` or `{:spec}`, and `{{` and `}}` are literal braces. `spec` i
 `[<|>][0][width][.precision][x|X|b|o]`. Arguments are used in order and their count
 must match the placeholders. A `[]u8` prints as text, and with `x` as hex bytes. A float
 prints as the shortest text that reads back to the same value, unless a precision is
-given. A malformed placeholder, a spec the argument's type does not support, or a count
-mismatch is E0422.
+given. What each part of `spec` allows:
+
+| Part | Allowed on |
+|---|---|
+| `<`, `>` and `width` | every type |
+| `0` (pad with zeros) | integers and floats |
+| `.precision` | floats |
+| `x`, `X`, `b`, `o` | integers; `x` and `X` also on `[]u8` and `[]mut u8` |
+
+A malformed placeholder, a spec the argument's type does not support, or a count
+mismatch is E0422. The type of `@format` itself (which writers it takes and the error it
+returns) is a known gap, to be settled with `std.io`.
 
 Library conventions that every module follows:
 

@@ -128,7 +128,7 @@ Vectors are `Copy` values. They are passed and returned in registers.
 
 | Operation | Notes |
 |---|---|
-| `+ - * /` on float vectors | lane-wise IEEE |
+| `+ - * /` and unary `-` on float vectors | lane-wise IEEE |
 | `+% -% *%`, `+\| -\|` on integer vectors | lane-wise. Plain `+ - *` are **errors** on integer vectors because a per-lane overflow trap has no cheap form: the code chooses wrapping or saturating |
 | `& \| ^ ~`, `<< >>` by a scalar count | integer vectors |
 | `== != < <= > >=` | lane-wise, result `boolxN` |
@@ -139,7 +139,7 @@ Vectors are `Copy` values. They are passed and returned in registers.
 | `@select(mask, a, b)` | per-lane choice |
 | `@any(m)`, `@all(m)`, `@count(m)`, `@first(m)` | mask queries. `@count` and `@first` give `i64` |
 | `@mask_bits(m)` | the mask as a `u64`, lane 0 in bit 0 |
-| `@fma(a, b, c)`, `@sqrt`, `@abs`, `@min`, `@max`, `@floor`, `@ceil`, `@round` | lane-wise. On floats, scalars and vectors alike, `@min` and `@max` return the other operand when exactly one is NaN, and order `-0.0` below `0.0`, so the result does not depend on the order of a reduction |
+| `@fma(a, b, c)`, `@sqrt`, `@abs`, `@min`, `@max`, `@floor`, `@ceil`, `@round` | lane-wise. Each is also defined on a float scalar (`f32`, `f64`), with the same type for its operands and result. On integers, scalar or vector, they are not specified yet (the builtin reference, a known gap). On floats, scalars and vectors alike, `@min` and `@max` return the other operand when exactly one is NaN, and order `-0.0` below `0.0`, so the result does not depend on the order of a reduction |
 | `@reduce_add`, `@reduce_min`, `@reduce_max`, `@reduce_and`, `@reduce_or` | float `@reduce_add` adds in a fixed pairwise tree, the same on both CPUs |
 | `@shuffle(v, idx)`, `@shuffle(a, b, idx)` | constant permutation. `v`, `a`, `b`: `LxN`; `idx` a constant `[M]i32` literal, each in `0..N` (in `0..2N` for two sources, the upper half picking from `b`); the result is `LxM`, which must be a vector type (E1501). An index that is not constant or out of range is E1504 |
 | `@lookup(table, idx)` | byte table lookup (`tbl` / `vpermb`): `table: u8xN`, `idx: u8xM`, result `u8xM`; a lane is `table[idx]`, or 0 when `idx >= N` |

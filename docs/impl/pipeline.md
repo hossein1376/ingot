@@ -434,4 +434,10 @@ so that earlier work does not rule it out.
 * **There is no builtin reference.** Builtins are named across eight sections. One
   appendix table (name, signature, constant or not, `unsafe` or not, trap) is to be
   written, and with it the builtins still missing entirely: pointer offset, pointer casts
-  between pointee types, pointer to and from `u64`, and the atomic operations.
+  between pointee types, pointer to and from `u64`, and the atomic operations. It is
+  also to say what `@abs`, `@min`, `@max` and the other §26.2 math builtins do on
+  integers, scalar and vector, and whether `@div_or`, `@rem_or`, `@shl` and `@shr` are
+  lane-wise on integer vectors.
+* **`@format` has no type yet.** Its format string is checked (§35), but which writers
+  it takes (`&io.Writer`, `&mut fmt.Formatter`) and the error it returns are to be
+  settled with `std.io`.
