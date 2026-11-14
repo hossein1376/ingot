@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 4.2
+
+import private_field_rest.lib;
+
+fn peek(t: lib.Ticket) -> i32 {
+    let .{ id, .. } = t; //~ E0307
+    return id;
+}

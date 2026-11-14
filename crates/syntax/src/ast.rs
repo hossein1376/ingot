@@ -492,6 +492,9 @@ pub enum Pattern {
     Struct {
         ty: Option<PathTy>,
         fields: Vec<FieldPattern>,
+        /// The pattern ends in `..` and leaves its other fields out (`grammar.md`).
+        rest: bool,
+        rest_span: Span,
         span: Span,
     },
     Poison,

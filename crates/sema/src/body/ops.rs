@@ -39,6 +39,20 @@ fn accepts(op: BinOp) -> (bool, bool, bool) {
     }
 }
 
+/// Whether the non-negative integer `value` is exactly representable in `f`: its
+/// significant bits must fit in the float's significand (`u128` has enough bits for the
+/// comparison at both widths).
+fn int_fits_float(value: u128, f: FloatTy) -> bool {
+    if value == 0 {
+        return true;
+    }
+    let significand = match f {
+        FloatTy::F32 => 24,
+        FloatTy::F64 => 53,
+    };
+    (value >> value.trailing_zeros()) < (1u128 << significand)
+}
+
 impl Poss {
     pub(crate) fn verdict(self, allowed: (bool, bool, bool)) -> Verdict {
         let present = [
@@ -186,12 +200,21 @@ impl Checker<'_, '_> {
                 }
                 h
             }
-            Some(TyKind::Float(_)) => {
-                self.ni(
-                    "an integer literal where a floating-point type is expected (specification \
-                     sections 1 and 3 do not say whether it converts)",
-                );
-                self.poison()
+            Some(TyKind::Float(f)) => {
+                let h = hint.expect("a hint");
+                if !int_fits_float(value, f) {
+                    let text = self.text(span).to_string();
+                    self.err(
+                        "E0405",
+                        format!(
+                            "the literal {text} is not exactly representable in `{}`",
+                            f.name()
+                        ),
+                        span,
+                    );
+                    return self.poison();
+                }
+                h
             }
             Some(TyKind::Param(p)) => {
                 let h = hint.expect("a hint");

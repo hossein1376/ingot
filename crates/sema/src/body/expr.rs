@@ -19,13 +19,100 @@ impl Checker<'_, '_> {
         self.set(e, ty, res)
     }
 
-    /// Type `e` against the type the context requires, reporting a mismatch.
+    /// Type `e` against the type the context requires, reporting a mismatch. A
+    /// `&T` (`&mut T`) where a `&dyn I` (`&mut dyn I`) is required is the one implicit
+    /// conversion between non-literal values (sections 3 and 4.4).
     pub(crate) fn expect(&mut self, e: ExprId, expected: TypeId) -> TypeId {
         let found = self.expr(e, Some(expected));
-        if !self.compatible(found, expected) {
-            self.mismatch(e, found, expected);
+        if self.compatible(found, expected) {
+            return found;
         }
+        if let Some(t) = self.dyn_coerce(e, found, expected) {
+            return t;
+        }
+        self.mismatch(e, found, expected);
         found
+    }
+
+    /// A branch of an `if` or `match` expression: its context is the whole expression's,
+    /// so a `&T` branch becomes the `&dyn I` the context expects (section 3).
+    fn branch(&mut self, e: ExprId, hint: Option<TypeId>) -> TypeId {
+        let t = self.expr(e, hint);
+        match hint {
+            Some(h) if !self.compatible(t, h) => self.dyn_coerce(e, t, h).unwrap_or(t),
+            _ => t,
+        }
+    }
+
+    /// A `&T` or `&mut T` where `&dyn I` or `&mut dyn I` is expected, with the same
+    /// mutability and `T` implementing `I`. Records the conversion on the expression
+    /// and returns the target type; `None` when this is not that conversion.
+    pub(crate) fn dyn_coerce(
+        &mut self,
+        e: ExprId,
+        found: TypeId,
+        expected: TypeId,
+    ) -> Option<TypeId> {
+        let TyKind::Dyn(target_m, iface, iargs) = self.kind(expected).clone() else {
+            return None;
+        };
+        let TyKind::Ref(source_m, inner) = self.kind(found).clone() else {
+            return None;
+        };
+        if source_m != target_m || matches!(self.kind(inner), TyKind::Dyn(..)) {
+            return None;
+        }
+        let bound = Bound::Interface(iface, iargs.clone());
+        match self.cx.d.satisfies(inner, &bound) {
+            Tri::Yes => {
+                let iname = self.cx.sema.def(iface).name.clone();
+                let Some(via) = self.resolve_interface(inner, iface, &iargs) else {
+                    let tn = self.name(inner);
+                    self.ni(format!("how `{tn}` implements `{iname}`"));
+                    return Some(self.poison());
+                };
+                let info = DynCoercion {
+                    interface: iface,
+                    interface_args: iargs,
+                    self_ty: inner,
+                    via,
+                };
+                if let Some(expr) = self.out.exprs.get_mut(&e) {
+                    expr.ty = expected;
+                    expr.coerce = Some(info);
+                }
+                Some(expected)
+            }
+            Tri::No => {
+                let tn = self.name(inner);
+                let iname = self.cx.sema.def(iface).name.clone();
+                let borrow = if target_m == Mutability::Mut {
+                    "&mut "
+                } else {
+                    "&"
+                };
+                let span = self.span_of(e);
+                self.err(
+                    "E0401",
+                    format!(
+                        "`{tn}` does not implement `{iname}`, so `{borrow}{tn}` cannot become \
+                         `{borrow}dyn {iname}`"
+                    ),
+                    span,
+                );
+                // The context gets the type it asked for, so the error is not repeated.
+                Some(expected)
+            }
+            Tri::Unknown => {
+                let tn = self.name(inner);
+                let iname = self.cx.sema.def(iface).name.clone();
+                self.ni(format!(
+                    "whether `{tn}` implements `{iname}` (the specification does not define it \
+                     for this type)"
+                ));
+                Some(self.poison())
+            }
+        }
     }
 
     /// An expression of type `found` where `expected` is required (E0401 and the more
@@ -77,10 +164,10 @@ impl Checker<'_, '_> {
                 );
                 return;
             }
-            (TyKind::Ref(..), TyKind::Dyn(..) | TyKind::DynFn(..)) => {
+            (TyKind::Ref(..), TyKind::DynFn(..)) => {
                 self.ni(
-                    "making a `&dyn I` from a borrow (the specification gives no conversion or \
-                     syntax)",
+                    "making a `&dyn Fn(..)` from a borrow (the specification gives no \
+                     conversion or syntax)",
                 );
                 return;
             }
@@ -232,13 +319,13 @@ impl Checker<'_, '_> {
                 otherwise,
             } => {
                 self.if_cond(cond);
-                let first = self.expr(*then, hint);
+                let first = self.branch(*then, hint);
                 let second_hint = if self.is_never(first) {
                     hint
                 } else {
                     Some(first)
                 };
-                let second = self.expr(*otherwise, second_hint.or(hint));
+                let second = self.branch(*otherwise, second_hint.or(hint));
                 let ty = if self.is_never(first) {
                     second
                 } else {
@@ -597,9 +684,8 @@ impl Checker<'_, '_> {
                     (self.poison(), ExprRes::None)
                 }
             },
-            TyKind::Array(..) if name == "len" => {
-                self.ni("`.len` of an array (the specification names the fields of a slice only)");
-                (self.poison(), ExprRes::None)
+            TyKind::Array(_, len) if name == "len" => {
+                (self.i64_(), ExprRes::ArrayLen { derefs, len })
             }
             TyKind::Poison => (self.poison(), ExprRes::None),
             _ => {
@@ -1249,7 +1335,7 @@ impl Checker<'_, '_> {
             }
             match &arm.body {
                 hir::ArmBody::Expr(x) => {
-                    let t = self.expr(*x, result.or(hint));
+                    let t = self.branch(*x, result.or(hint));
                     if !self.is_never(t) {
                         match result {
                             None => result = Some(t),

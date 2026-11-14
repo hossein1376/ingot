@@ -400,6 +400,9 @@ pub enum PatKind {
     Struct {
         ty: Option<PathRef>,
         fields: Vec<FieldPat>,
+        /// The pattern ends in `..` (`grammar.md` `pattern`).
+        rest: bool,
+        rest_span: Span,
     },
     Poison,
 }

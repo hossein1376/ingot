@@ -10,6 +10,7 @@ use crate::hir::{self, ExprId, PatId, PatKind};
 use crate::sigs::ItemSig;
 use crate::ty::*;
 use crate::typed::*;
+use ingot_diag::source::Span;
 
 /// The default binding mode while a pattern descends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,7 +182,12 @@ impl Checker<'_, '_> {
                 }
                 self.record(p, t, derefs, PatRes::None);
             }
-            PatKind::Struct { ty: path, fields } => {
+            PatKind::Struct {
+                ty: path,
+                fields,
+                rest,
+                rest_span,
+            } => {
                 let (t, derefs, bm2) = self.peel(ty, bm);
                 if let Some(path) = path {
                     let pt = self.lower_path(path);
@@ -194,7 +200,14 @@ impl Checker<'_, '_> {
                         return;
                     }
                 }
-                self.struct_pattern(p, t, derefs, bm2, fields);
+                self.struct_pattern(
+                    p,
+                    t,
+                    derefs,
+                    bm2,
+                    fields,
+                    if *rest { Some(*rest_span) } else { None },
+                );
             }
             PatKind::Poison => self.record(p, poison, 0, PatRes::None),
         }
@@ -221,7 +234,9 @@ impl Checker<'_, '_> {
         derefs: u32,
         bm: Bm,
         fields: &[hir::FieldPat],
+        rest_span: Option<Span>,
     ) {
+        let rest = rest_span.is_some();
         let sig = match self.kind(t) {
             TyKind::Adt(d, args) => self.cx.d.struct_sig(d).cloned().map(|s| (d, args, s)),
             _ => None,
@@ -267,13 +282,56 @@ impl Checker<'_, '_> {
             let fty = self.cx.d.instantiate(field.ty, &s);
             self.pat_inner(f.pattern, fty, bm);
         }
-        if order.len() < sig.fields.len() && order.len() == fields.len() {
-            self.ni(
-                "a struct pattern that does not name every field (the specification has no \
-                 syntax for the rest of the fields)",
+        let omitted: Vec<usize> = (0..sig.fields.len())
+            .filter(|i| !order.contains(i))
+            .collect();
+        // Every field the pattern lists was valid (`order.len() == fields.len()`), so a
+        // missing field is the only problem.
+        if !rest && order.len() == fields.len() && !omitted.is_empty() {
+            self.failed_pats.insert(p);
+            let names: Vec<&str> = omitted
+                .iter()
+                .map(|i| sig.fields[*i].name.as_str())
+                .collect();
+            self.err(
+                "E0603",
+                format!(
+                    "this struct pattern leaves out `{}`; end it with `..` to leave fields out",
+                    names.join("`, `")
+                ),
+                self.hir.pat(p).span,
             );
         }
-        self.record(p, t, derefs, PatRes::Struct(StructRes { def, args, order }));
+        // A `..` matches every field it leaves out, so it cannot take apart a struct of
+        // another module with a private field (E0307), even when no private field is
+        // written in the pattern.
+        if rest
+            && self.cx.sema.def(def).module != self.module
+            && let Some(i) = omitted.iter().find(|i| !sig.fields[**i].public)
+        {
+            self.failed_pats.insert(p);
+            let field = &sig.fields[*i];
+            let fpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
+            self.err(
+                "E0307",
+                format!(
+                    "`..` would match the field `{}`, which is private to its module",
+                    field.name
+                ),
+                rest_span.expect("a rest pattern"),
+            )
+            .relate_in("declared", &fpath, field.name_span);
+        }
+        self.record(
+            p,
+            t,
+            derefs,
+            PatRes::Struct {
+                res: StructRes { def, args, order },
+                rest,
+                omitted,
+            },
+        );
     }
 
     fn literal_pattern(&mut self, p: PatId, lit: ExprId, t: TypeId) {

@@ -328,7 +328,14 @@ impl<'c, 'a> Checker<'c, 'a> {
     // ----------------------------------------------------------------- records
 
     pub(crate) fn set(&mut self, e: ExprId, ty: TypeId, res: ExprRes) -> TypeId {
-        self.out.exprs.insert(e, ExprInfo { ty, res });
+        self.out.exprs.insert(
+            e,
+            ExprInfo {
+                ty,
+                res,
+                coerce: None,
+            },
+        );
         ty
     }
 

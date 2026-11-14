@@ -104,7 +104,7 @@ impl Checker<'_, '_> {
                 Pt::Ctor(Ctor::Single, elems.iter().map(|e| self.to_pt(*e)).collect())
             }
             PatKind::Struct { fields, .. } => match &info.res {
-                PatRes::Struct(s) => {
+                PatRes::Struct { res: s, .. } => {
                     let arity = self
                         .cx
                         .d

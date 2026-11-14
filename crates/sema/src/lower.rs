@@ -1351,7 +1351,13 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                     .map(|p| self.lower_pattern(p, binder, kind, mutable))
                     .collect(),
             ),
-            ast::Pattern::Struct { ty, fields, .. } => {
+            ast::Pattern::Struct {
+                ty,
+                fields,
+                rest,
+                rest_span,
+                ..
+            } => {
                 let ty = ty.as_ref().map(|p| self.lower_path(p));
                 let fields = fields
                     .iter()
@@ -1376,7 +1382,12 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                         }
                     })
                     .collect();
-                hir::PatKind::Struct { ty, fields }
+                hir::PatKind::Struct {
+                    ty,
+                    fields,
+                    rest: *rest,
+                    rest_span: *rest_span,
+                }
             }
             ast::Pattern::Poison => hir::PatKind::Poison,
         };

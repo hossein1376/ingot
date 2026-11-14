@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 5.3
+
+import builtin_module_type.lib;
+
+const size: i64 = @sizeof(lib.Pair);

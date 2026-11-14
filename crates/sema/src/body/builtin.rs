@@ -31,36 +31,6 @@ impl Checker<'_, '_> {
         hint: Option<TypeId>,
     ) -> (TypeId, ExprRes) {
         let targ = type_arg.map(|t| self.lower(t));
-        // The parser reads the first argument as a type only when it starts like one, so
-        // `@lanes(simd.F32)` arrives as an expression: not a program error of its own.
-        if targ.is_none()
-            && !args.is_empty()
-            && matches!(
-                name,
-                "bits"
-                    | "sizeof"
-                    | "alignof"
-                    | "lanes"
-                    | "load"
-                    | "load_tail"
-                    | "gather"
-                    | "splat"
-                    | "narrow"
-                    | "wrap"
-                    | "sat"
-                    | "nearest"
-                    | "enum"
-                    | "uninit"
-                    | "iota"
-            )
-        {
-            self.blind_args(args);
-            self.ni(format!(
-                "`@{name}` with a module-qualified type as its first argument (the parser reads \
-                 it as an expression)"
-            ));
-            return (self.poison(), ExprRes::Builtin { type_arg: None });
-        }
         let (ty, res_arg) = self.builtin_inner(e, name, targ, args, hint);
         (ty, ExprRes::Builtin { type_arg: res_arg })
     }

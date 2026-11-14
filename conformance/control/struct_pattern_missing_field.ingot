@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 4.2, 7.2
+
+copy struct Pair { a: i64, b: i64 }
+
+fn first(p: Pair) -> i64 {
+    let Pair.{ a } = p; //~ E0603
+    return a;
+}

@@ -15,6 +15,7 @@ control/non_exhaustive_match.ingot
 control/not_a_place.ingot
 control/not_iterable.ingot
 control/refutable_pattern.ingot
+control/struct_pattern_missing_field.ingot
 control/unreachable_arm.ingot
 decls/alias_cycle.ingot
 decls/align_below_natural.ingot
@@ -101,6 +102,7 @@ names/duplicate_test_name.ingot
 names/private_construction/main.ingot
 names/private_construction_bits/main.ingot
 names/private_field/main.ingot
+names/private_field_rest/main.ingot
 names/private_item/main.ingot
 names/qualify_name/main.ingot
 names/shadowing.ingot
@@ -135,10 +137,13 @@ types/array_slice_needs_borrow.ingot
 types/bad_bits.ingot
 types/bad_enum_conversion.ingot
 types/bad_zero.ingot
+types/builtin_module_type/main.ingot
 types/cannot_infer_type.ingot
 types/condition_not_bool.ingot
+types/dyn_missing_impl.ingot
 types/float_remainder.ingot
 types/index_not_i64.ingot
+types/int_literal_not_exact.ingot
 types/int_vector_plain_arith.ingot
 types/invalid_operand.ingot
 types/literal_out_of_range.ingot

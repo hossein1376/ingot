@@ -2281,11 +2281,13 @@ impl<'a> Parser<'a> {
                         payload,
                     }
                 } else if self.at(DotLBrace) {
-                    self.struct_pattern(start)
+                    self.struct_pattern(start, Some(path))
                 } else {
                     Pattern::Struct {
                         ty: Some(path),
                         fields: Vec::new(),
+                        rest: false,
+                        rest_span: Span::default(),
                         span: Span::new(start, self.span().end),
                     }
                 }
@@ -2307,7 +2309,7 @@ impl<'a> Parser<'a> {
                     payload,
                 }
             }
-            TokenKind::Punct(DotLBrace) => self.struct_pattern(start),
+            TokenKind::Punct(DotLBrace) => self.struct_pattern(start, None),
             TokenKind::Punct(LParen) => {
                 self.bump();
                 let mut elems = Vec::new();
@@ -2346,10 +2348,17 @@ impl<'a> Parser<'a> {
         pattern
     }
 
-    fn struct_pattern(&mut self, start: usize) -> Pattern {
+    fn struct_pattern(&mut self, start: usize, ty: Option<PathTy>) -> Pattern {
         self.bump(); // .{
         let mut fields = Vec::new();
+        let mut rest = false;
+        let mut rest_span = Span::default();
         while !self.at(RBrace) && !self.at_eof() {
+            if self.at(DotDot) {
+                rest_span = self.bump().span;
+                rest = true;
+                break;
+            }
             let (name, name_span) = self.expect_ident();
             let pattern = if self.eat(Colon) {
                 Some(self.pattern())
@@ -2367,8 +2376,10 @@ impl<'a> Parser<'a> {
         }
         let close = self.expect(RBrace);
         Pattern::Struct {
-            ty: None,
+            ty,
             fields,
+            rest,
+            rest_span,
             span: Span::new(start, close.end),
         }
     }
@@ -3222,16 +3233,56 @@ impl<'a> Parser<'a> {
         if !type_first {
             return None;
         }
-        if matches!(
+        let starts_type = matches!(
             self.kind(),
             TokenKind::Scalar(_)
                 | TokenKind::Vector(_)
                 | TokenKind::TypeIdent(_)
                 | TokenKind::Punct(LBracket | Amp | Star | Question | LParen)
-        ) {
-            Some(self.ty())
-        } else {
-            None
+        ) || matches!(self.kind(), TokenKind::Ident(_))
+            && self.qualified_type_starts_here();
+        if starts_type { Some(self.ty()) } else { None }
+    }
+
+    /// Whether the tokens at the cursor are a module-qualified type path (`lib.Ticket`)
+    /// followed by `,` or `)`: the rule for a builtin's first argument (`grammar.md`
+    /// Notes). A path that ends in a `TYPE` token there can only be a type.
+    fn qualified_type_starts_here(&self) -> bool {
+        let mut i = 0;
+        if !matches!(self.peek_at(i).kind, TokenKind::Ident(_)) {
+            return false;
+        }
+        loop {
+            if !self.peek_at(i + 1).kind.is_punct(Dot) {
+                return false;
+            }
+            match &self.peek_at(i + 2).kind {
+                TokenKind::TypeIdent(_) => {
+                    let mut j = i + 3;
+                    if self.peek_at(j).kind.is_punct(LBracket) {
+                        let mut depth = 0usize;
+                        loop {
+                            match &self.peek_at(j).kind {
+                                TokenKind::Punct(LBracket) => depth += 1,
+                                TokenKind::Punct(RBracket) => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        j += 1;
+                                        break;
+                                    }
+                                }
+                                TokenKind::Eof => return false,
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                    }
+                    return self.peek_at(j).kind.is_punct(Comma)
+                        || self.peek_at(j).kind.is_punct(RParen);
+                }
+                TokenKind::Ident(_) => i += 2,
+                _ => return false,
+            }
         }
     }
 
@@ -4000,6 +4051,59 @@ mod tests {
     fn dots_outside_an_extern_block_are_a_syntax_error() {
         let (_, diagnostics) = parse_text("fn k(...) {}");
         assert!(diagnostics.iter().any(|d| d.code == "E0201"));
+    }
+
+    #[test]
+    fn a_struct_pattern_can_end_in_dots() {
+        let (module, diagnostics) = parse_text("fn f(p: P) { let P.{ a, .. } = p; }");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let Some(Item::Fn(f)) = module.items.first() else {
+            panic!("expected a function");
+        };
+        let Some(Stmt::Let { pattern, .. }) = f.body.as_ref().and_then(|b| b.stmts.first()) else {
+            panic!("expected a let");
+        };
+        let Pattern::Struct {
+            ty, fields, rest, ..
+        } = pattern
+        else {
+            panic!("expected a struct pattern");
+        };
+        assert!(ty.is_some());
+        assert_eq!(fields.len(), 1);
+        assert!(*rest);
+    }
+
+    #[test]
+    fn dots_must_be_the_last_struct_pattern_field() {
+        let (_, diagnostics) = parse_text("fn f(p: P) { let P.{ a, .., b } = p; }");
+        assert!(diagnostics.iter().any(|d| d.code == "E0201"));
+    }
+
+    #[test]
+    fn a_module_qualified_builtin_type_argument() {
+        let (module, diagnostics) = parse_text("fn f() -> i64 { return @sizeof(lib.Pair); }");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let Some(Item::Fn(f)) = module.items.first() else {
+            panic!("expected a function");
+        };
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = f.body.as_ref().and_then(|b| b.stmts.first())
+        else {
+            panic!("expected a return");
+        };
+        let ExprKind::Builtin { type_arg, args, .. } = &value.kind else {
+            panic!("expected a builtin");
+        };
+        assert!(type_arg.is_some());
+        assert!(args.is_empty());
     }
 
     fn fn_body(text: &str) -> Vec<Stmt> {

@@ -8,7 +8,9 @@
 //!
 //! * the type of every expression ([`ExprInfo::ty`]), every pattern ([`PatInfo::ty`])
 //!   and every local ([`LocalInfo::ty`]). An untyped numeric literal has the type it
-//!   took (its context's, or the default `i64` or `f64`); nothing is left to infer;
+//!   took (its context's, or the default `i64` or `f64`); nothing is left to infer. An
+//!   integer literal may have type `f32` or `f64` when its value is exactly
+//!   representable there, so phase 8 converts it to a float;
 //! * what a name or member resolved to ([`ExprRes`]): a local, a function with its
 //!   generic arguments, a constant, a static, a field (with how many borrows were
 //!   looked through), a tuple field, an enum variant;
@@ -29,7 +31,7 @@
 
 use crate::defs::DefId;
 use crate::hir::{BlockId, ExprId, LocalId, PatId, StmtId};
-use crate::ty::{FnKind, FnPtrSig, GenericArg, Mutability, TypeId};
+use crate::ty::{ConstArg, FnKind, FnPtrSig, GenericArg, Mutability, TypeId};
 use ingot_diag::source::Span;
 use std::collections::BTreeMap;
 
@@ -108,6 +110,23 @@ pub struct ExprInfo {
     /// The type of the expression. Never `Poison` in a body that did not fail.
     pub ty: TypeId,
     pub res: ExprRes,
+    /// The coercion of this expression's value to `&dyn I` or `&mut dyn I`, when its
+    /// context expects one and the expression's own type is `&T` or `&mut T`. The value
+    /// of `ty` is then the `&dyn I`; phase 8 builds the fat pointer and the method table
+    /// from this.
+    pub coerce: Option<DynCoercion>,
+}
+
+/// A `&T` (`&mut T`) that becomes a `&dyn I` (`&mut dyn I`) because `T` implements
+/// `I` (spec sections 3 and 4.4). The target type is the expression's `ty`.
+#[derive(Clone, Debug)]
+pub struct DynCoercion {
+    pub interface: DefId,
+    pub interface_args: Vec<GenericArg>,
+    /// The `T` under the borrow.
+    pub self_ty: TypeId,
+    /// How `T` implements `interface`.
+    pub via: InterfaceVia,
 }
 
 /// What the source left implicit on an expression. Which variant occurs with which
@@ -136,9 +155,12 @@ pub enum ExprRes {
         index: usize,
         def: DefId,
     },
-    /// `Field` on a slice (`.len`) or on an array: the base is looked through `derefs`
+    /// `Field` on a slice (`.len` or `.ptr`): the base is looked through `derefs`
     /// borrows first.
     SliceLen { derefs: u32 },
+    /// `Field` `.len` on an array: the length is the array's constant `N`, which may be
+    /// a constant generic parameter.
+    ArrayLen { derefs: u32, len: ConstArg },
     /// `TupleField`: element `index` of the tuple reached after `derefs` borrows.
     TupleField { derefs: u32 },
     /// `Index`: the base is looked through `derefs` borrows (an array or slice, or a
@@ -337,8 +359,18 @@ pub enum PatRes {
     #[default]
     None,
     Variant(VariantRef),
-    /// A struct pattern: for each field pattern in source order, the field's index.
-    Struct(StructRes),
+    /// A struct pattern. `res.order` holds, for each field pattern in source order, the
+    /// field's index. `rest`: the pattern ended in `..`. `omitted`: the fields it left
+    /// out, in declaration order (wildcards for exhaustiveness).
+    ///
+    /// Phase 9 (the ownership checker, S6) must drop every omitted field when the
+    /// pattern moves the value, run the `Discard` check on each dropped field, and
+    /// report E1003 when an omitted field's type is linear.
+    Struct {
+        res: StructRes,
+        rest: bool,
+        omitted: Vec<usize>,
+    },
 }
 
 /// How a pattern binding gets its value (section 7.2): a copy or move of the value, or

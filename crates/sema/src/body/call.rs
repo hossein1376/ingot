@@ -1436,7 +1436,7 @@ impl Checker<'_, '_> {
     }
 
     /// How `ty` implements the interface, if it does.
-    fn resolve_interface(
+    pub(crate) fn resolve_interface(
         &mut self,
         ty: TypeId,
         iface: DefId,

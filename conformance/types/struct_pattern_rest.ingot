@@ -1,0 +1,21 @@
+//! expect: accept
+//! section: 4.2, 7.2
+
+copy struct Pair { a: i64, b: i64 }
+
+fn first(p: Pair) -> i64 {
+    let Pair.{ a, .. } = p;
+    return a;
+}
+
+fn any(p: Pair) -> i64 {
+    match p {
+        Pair.{ b: 0, .. } => { return 0; }
+        Pair.{ .. } => { return 1; }
+    }
+}
+
+fn shorthand(p: Pair) -> i64 {
+    let .{ .. } = p;
+    return 0;
+}

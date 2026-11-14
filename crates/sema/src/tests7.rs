@@ -234,14 +234,18 @@ fn a_literal_argument_does_not_decide_a_type_parameter() {
 }
 
 #[test]
-fn an_integer_literal_where_a_float_is_expected_is_not_decided() {
-    let b = build("fn f() -> f64 {\n    let x: f64 = 1;\n    return x;\n}\n");
-    assert_eq!(b.only_codes(), Vec::<String>::new());
-    assert!(
-        b.ni().iter().any(|m| m.contains("integer literal")),
-        "{:?}",
-        b.ni()
+fn an_integer_literal_takes_an_exactly_representable_float_type() {
+    let b = build(
+        "fn f() -> f64 {\n    let x: f64 = 1;\n    let y: f32 = 16777216;\n    return x + y as f64;\n}\n",
     );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    assert_eq!(b.literal_types("f"), ["f64", "f32"]);
+    let b = build("fn f() -> f32 {\n    let x: f32 = 16777217;\n    return x;\n}\n");
+    assert_eq!(b.only_codes(), ["E0405"]);
+    let b = build("fn f() -> f64 {\n    let x: f64 = 9007199254740992;\n    return x;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let b = build("fn f() -> f64 {\n    let x: f64 = 9007199254740993;\n    return x;\n}\n");
+    assert_eq!(b.only_codes(), ["E0405"]);
 }
 
 // -------------------------------------------------------------- method lookup
@@ -616,6 +620,135 @@ fn try_records_the_conversion() {
     };
     assert_eq!(get("same"), TryConversion::Identity);
     assert!(matches!(get("wrap"), TryConversion::FromVariant(v) if v.index == 0));
+}
+
+#[test]
+fn an_array_len_records_its_length() {
+    let b = build("fn f(a: [4]u8, r: &[4]u8) -> i64 {\n    return a.len + r.len;\n}\n");
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let body = b.body("f");
+    let lenses: Vec<(u32, Option<i128>)> = b
+        .exprs(
+            "f",
+            |e| matches!(&e.kind, ExprKind::Field { name, .. } if name == "len"),
+        )
+        .into_iter()
+        .filter_map(|e| match &body.exprs[&e].res {
+            ExprRes::ArrayLen { derefs, len } => Some((*derefs, len.as_len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lenses, [(0, Some(4)), (1, Some(4))]);
+    assert!(
+        b.exprs("f", |e| matches!(e.kind, ExprKind::Field { .. }))
+            .iter()
+            .all(|e| b.display(body.exprs[e].ty) == "i64")
+    );
+}
+
+#[test]
+fn a_borrow_to_dyn_records_how_the_interface_is_implemented() {
+    let b = build(
+        "interface Named { fn name(self: &Self) -> i64; }\ncopy struct Item { n: i64 }\nimpl Named for Item { fn name(self: &Item) -> i64 { return self.n; } }\nfn get(x: &dyn Named) -> i64 { return x.name(); }\nfn call(s: &Item) -> i64 { return get(s); }\nfn result(s: &Item) -> &dyn Named { return s; }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    for name in ["call", "result"] {
+        let body = b.body(name);
+        let (_, info) = body
+            .exprs
+            .iter()
+            .find(|(_, i)| i.coerce.is_some())
+            .unwrap_or_else(|| panic!("a coercion in {name}"));
+        assert_eq!(b.display(info.ty), "&dyn Named");
+        let c = info.coerce.as_ref().expect("a coercion");
+        assert_eq!(b.display(c.self_ty), "Item");
+        assert!(c.interface_args.is_empty());
+        assert!(matches!(c.via, InterfaceVia::Impl { .. }));
+    }
+}
+
+#[test]
+fn a_borrow_to_dyn_needs_the_interface_implemented() {
+    let b = build(
+        "interface Named { fn name(self: &Self) -> i64; }\ncopy struct Item { n: i64 }\nfn get(x: &dyn Named) -> i64 { return x.name(); }\nfn call(s: &Item) -> i64 { return get(s); }\n",
+    );
+    assert_eq!(b.only_codes(), ["E0401"]);
+}
+
+#[test]
+fn if_and_match_branches_become_the_expected_dyn() {
+    let b = build(
+        "interface Named { fn name(self: &Self) -> i64; }\ncopy struct A { n: i64 }\ncopy struct B { n: i64 }\nimpl Named for A { fn name(self: &A) -> i64 { return self.n; } }\nimpl Named for B { fn name(self: &B) -> i64 { return self.n; } }\nfn by_if(c: bool, a: &A, b: &B) -> &dyn Named { return if c { a } else { b }; }\nfn by_match(c: bool, a: &A, b: &B) -> i64 {\n    let d: &dyn Named = match c { true => a, false => b };\n    return d.name();\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    for name in ["by_if", "by_match"] {
+        let body = b.body(name);
+        let mut selves: Vec<String> = body
+            .exprs
+            .values()
+            .filter_map(|i| i.coerce.as_ref())
+            .map(|c| b.display(c.self_ty))
+            .collect();
+        selves.sort();
+        assert_eq!(selves, ["A", "B"], "in {name}");
+    }
+}
+
+#[test]
+fn a_branch_that_does_not_implement_the_interface_is_one_e0401() {
+    let b = build(
+        "interface Named { fn name(self: &Self) -> i64; }\ncopy struct A { n: i64 }\ncopy struct C { n: i64 }\nimpl Named for A { fn name(self: &A) -> i64 { return self.n; } }\nfn f(c: bool, x: &C, a: &A) -> &dyn Named { return if c { x } else { a }; }\n",
+    );
+    assert_eq!(b.only_codes(), ["E0401"]);
+}
+
+#[test]
+fn a_dyn_field_payload_and_exclusive_borrow() {
+    let b = build(
+        "interface Named { fn name(self: &Self) -> i64; }\ncopy struct Item { n: i64 }\nimpl Named for Item { fn name(self: &Item) -> i64 { return self.n; } }\nstruct Holder { n: &dyn Named }\nenum Slot { named: &dyn Named, empty }\nfn field(s: &Item) -> Holder { return Holder.{ n: s }; }\nfn payload(s: &Item) -> Slot { return Slot.named(s); }\nfn mutable(s: &mut Item) -> &mut dyn Named { return s; }\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    for name in ["field", "payload", "mutable"] {
+        let body = b.body(name);
+        let (_, info) = body
+            .exprs
+            .iter()
+            .find(|(_, i)| i.coerce.is_some())
+            .unwrap_or_else(|| panic!("a coercion in {name}"));
+        let c = info.coerce.as_ref().expect("a coercion");
+        assert_eq!(b.display(c.self_ty), "Item");
+        assert!(matches!(c.via, InterfaceVia::Impl { .. }));
+    }
+}
+
+#[test]
+fn a_rest_pattern_records_the_fields_it_leaves_out() {
+    let b = build(
+        "copy struct P { x: i64, y: i64, z: i64 }\nfn f(p: P) -> i64 {\n    let P.{ x, .. } = p;\n    return x;\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let info = b
+        .body("f")
+        .pats
+        .values()
+        .find(|i| matches!(i.res, PatRes::Struct { rest: true, .. }))
+        .expect("a rest pattern");
+    let PatRes::Struct { res, rest, omitted } = &info.res else {
+        panic!("a struct pattern")
+    };
+    assert!(*rest);
+    assert_eq!(res.order, [0]);
+    assert_eq!(omitted, &[1, 2]);
+    // Exhaustiveness treats the left-out fields as wildcards.
+    let b = build(
+        "copy struct P { a: bool, b: bool }\nfn f(p: P) -> i64 {\n    return match p { P.{ a: true, .. } => 1, P.{ a: false, .. } => 2 };\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    // Without `..`, leaving a field out is E0603 on the pattern.
+    let b = build(
+        "copy struct P { a: i64, b: i64 }\nfn f(p: P) -> i64 {\n    let P.{ a } = p;\n    return a;\n}\n",
+    );
+    assert_eq!(b.only_codes(), ["E0603"]);
 }
 
 #[test]

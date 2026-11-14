@@ -390,7 +390,7 @@ impl Checker<'_, '_> {
                     let own = ctx.error.map(|er| self.mk(TyKind::Result(ctx.ret, er)));
                     if own == Some(t) {
                         self.ni("E0710 return_of_result: `return` of the function's own result type (S4)");
-                    } else {
+                    } else if self.dyn_coerce(e, t, ctx.ret).is_none() {
                         self.mismatch(e, t, ctx.ret);
                     }
                 }
