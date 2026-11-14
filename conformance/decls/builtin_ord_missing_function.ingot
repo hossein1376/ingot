@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 4.4
+
+struct Money { cents: i64 }
+
+impl Eq for Money {
+    fn eq(self: &Money, other: &Money) -> bool {
+        return self.cents == other.cents;
+    }
+}
+
+impl Ord for Money {} //~ E0509

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 3
+
+fn f(x: Nope) -> i64 { //~ E0305
+    return 1;
+}

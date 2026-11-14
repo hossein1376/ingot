@@ -1,0 +1,23 @@
+//! expect: accept
+//! section: 4.4
+
+interface Make {
+    fn make(x: i64) -> Self;
+    fn pair(a: Self, b: Self) -> i64;
+}
+
+copy struct P { x: i64 }
+
+impl Make for P {
+    fn make(x: i64) -> P {
+        return P.{ x: x };
+    }
+
+    fn pair(a: P, b: P) -> i64 {
+        return a.x + b.x;
+    }
+}
+
+fn pair() -> i64 {
+    return Make.pair(P.{ x: 1 }, P.{ x: 2 });
+}

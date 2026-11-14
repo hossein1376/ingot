@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 4.4
+
+import impl_wrong_module.lib.Measure;
+import impl_wrong_module.lib.Square;
+
+impl Measure for Square { //~ E0506
+    fn measure(self: &Square) -> i64 {
+        return self.side * self.side;
+    }
+}

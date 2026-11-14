@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 5.5, 7
+
+fn set() -> i64 {
+    let x: i64 = 1;
+    x = 2; //~ E0606
+    return x;
+}

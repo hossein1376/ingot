@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 3
+
+fn exact() -> f64 {
+    let a: f64 = 1;
+    let b: f32 = 16777216;
+    return a + b as f64;
+}

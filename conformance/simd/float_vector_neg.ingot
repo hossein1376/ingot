@@ -1,0 +1,14 @@
+//! expect: accept
+//! section: 26.2
+
+fn neg_f32(v: f32x4) -> f32x4 {
+    return -v;
+}
+
+fn neg_f64(v: f64x2) -> f64x2 {
+    return -v;
+}
+
+fn wrap_int(v: i32x4) -> i32x4 {
+    return -%v;
+}

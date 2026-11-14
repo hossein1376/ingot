@@ -1,7 +1,12 @@
 # Roadmap
 
-The specification in [docs/](docs/README.md) is the definition of the language. Nothing
-below is built yet.
+The specification in [docs/](docs/README.md) is the definition of the language. The
+bootstrap front end, CFG ownership checker, CFG phase-10 pruning and evaluator in `src/`
+cover item 1 steps 1 to 3 for the cases in [conformance/](conformance/README.md),
+including package and module loading. Code generation is still open. The standard library
+has started in [std/](std/README.md) with `Env`, `mem`, `io`, `fs`, `net`, `time`, `text`,
+`fmt`, `math`, `hash`, `sort`, `sys` and `sys.macos`; containers and runtime bindings
+remain.
 
 ## 0. Before writing the compiler
 
@@ -36,7 +41,10 @@ implemented.
 4. Code generation through LLVM IR, linking for Mach-O, and the Apple arm64 C ABI for
    `extern` and `export`.
 5. Standard library core: `sys.macos`, `mem` (arena, heap), `list`, `map`, `str`, `fmt`,
-   `fs`, `text`.
+   `fs`, `text`. Started in [std/](std/README.md): the module tree, `Env`, `mem` types and
+   byte helpers, `text` UTF-8 and integer parsing, `fmt` decimal encoders, `math`, `hash`,
+   `sort`, and the raw `sys.macos` boundary. Allocator bodies and owning containers wait
+   for code generation.
 6. SIMD types and builtins.
 7. Runtime: scheduler, task stacks, `scope`/`spawn`, `par for`, `sync`, kqueue I/O.
 8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `query`, `serve`, as

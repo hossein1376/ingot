@@ -1,0 +1,17 @@
+//! expect: reject
+//! section: 6.3, 7.2
+
+linear struct L { x: i64 }
+
+enum E { a: L, b }
+
+fn f(e: E) -> i64 {
+    return match e {
+        .a(_) => 1, //~ E0414
+        .b => 2,
+    };
+}
+
+fn g(r: Result[i64, L]) -> i64 {
+    return r catch _ => 1; //~ E0414
+}

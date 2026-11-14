@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 6.4
+
+enum E { e }
+
+fn f() -> i64 ! E {
+    defer { fail .e; } //~ E0708
+    return 0;
+}

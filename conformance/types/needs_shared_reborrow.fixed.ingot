@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 5.5
+
+fn read(x: &i64) -> i64 {
+    return x.*;
+}
+
+fn pass(r: &mut i64) -> i64 {
+    return read(&r.*);
+}

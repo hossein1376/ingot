@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 4.4
+
+interface HasItem {
+    type Item;
+    fn get(self: &Self) -> Self.Item;
+}
+
+struct H {
+    eq: &dyn Eq, //~ E0510
+    iter: &mut dyn Iter, //~ E0510
+    item: &dyn HasItem, //~ E0510
+}

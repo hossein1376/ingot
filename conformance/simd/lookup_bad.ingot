@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 26.2
+
+fn table_not_bytes(table: f32x4, idx: u8x16) -> u8x16 {
+    return @lookup(table, idx); //~ E0401
+}
+
+fn index_not_bytes(table: u8x16, idx: f32x4) -> f32x4 {
+    return @lookup(table, idx); //~ E0401
+}

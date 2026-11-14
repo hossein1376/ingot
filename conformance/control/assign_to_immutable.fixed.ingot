@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 5.5, 7
+
+fn set() -> i64 {
+    var x: i64 = 1;
+    x = 2;
+    return x;
+}

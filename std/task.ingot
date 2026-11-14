@@ -1,0 +1,11 @@
+// std.task (spec sections 18 and 35).
+
+/// The view of a `scope s { ... }` block that tasks are spawned into.
+pub struct Scope {}
+
+/// A spawned task whose result has type `R`. Linear (spec sections 10 and 18): it must
+/// be joined. It is a view of the scope it was spawned in (section 18), which it
+/// holds as a borrow, so it cannot leave the scope's block.
+pub linear struct Task[R] {
+    owner: &Scope,
+}

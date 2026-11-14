@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(p: *i64) -> i64 {
+    return unsafe("outer") { unsafe("inner") { p.* } }; //~ E1304
+}

@@ -1,0 +1,7 @@
+//! expect: accept
+//! section: 4.4
+
+struct H {
+    hash: &dyn Hash,
+    format: &mut dyn Format,
+}

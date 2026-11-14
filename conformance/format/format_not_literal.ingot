@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 35
+
+fn f(x: i64) {
+    let fmt = "{}";
+    @debug(fmt, x); //~ E0422
+}

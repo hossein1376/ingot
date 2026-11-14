@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 6.3
+
+fn f() -> i64 {
+    let x: i64 = 1 catch _ => 2; //~ E0704
+    return x;
+}

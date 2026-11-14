@@ -1,0 +1,7 @@
+pub fn helper() -> i64 {
+    return 1;
+}
+
+pub fn other() -> i64 {
+    return 2;
+}

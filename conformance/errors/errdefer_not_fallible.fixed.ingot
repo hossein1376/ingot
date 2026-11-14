@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 6.4
+
+fn f() {
+    defer { }
+}

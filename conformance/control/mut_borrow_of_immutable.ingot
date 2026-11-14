@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 5.5
+
+fn bump() -> i64 {
+    let x: i64 = 1;
+    let r = &mut x; //~ E0610
+    r.* += 1;
+    return r.*;
+}

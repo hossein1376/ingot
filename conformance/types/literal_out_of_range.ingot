@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 1, 3
+
+fn byte() -> u8 {
+    let x: u8 = 300; //~ E0405
+    return x;
+}

@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 5.6, 8
+
+fn zero[T: Num]() -> T {
+    return @zero;
+}
+
+fn make() -> i64 {
+    let z = zero(); //~ E0803
+    return z;
+}

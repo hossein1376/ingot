@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 29
+
+extern "c" {
+    fn length(s: []u8) -> i64; //~ E1601
+}

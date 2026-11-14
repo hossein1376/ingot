@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 26.3
+
+fn lane_mismatch(s: []i64, idx: i32x4) -> f32x4 {
+    return @gather(f32x4, s, idx); //~ E0401
+}
+
+fn count_mismatch(s: []f32, idx: i64x8) -> f32x4 {
+    return @gather(f32x4, s, idx); //~ E1503
+}
+
+fn index_type(s: []f32, idx: f32x4) -> f32x4 {
+    return @gather(f32x4, s, idx); //~ E0401
+}
+
+fn shared_scatter(s: []f32, idx: i32x4, v: f32x4) {
+    @scatter(s, idx, v); //~ E0401
+}

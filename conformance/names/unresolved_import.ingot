@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 2
+
+import std.nonexistent; //~ E0301
+
+fn f() -> i64 {
+    return nonexistent.thing();
+}

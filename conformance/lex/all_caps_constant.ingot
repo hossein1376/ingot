@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 1
+
+const MAX_LEN: i64 = 4; //~ E0104

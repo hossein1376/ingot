@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 29
+
+export fn run() { }

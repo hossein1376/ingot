@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 4.4, 27.2
+
+struct Threads {}
+
+impl Executor for Threads {} //~ E0525

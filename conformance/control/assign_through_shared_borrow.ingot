@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 5.5, 12
+
+struct Cell { n: i64 }
+
+fn set(c: &Cell) {
+    c.n = 2; //~ E0606
+}

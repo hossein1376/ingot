@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 26.1
+
+struct Lanes { v: f32x3 } //~ E1501

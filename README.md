@@ -8,8 +8,20 @@ no undefined behavior: memory errors and data races are compile errors, and bugs
 an out-of-range index or an integer overflow are deterministic traps. Parallelism is
 part of the language.
 
-> **Status: specification only.** The language is defined in [docs/](docs/README.md).
-> There is no compiler for it yet. See [ROADMAP.md](ROADMAP.md).
+> **Status: bootstrap compiler.** The front end in `src/` implements lexing,
+> parsing, name resolution, type checking, CFG ownership checking and phase-10
+> check removal, and a tree-walking evaluator runs the conformance suite. The
+> standard library has started in [std/](std/README.md). Code generation is the
+> next milestone; [ROADMAP.md](ROADMAP.md) tracks it.
+>
+> ```sh
+> cargo run -- check conformance/names/undefined_name.ingot
+> cargo run -- run conformance/errors/try_propagates.ingot
+> cargo run -- conformance
+> ```
+>
+> The language itself is defined in [docs/](docs/README.md). The compiler's
+> layout and current limits are in [COMPILER.md](COMPILER.md).
 
 ```ingot
 import std.Env;

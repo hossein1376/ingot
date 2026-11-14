@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 15, 29
+
+extern "c" {
+    fn puts(s: *u8) -> i32;
+}
+
+fn f(s: *u8) -> i32 {
+    let p = puts;
+    return p(s); //~ E1301
+}

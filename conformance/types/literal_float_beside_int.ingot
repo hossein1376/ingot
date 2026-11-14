@@ -1,0 +1,7 @@
+//! expect: accept
+//! section: 3
+
+fn f() -> f64 {
+    let x = 1 + 2.0;
+    return x;
+}

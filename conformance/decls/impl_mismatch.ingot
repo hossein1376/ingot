@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 4.4, 13.5
+
+interface Measure {
+    fn measure(self: &Self) -> i64;
+}
+
+struct Square { side: i64 }
+
+impl Measure for Square {} //~ E0509

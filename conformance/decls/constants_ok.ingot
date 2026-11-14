@@ -1,0 +1,7 @@
+//! expect: accept
+//! section: 5.2, 9
+
+const big: u8 = 250 +| 10;
+const wrapped: u8 = 255 +% 1;
+const on_mac: bool = @target.os == .macos;
+const small: bool = big > 100 && !on_mac || wrapped == 0;

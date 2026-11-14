@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 7.1
+
+fn f(n: i64) -> i64 {
+    var s: i64 = 0;
+    for i, x in 0..n { //~ E0609
+        s += i + x;
+    }
+    return s;
+}

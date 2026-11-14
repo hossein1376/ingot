@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 26.2
+
+fn lane(v: f32x4) -> f32 {
+    return v[4]; //~ E1502
+}
+
+fn dynamic(v: f32x4, k: i64) -> f32 {
+    return v[k]; //~ E1502
+}
+
+fn insert(v: f32x4) -> f32x4 {
+    return @insert(v, 4, 1.0); //~ E1502
+}

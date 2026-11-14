@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 2
+
+import qualify_name.lib;
+
+fn f() -> i64 {
+    return lib.other() + lib.helper();
+}

@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 4.4
+
+struct Square { side: i64 }
+
+impl Square {
+    fn area(self: i64) -> i64 { //~ E0517
+        return 1;
+    }
+}

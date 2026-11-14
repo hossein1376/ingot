@@ -1,0 +1,22 @@
+//! expect: reject
+//! section: 7.1
+
+linear struct Token { id: i64 }
+
+impl Token {
+    fn spend(self: Token) -> i64 {
+        let Token.{ id } = self;
+        return id;
+    }
+}
+
+fn run(ts: [2]Token) -> i64 {
+    var total: i64 = 0;
+    for t in ts {
+        total += t.spend();
+        if total > 0 {
+            break; //~ E0613
+        }
+    }
+    return total;
+}

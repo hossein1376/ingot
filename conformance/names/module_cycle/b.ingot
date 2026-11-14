@@ -1,0 +1,9 @@
+import module_cycle.a;
+
+pub fn from_b() -> i64 {
+    return 1;
+}
+
+pub fn back() -> i64 {
+    return a.from_a();
+}

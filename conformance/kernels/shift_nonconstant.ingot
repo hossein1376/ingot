@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn k(i: Idx, n: i32, x: []i32, y: []mut i32) {
+    y[i] = x[i] << n; //~ E1512
+}

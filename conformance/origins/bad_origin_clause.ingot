@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 13.1, 13.2
+
+struct Lexer { src: []u8 }
+
+fn longest(a: []u8, b: []u8) -> []u8 from c { //~ E1206
+    return a;
+}
+
+fn set_input(l: &mut Lexer, text: []u8 into m) { //~ E1206
+}

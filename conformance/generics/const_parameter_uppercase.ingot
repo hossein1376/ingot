@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 1, 8
+
+struct Ring[T, const N: i64] { items: [N]T } //~ E0201

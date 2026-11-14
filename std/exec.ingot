@@ -1,0 +1,22 @@
+// std.exec (spec sections 27.2 and 35): the executors a `dispatch` names. The
+// specification names the values `exec.seq`, `exec.simd` and `exec.par` and says only
+// that their types implement the built-in `Executor` interface; the types are declared
+// here without being public, because the specification names none of them.
+
+struct Seq {}
+
+struct Simd {}
+
+struct Par {}
+
+impl Executor for Seq {}
+
+impl Executor for Simd {}
+
+impl Executor for Par {}
+
+pub const seq: Seq = Seq.{};
+
+pub const simd: Simd = Simd.{};
+
+pub const par: Par = Par.{};

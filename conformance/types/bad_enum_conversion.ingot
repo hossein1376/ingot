@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.3
+
+enum Shape { circle: i64, empty }
+
+fn code(s: Shape) -> i64 {
+    return s as i64; //~ E0417
+}

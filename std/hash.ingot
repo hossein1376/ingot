@@ -1,0 +1,4 @@
+// std.hash (spec sections 4.4 and 35). `Hasher` is the state a `Hash` implementation
+// feeds. A capability-style type: no public field, and no method yet.
+
+pub struct Hasher {}

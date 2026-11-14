@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 8
+
+fn run[F: Fn](f: F) { } //~ E0523

@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 25
+
+struct Wide align(4) { x: i64 } //~ E0515

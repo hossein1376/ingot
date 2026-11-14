@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 18
+
+fn work() -> i64 {
+    return 1;
+}
+
+fn f() {
+    scope s {
+        spawn work() in s; //~ E1404
+    }
+}

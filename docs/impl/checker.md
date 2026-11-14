@@ -30,7 +30,8 @@ callee from the signature alone.
 * A **path** is a local followed by projections: `.f` (field or tuple index), `[_]`
   (any element), `.*` (dereference of a borrow), `.v` (payload of variant `v`).
   `root(π)` is its local. `derefs(π)` is the number of `.*` in it. Indexing or slicing a
-  slice counts as a dereference of the slice.
+  slice counts as a dereference of the slice. A path may also start at a `static`; such
+  a path takes no loans, and a borrow of it has the empty origin set (§12).
 * Two paths **overlap** if one is a prefix of the other. Different fields of one struct
   do not overlap. `[_]` overlaps `[_]`.
 * A **loan** is `(id, path, kind, point)` with `kind` shared or exclusive. A loan is
@@ -39,9 +40,14 @@ callee from the signature alone.
 * An **origin** is one of: a loan; `Param(p)` for a parameter `p`; `Inner(p)`, the
   borrows stored inside what `p` refers to; `Self(s)` for a scope parameter. `static`
   needs no representation: it is the empty set.
-* Every local whose type is a view type, or a type parameter that might be one, has one
-  **origin set** `O(x)` at each point. It covers all borrows anywhere inside the local.
-  This is the "one origin set per view value" of §13.4.
+* Every local has one **origin set** `O(x)` at each point. It covers all borrows
+  anywhere inside the local, and what can be reached through it. For a local of a
+  self-contained type it starts empty and grows only by widening (4.4): an `Arena` that
+  hands out `&mut T` into its own memory must carry the origins of what is stored there,
+  or a borrow of a dead local could be stored into the arena and read back. This is the
+  "one origin set per view value" of §13.4, extended to every local. A type that is or
+  may be a view includes a type parameter without `Owned` and an associated type such as
+  `I.Item`.
 * `inner(S)` is what can be read out through the borrows in `S`:
 
   | Element of `S` | Contributes |
@@ -84,9 +90,14 @@ Notes:
   moved earlier on that path, the copy's use reports E1005 instead of E1001, with the
   `defer` role pointing at the deferred block.
 * **Exclusive borrows passed on are reborrowed, not moved.** Lowering turns an argument,
-  a receiver or a `for` iterand that is a plain local of type `&mut T` or `[]mut T` into
-  a two-phase reborrow `&mut x.*`. Any other by-value use of such a local (binding,
-  returning, storing) is a move.
+  a receiver, a `spawn` or `dispatch` argument or a `for` iterand that is a place of type
+  `&mut T` or `[]mut T` into a two-phase reborrow `&mut p.*` (§12). Any other by-value
+  use of such a place (binding, returning, storing, capturing) is a move, and a move out
+  of a dereference is E1002.
+* `@replace(&mut p, v)` and `@swap(&mut a, &mut b)` leave their places *init*; they are
+  how a value is moved out from behind a borrow. `p.take()` is `@replace(&mut p, .none)`.
+* A linear temporary (§11) is a local whose storage ends at the end of its statement, so
+  E1003 for it is reported at the expression that made it.
 * A struct with a linear field that is partly moved is consumed field by field. Outside
   the struct's module that is E1006.
 
@@ -145,8 +156,9 @@ So a view copied out of what a parameter refers to has origin `Inner(p)`, which 
   | `Param(p)`, `Inner(p)` | every element of `S` must be allowed into `p` (section 6.2), else E1204 or E1205 |
   | `Self(p)` | the same, for a scope parameter |
 
-**The kill rule.** When a whole local `r` of borrow type is assigned, every loan whose
-path starts with `r.*` is removed from every origin set first. After the assignment
+**The kill rule.** When a place `ρ` of borrow type with no dereference in its path (a
+local `r`, or a field such as `it.cur`) is assigned as a whole, every loan whose path
+starts with `ρ.*` is removed from every origin set first. After the assignment
 `r` no longer leads to the old referent, and values that reborrowed through the old
 `r` are protected by the origins of the old `r`, which they also hold. This is what
 accepts a cursor loop:
@@ -179,6 +191,14 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
 4. A call through a `fn` value, a closure or `&dyn Fn` has no clauses (§13.5): the
    result's set is the union of all `A_i ∪ inner*(A_i)` and the set of the callable.
 5. `@slice_from_raw`, `@borrow_from_raw` and a raw pointer cast give the empty set.
+6. Builtins that move views: the result of `@replace(&mut p, v)` has the origin set of a
+   read of `p` before the store, and the store of `v` is a widening store through the
+   borrow (4.4). `@swap(&mut a, &mut b)` is two such stores. `@forget(x)` is a move of
+   `x`. `@zero(T)` and `@bits(T, x)` give the empty set.
+7. **Associated types.** In type-parameter flow (step 2 and §13.4), a type that mentions
+   `T.Item` mentions `T`. A function whose result mentions `Self`, an associated type or
+   a type parameter may carry a `from` clause (§13.1): `it.next()` under `I: Iter`
+   gives `inner(A_it)` by `from self.*`.
 
 ### 4.6 Closures
 
@@ -187,8 +207,12 @@ capture is a borrow as in 4.2. `O(closure)` is the union of the captures' sets. 
 capture is an exclusive borrow of a view-typed place, the union of all captures' sets is
 also stored through it, since the body may move one capture's view into another.
 
-The closure body is checked as a separate function whose parameters are the declared
-ones plus one per capture. It has no clauses, so a store that reaches a parameter or a
+The closure body is checked as a separate function over the capture record `C`: its
+parameters are the declared ones plus `self`, of type `&C` for an `Fn` closure, `&mut C`
+for an `FnMut` one and `C` for an `FnOnce` one (§5.6), and each capture name is a field
+of `C`. Moving a `&mut` capture out of an `FnMut` closure is then E1002 by the ordinary
+rule, and an `Fn` closure, whose captures are all shared borrows or `Copy`, needs no body
+check beyond typing. The body has no clauses, so a store that reaches a parameter or a
 capture from a *different* parameter or capture is E1204 with no fix.
 
 ## 5. Analysis C: loans
@@ -243,6 +267,10 @@ For `return v` where `v` has a view type, each origin in `S(v)`:
 | `Inner(p)` | `from p` or `from p.*`, or the same type-parameter condition | E1202, fix adds `p.*` |
 | `Self(s)` | `from s` | E1202 |
 
+**In a closure body** a returned view may hold any parameter or capture origin, because
+§13.5 assumes exactly that at the call. Only a loan on the body's own storage is an error
+(E1203).
+
 E1201 (no `from` clause at all) is found in phase 6 from the signature. Its fix needs
 the body: run this analysis with an empty clause and emit the clause that would make
 every return pass.
@@ -258,8 +286,9 @@ element of `S` must be one of:
   parameter;
 * a loan that is not on local storage.
 
-`Param(x)` or `Inner(x)` otherwise is E1204, with the fix ` into p` on `x`. A loan on
-local storage is E1205.
+`Param(x)` or `Inner(x)` otherwise is E1204, with the fix ` into p` on `x` when `p` is
+`&mut` or `&Scope` (E1206 rejects `into` on anything else, so there is then no fix). A
+loan on local storage is E1205.
 
 ### 6.3 Interface implementations
 
@@ -378,5 +407,12 @@ that are in fact safe.
 * The algorithm has not been run. The worked examples were traced by hand.
 * No proof of I1 to I6 exists. The places most worth attacking are the kill rule
   (4.4), the transitive liveness rule (5.1), and widening through chains of borrows.
-* Kernel bodies need no ownership analysis: they cannot borrow. Their rules (§27.1) are
-  checked syntactically in phase 7 and transitively through the functions they call.
+* Kernel and kernel-helper bodies need no ownership analysis: they cannot borrow. Their
+  rules (§27.1) are checked in phase 7, each body on its own.
+* **Widening through shared origins is too strict.** One set per value mixes where a
+  slice lives with what its elements borrow, so storing into `words[i]` of a slice that
+  also holds `Inner(req)`, for a `req: &Request`, is reported although nothing can be
+  stored through `req`. The fix is for widening to skip `Param(p)` and `Inner(p)` when
+  `p` is a shared borrow or shared slice of a type without interior mutability, and to
+  skip a shared loan on such a local. It waits for the definition of interior
+  mutability (pipeline.md §11); until then the rule stays as written.

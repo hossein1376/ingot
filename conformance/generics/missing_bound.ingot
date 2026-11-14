@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 8
+
+fn biggest[T: Copy](a: T, b: T) -> T {
+    if a.cmp(&b) == .less { //~ E0802
+        return b;
+    }
+    return a;
+}

@@ -1,0 +1,13 @@
+[package]
+name = "ingot-syntax"
+version = "0.1.0"
+edition = "2024"
+description = "Tokens, lexer, AST and parser for the Ingot language"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_syntax"
+path = "src/lib.rs"
+
+[dependencies]
+ingot-diag = { path = "../diag" }

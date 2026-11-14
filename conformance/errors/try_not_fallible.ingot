@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 6.3
+
+enum E { e }
+
+fn g() -> i64 ! E {
+    return 1;
+}
+
+fn f() -> i64 {
+    return try g(); //~ E0702
+}

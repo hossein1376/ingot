@@ -1,0 +1,43 @@
+// The built-in declarations of specification section 4.4, as Ingot text.
+//
+// The compiler parses and resolves this file as a hidden module of the package `std`
+// and registers the names it declares as the builtin names (specification section 8),
+// so that they are checked by the same code as any declaration in a program. A
+// declaration or an import of the same name hides them. No diagnostic may point into
+// this file: the pipeline reports one that would as a compiler failure.
+
+import std.fmt;
+import std.hash;
+
+pub copy enum Ordering { less, equal, greater }
+
+pub interface Eq {
+    fn eq(self: &Self, other: &Self) -> bool;
+}
+
+pub interface Ord: Eq {
+    fn cmp(self: &Self, other: &Self) -> Ordering;
+}
+
+pub interface Hash {
+    fn hash(self: &Self, state: &mut hash.Hasher);
+}
+
+pub interface Iter {
+    type Item;
+    fn next(self: &mut Self) -> ?Self.Item from self.*;
+}
+
+pub interface Format {
+    fn format(self: &Self, out: &mut fmt.Formatter);
+}
+
+// The types of `@target.os`, `@target.arch` and `@target.cpu` (specification section 24.3).
+// They are not builtin names: no program can write them, so `register_builtin_module`
+// skips the names that start with `Target`.
+
+pub copy enum TargetOs { macos, linux, windows }
+
+pub copy enum TargetArch { aarch64, x86_64 }
+
+pub copy enum TargetCpu { m4, znver4 }

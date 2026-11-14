@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4, 8
+
+interface Source {
+    type Item;
+}
+
+struct Holder[S: Source] { v: S.Missing } //~ E0519

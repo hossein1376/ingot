@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 27.2
+
+import std.exec;
+
+kernel fn add(a: i32, b: i32) -> i32 {
+    return a +% b;
+}
+
+fn f(a: i32) {
+    dispatch add(a, 1) over 0..4 on exec.seq; //~ E1515
+}

@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 4.4
+
+interface Source {
+    type Item;
+}
+
+struct Counter { n: i64 }
+
+impl Source for Counter {
+    type Item = i64;
+    type Other = i64; //~ E0519
+}

@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 27.1
+
+struct S { i: Idx } //~ E1510

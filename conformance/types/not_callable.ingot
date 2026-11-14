@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.6
+
+fn call(x: i64) -> i64 {
+    return x(1); //~ E0411
+}

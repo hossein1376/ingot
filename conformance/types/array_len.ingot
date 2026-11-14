@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 3, 5.5
+
+fn count(a: [4]u8, r: &[4]u8) -> i64 {
+    return a.len + r.len;
+}

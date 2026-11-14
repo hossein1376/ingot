@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(p: *u8) -> []u8 {
+    return @slice_from_raw(p, 0); //~ E1301
+}

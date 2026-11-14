@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 4.4
+
+interface Make {
+    fn make(x: i64) -> Self;
+}
+
+copy struct P { x: i64 }
+
+impl Make for P {
+    fn make(x: i64) -> P {
+        return P.{ x: x };
+    }
+}
+
+fn f() -> P {
+    return Make.make(1); //~ E0803
+}

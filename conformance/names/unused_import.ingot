@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 7
+
+import std.Env; //~ E0310

@@ -1,0 +1,14 @@
+//! expect: accept
+//! section: 4.4, 5.1
+
+struct Id { n: i64 }
+
+impl Eq for Id {
+    fn eq(self: &Id, other: &Id) -> bool {
+        return self.n == other.n;
+    }
+}
+
+fn same(a: Id, b: Id) -> bool {
+    return a.eq(&b);
+}

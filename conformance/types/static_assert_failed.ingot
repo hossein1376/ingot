@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 9
+
+fn f() {
+    @static_assert(1 == 2, "one is not two"); //~ E0810
+}

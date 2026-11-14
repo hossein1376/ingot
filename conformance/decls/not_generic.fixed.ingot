@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 8
+
+struct Plain { x: i64 }
+
+struct Holder { p: Plain }

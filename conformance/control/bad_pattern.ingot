@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 7.2
+
+fn first(x: i64) -> i64 {
+    match x {
+        (a, b) => { return a + b; } //~ E0603
+        else => { return 0; }
+    }
+}

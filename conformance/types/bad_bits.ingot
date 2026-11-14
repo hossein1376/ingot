@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.4
+
+fn widen(x: u8) -> u32 {
+    return @bits(u32, x); //~ E0408
+}

@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 26.2
+
+fn convert(v: u8x16) -> u16x8 {
+    return v as u16x8; //~ E1503
+}
+
+fn pick(m: boolx4, a: f32x4, b: f32x8) -> f32x4 {
+    return @select(m, a, b); //~ E1503
+}
+
+fn bits(v: u8x16) -> u32x8 {
+    return @bits(u32x8, v); //~ E1503
+}
+
+fn wrap_shape(v: u8x16) -> u16x8 {
+    return @wrap(u16x8, v); //~ E1503
+}

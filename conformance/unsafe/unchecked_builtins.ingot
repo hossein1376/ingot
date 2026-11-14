@@ -1,0 +1,36 @@
+//! expect: accept
+//! section: 15
+
+fn f(xs: []mut i64, ys: []i64, p: *mut u8, q: *u8) {
+    unsafe("the index is in bounds and the pointers are valid") {
+        let a: i64 = @uninit(i64);
+        @assume(a == a);
+        @unchecked_index(xs, 0) = a;
+        let x = @unchecked_index(ys, 0);
+        let s: []mut i64 = @unchecked_slice(xs, 0, 1);
+        let t: []i64 = @unchecked_slice(ys, 0, 1);
+        let b = @unchecked_add(a, 1);
+        let c = @unchecked_sub(b, 1);
+        let d = @unchecked_mul(c, 2);
+        let e = @unchecked_neg(d);
+        let g = @unchecked_div(e, 2);
+        let h = @unchecked_rem(g, 2);
+        let i = @unchecked_shl(h, 1);
+        let j = @unchecked_shr(i, 1);
+        let k: u8 = @unchecked_narrow(u8, j);
+        let v: i64x2 = @unchecked_load(i64x2, ys, 0);
+        @unchecked_store(xs, 0, v);
+        let s2: []u8 = @slice_from_raw(q, 1);
+        let r: &u8 = @borrow_from_raw(q);
+        let m: []mut u8 = @slice_from_raw(p, 1);
+        let r2: &mut u8 = @borrow_from_raw(p);
+        _ = x;
+        _ = s;
+        _ = t;
+        _ = k;
+        _ = s2;
+        _ = r;
+        _ = m;
+        _ = r2;
+    }
+}

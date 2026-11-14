@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 8
+
+struct S align(131072) { //~ E0515
+    x: i64,
+}

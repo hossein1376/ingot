@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 5.7
+
+fn f(c: bool) -> i64 {
+    let v = if c { 1 } else { let z = 2; _ = z; }; //~ E0207
+    return v;
+}

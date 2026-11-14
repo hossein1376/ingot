@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 26.2
+
+fn bytes(table: u8x16, idx: u8x16) -> u8x16 {
+    return @lookup(table, idx);
+}

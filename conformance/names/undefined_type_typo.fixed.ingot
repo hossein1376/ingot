@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 3
+
+struct Point { x: i64 }
+
+fn f(p: Point) -> i64 {
+    return 1;
+}

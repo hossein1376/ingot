@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 29
+
+export fn scale[T](x: i64) -> i64 { //~ E1604
+    return x * 2;
+}

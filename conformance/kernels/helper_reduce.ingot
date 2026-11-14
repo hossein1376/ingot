@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 27.1
+
+kernel fn c(x: i32) -> i32 reduce(+) { //~ E1519
+    return x;
+}

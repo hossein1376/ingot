@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 2
+
+import ambiguous_import.net.http; //~ E0316

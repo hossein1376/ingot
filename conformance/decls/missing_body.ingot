@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 4.1
+
+fn area(side: i64) -> i64; //~ E0518

@@ -1,0 +1,44 @@
+// std.core (spec sections 4.4, 5.5, 7.1 and 11): the inherent functions of the built-in
+// type constructors. Only `std` may write these (section 4.4).
+
+/// `xs.refs()`: iterate a shared slice by shared borrow (section 7.1).
+pub struct Refs[T] {
+    xs: []T,
+    at: i64,
+}
+
+impl[T] Iter for Refs[T] {
+    type Item = &T;
+
+    fn next(self: &mut Refs[T]) -> ?&T from self.* {
+        if self.at >= self.xs.len {
+            return .none;
+        }
+        let x = &self.xs[self.at];
+        self.at += 1;
+        return .some(x);
+    }
+}
+
+impl[T] []T {
+    /// The iterator that `xs.refs()` returns (section 7.1).
+    pub fn refs(self: []T) -> Refs[T] from self {
+        return Refs[T].{ xs: self, at: 0 };
+    }
+}
+
+impl[T] []mut T {
+    /// A shared reborrow of an exclusive slice (section 5.5).
+    pub fn shared(self: &[]mut T) -> []T from self.* {
+        unsafe("the shared view lives only while the exclusive slice is borrowed") {
+            return @slice_from_raw(@bits(*T, self.ptr), self.len);
+        }
+    }
+}
+
+impl[T] ?T {
+    /// The value, leaving `.none` behind (sections 7.2 and 11).
+    pub fn take(self: &mut ?T) -> ?T {
+        return @replace(self, .none);
+    }
+}

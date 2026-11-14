@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3
+
+fn inexact() -> f32 {
+    let x: f32 = 16777217; //~ E0405
+    return x;
+}

@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 8
+
+struct Wrapper[T] { value: T }
+
+struct Buffers { small: Wrapper[4] } //~ E0813

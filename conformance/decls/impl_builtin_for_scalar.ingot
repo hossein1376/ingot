@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4
+
+impl Eq for i64 { //~ E0506
+    fn eq(self: &i64, other: &i64) -> bool {
+        return true;
+    }
+}

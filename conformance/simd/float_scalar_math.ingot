@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 26.2
+
+fn f32_math(x: f32) -> f32 {
+    return @sqrt(x) + @fma(x, x, x) + @abs(x) + @min(x, x) + @max(x, x) + @floor(x) + @ceil(x)
+        + @round(x) + @rem(x, x);
+}
+
+fn f64_math(x: f64) -> f64 {
+    return @sqrt(x) + @fma(x, x, x) + @abs(x) + @min(x, x) + @max(x, x) + @floor(x) + @ceil(x)
+        + @round(x) + @rem(x, x);
+}

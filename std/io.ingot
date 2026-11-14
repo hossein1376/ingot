@@ -1,0 +1,5 @@
+// std.io (spec section 35): the standard streams of `Env`. No public field.
+
+pub struct Reader {}
+
+pub struct Writer {}

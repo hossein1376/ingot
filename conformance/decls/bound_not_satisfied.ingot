@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 8, 10
+
+struct Plain { x: i64 }
+
+struct Needs[T: Copy] { t: T }
+
+struct Holder { n: Needs[Plain] } //~ E0801

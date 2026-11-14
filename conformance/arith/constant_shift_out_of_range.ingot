@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 5.2, 9
+
+const mask: u8 = 1 << 8; //~ E0806

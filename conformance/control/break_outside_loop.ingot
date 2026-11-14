@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 7.1
+
+fn stop() {
+    break; //~ E0605
+}

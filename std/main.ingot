@@ -1,0 +1,35 @@
+// The root module of `std`. Its public items are reached as `std.name`.
+//
+// Declarations only: no method and no body exists yet. The type of each field of
+// `Env` is the type spec section 33.1 gives.
+
+import std.fs.Fs;
+import std.gpu;
+import std.io.Reader;
+import std.io.Writer;
+import std.mem.Heap;
+import std.mem.Vm;
+import std.net.Net;
+import std.rand.Rand;
+import std.time.Clock;
+
+/// Everything the process was given (spec section 33.1). Authority starts here: the
+/// capability types of the fields cannot be constructed outside `std`.
+pub struct Env {
+    pub args: [][]u8,
+    pub vars: &Vars,
+    pub heap: Heap,
+    pub vm: Vm,
+    pub fs: &Fs,
+    pub net: &Net,
+    pub clock: &Clock,
+    pub rand: &Rand,
+    pub stdin: &Reader,
+    pub stdout: &Writer,
+    pub stderr: &Writer,
+    pub gpu: ?gpu.Device,
+}
+
+/// The environment variables of the process (`env.vars`). The specification gives the
+/// type a name in section 33.1 but no module; it is declared next to `Env`.
+pub struct Vars {}

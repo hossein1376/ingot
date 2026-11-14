@@ -79,6 +79,8 @@ fn serve(listener: &Listener, db: &Db) -> void ! NetErr {
   so the signature says so:
 
   ```ingot
+  import std.task.Scope;
+
   fn start_worker(s: &Scope, jobs: &Queue into s, stats: &mut Stats into s) {
       spawn work(jobs, stats) in s;
   }
@@ -108,8 +110,17 @@ fn histogram(data: []u8, bins: &[256]Atomic[i64]) {
 * `par for` is a `for` loop whose iterations may run at the same time, in any order, on
   any worker. It ends when every iteration has.
 * The iterated expression must be a range, a slice, or a value implementing
-  `par.Split` (something that can be divided in two, such as `chunks`, `chunks_mut`,
-  `zip`, `enumerate`).
+  `par.Split`: something that can be divided in two, such as `chunks`, `chunks_mut`,
+  `zip`, `enumerate`. The item of a `par for` over a `Split` is its `Self.Item`.
+
+  ```ingot
+  pub interface Split: Iter {
+      fn len(self: &Self) -> i64;
+      fn split_at(self: Self, mid: i64) -> (Self, Self);
+  }
+  ```
+
+  The exact contract (minimum length, balance) is specified with the runtime.
 * The body is checked as a closure that is `Sync` and is called once per item: it may
   read outer variables through shared borrows of `Sync` types, and it may not assign to,
   move or exclusively borrow anything declared outside the loop. Each item (`x`,
@@ -152,6 +163,9 @@ its parts do, and a container's allocator counts as a part. The base cases:
 | `Arena`, `FixedBuf` | yes | no |
 | `Arc[T, A]` | if `T: Send + Sync` | if `T: Send + Sync` |
 | a closure | if every capture is | if every capture is |
+| `&dyn I` | if `Sync` is a supertrait of `I` | if `Sync` is a supertrait of `I` |
+| `&mut dyn I` | if `Send` is a supertrait of `I` | if `Sync` is a supertrait of `I` |
+| `&dyn Fn(..)`, `&mut dyn FnMut(..)` | no | no |
 
 `Mutex`, `RwLock`, `Chan` and `Once` also require their contents to be `Owned`
 (section 13.6).
@@ -217,6 +231,9 @@ loop {
   `select` non-blocking.
 * A `waitable fn` takes its receiver by shared borrow, so an arm that is not chosen
   consumes nothing.
+* Before it waits, `select` evaluates the receiver and arguments of every arm's call, arm
+  by arm from the first, each left to right (section 5.1). Only the chosen arm's
+  operation then takes effect.
 * If several operations are ready, one is picked uniformly at random.
 * The waitable functions in the standard library are `Chan.recv`, `Task.wait` (then
   `join()` returns at once), `Clock.after_ms` and `Scope.canceled`.

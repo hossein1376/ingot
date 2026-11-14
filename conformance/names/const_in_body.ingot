@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 4.5
+
+const limit: i64 = 64;
+
+fn f() -> i64 {
+    return limit + 1;
+}

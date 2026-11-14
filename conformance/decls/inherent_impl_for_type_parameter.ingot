@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 4.4
+
+impl[T] T {} //~ E0508

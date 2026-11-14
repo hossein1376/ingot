@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 3, 4.4
+
+interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+copy struct Item { n: i64 }
+
+fn get(x: &dyn Named) -> i64 {
+    return x.name();
+}
+
+fn argument(s: &Item) -> i64 {
+    return get(s); //~ E0401
+}

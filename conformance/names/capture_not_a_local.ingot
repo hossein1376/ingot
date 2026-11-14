@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 5.6
+
+const step: i64 = 2;
+
+fn bumped(n: i64) -> i64 {
+    let bump = fn [step](d: i64) -> i64 { return d + 1; }; //~ E0611
+    return bump(n);
+}

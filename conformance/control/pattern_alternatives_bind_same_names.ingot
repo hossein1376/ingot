@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 7.2
+
+fn m(o: ?i64) -> i64 {
+    return match o {
+        .some(v) | .none => v, //~ E0603
+    };
+}

@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 7
+
+static s: i64 = 0;
+
+fn f() -> i64 {
+    let p = &mut s; //~ E0610
+    return p.*;
+}

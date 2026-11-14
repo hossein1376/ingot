@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(xs: [4]i64) -> i64 {
+    return @unchecked_index(xs, 0); //~ E1301
+}

@@ -1,0 +1,4 @@
+//! expect: reject
+//! section: 4.2
+
+struct Node { next: Node, value: i64 } //~ E0516

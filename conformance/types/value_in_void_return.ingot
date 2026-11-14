@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 4.1, 6.2
+
+fn nothing() {
+    return 1; //~ E0421
+}

@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 4.4
+
+interface Visitor {
+    fn visit[T](self: &Self, value: T);
+}
+
+struct Holder { v: &dyn Visitor } //~ E0510
