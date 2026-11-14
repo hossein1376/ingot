@@ -23,7 +23,7 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 3 | Parse | tokens | AST | E02xx |
 | 4 | `when` | AST, target | AST with untaken `when` branches removed | E0612, E1606 |
 | 5 | Resolve | all ASTs of a package | every name bound to a declaration | E03xx |
-| 6 | Signatures | item headers | types of all items, layouts, interface tables, type properties | E05xx, E08xx, E1206, E15xx (signatures), E16xx |
+| 6 | Signatures | item headers | types of all items, layouts, interface tables, type properties | E05xx, E08xx, E1206, E1303, E1410, E15xx (signatures), E16xx |
 | 7 | Type-check | function bodies | typed tree | E04xx, E06xx, E07xx, E08xx, E13xx, E14xx (shape rules), E15xx |
 | 8 | Lower | typed tree | one CFG per function, checks explicit | none |
 | 9 | Ownership | CFG | the same CFG, verified | E10xx, E11xx, E12xx, E1401 to E1403, E1407 |
