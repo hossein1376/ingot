@@ -621,7 +621,9 @@ outer: for row in rows { for c in row { if c == 0 { break outer; } } }
 
 `xs.refs()` iterates a shared slice by `&T`, for elements that are not `Copy`. Loops
 over arrays, slices and ranges are counted loops with no iterator object. A range whose
-start is not below its end runs zero times. A `for` over a range has no second variable:
+start is not below its end runs zero times. The counter never overflows: the loop ends
+after the last value of the range, also when that value is the largest of its type or
+the next step would pass it. A `for` over a range has no second variable:
 the value is the counter (E0609 otherwise).
 
 ### 7.2 Match and patterns
