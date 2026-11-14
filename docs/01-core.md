@@ -729,11 +729,12 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
 * A constant expression is evaluated by the compiler: `const` initializers, array
   lengths, `const` generic arguments, enum tag values, `when` conditions, `align(...)`.
 * Any function may be called in a constant expression if its execution does not read a
-  `static`'s value, enter `unsafe`, call an `extern` function, spawn, or exceed the
-  evaluation step limit. Taking the address of a static is allowed: it is how one static
-  borrows another. A generic function is evaluated with its arguments, without being
-  instantiated for code generation. A trap during evaluation is a compile error at the
-  call.
+  `static`'s value, enter `unsafe`, call an `extern` function, spawn, run a `par for`,
+  `select` or `dispatch`, or exceed the evaluation limits. Taking the address of a static
+  is allowed: it is how one static borrows another. A generic function is evaluated with
+  its arguments, without being instantiated for code generation. A trap during
+  evaluation is a compile error at the operation that trapped, which also names the call
+  in the constant expression that led there.
 * Compile-time builtins: `@sizeof(T)`, `@alignof(T)`, `@offsetof(T, field)` (each an
   `i64`),
   `@static_assert(cond, "msg")`, and the `@target` record (section 24).

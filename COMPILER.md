@@ -105,9 +105,11 @@ a member name resolved to, the binding mode of every pattern binding, the conver
 signature and captures of each closure. A body in which phase 7 reported an error is
 marked `failed` and phases 8 to 10 skip it. Phase 8 reads the HIR and this, nothing else.
 
-**Constant evaluation** (spec §9) interprets typed bodies with a step limit, sharing one
-arithmetic module with check folding so a constant and a run-time value of the same
-expression never differ.
+**Constant evaluation** (spec §9, pipeline §4.6) has two paths. A direct evaluator in
+phase 6 handles literal arithmetic. Everything else is evaluated by interpreting CFGs,
+with the bodies it reaches pulled through phases 7 and 8 on demand and within fixed
+limits. Both paths share one arithmetic module with check folding, so a constant and a
+run-time value of the same expression never differ.
 
 **The standard library** is Ingot source in `std/`, checked by this compiler like any
 package. It is written only as far as conformance tests and programs need it, and only
@@ -201,7 +203,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S4c | relay | The spec review (`228062e`) in phases 1–7: holes H1–H5, lowercase constant generics, open slice bounds, diverging branch blocks, closure bounds, kernel helpers instead of phase 7k, and the smaller rule changes | done (0562994) |
 | S4d | relay | The rest of `228062e` in phase 7: builtin signatures (SIMD, `unsafe`), format strings (E0422), function values, `I.name(..)`, `std`'s inherent impls on built-in types | done (93f6a05) |
 | S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | done (dec58aa) |
-| S5b | relay | Constant evaluation of function calls over the CFG (E0806–E0808) | `arith/*` constant tests |
+| S5b | relay | Constant evaluation by interpreting CFGs, with bodies pulled forward (pipeline §4.6, E0806–E0808, E0812) | new `consteval/*` conformance tests; std's three constant entries gone |
 | S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
 | S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |

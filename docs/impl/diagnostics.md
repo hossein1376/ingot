@@ -47,6 +47,7 @@ One JSON object per line on standard output, for `check`, `build`, `test` and `f
 | `spawn` | the `spawn` that gave a borrow to a task |
 | `loop` | the loop whose next iteration reaches the error |
 | `instantiation` | where a generic was instantiated, innermost first |
+| `call` | the call in a constant expression that led to an operation inside a called function |
 | `candidate` | one of several things the author may have meant |
 
 ### Fixes
@@ -224,13 +225,13 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
 | E0805 | `not_generic` | generic arguments on something that takes none | the argument list | delete them |
-| E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`instantiation` if inside a generic) | — |
-| E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function or spawns | the operation | — |
-| E0808 | `evaluation_limit` | constant evaluation exceeds the step limit | the outermost call | — |
+| E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
+| E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function, or runs `spawn`, `par for`, `select` or `dispatch` (pipeline §4.6) | the operation (`call` as for E0806) | — |
+| E0808 | `evaluation_limit` | constant evaluation takes more than 2^24 steps, nests calls more than 1024 deep, or holds more than 2^24 bytes of values at once (pipeline §4.6) | the outermost call | — |
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
 | E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond`. A `cond` that depends on a generic parameter is checked for each instance (phase 11) | the builtin call | — |
 | E0811 | `layout_depends_on_parameter` | `@bits` or `@zero` on a type parameter with no bound that grants it | the builtin call | — |
-| E0812 | `constant_cycle` | the value of a constant depends on itself | the constant's name | — |
+| E0812 | `constant_cycle` | the value of a constant depends on itself, also through the signature or body of a function its evaluation calls, or (for a constant in an impl header that needs a call) through the impl tables (pipeline §4.6) | the constant's name | — |
 | E0813 | `wrong_generic_argument_kind` | a type is given for a constant generic parameter, or a constant for a type parameter | the argument | — |
 
 ## 10. Moves and linear values (E10xx)
