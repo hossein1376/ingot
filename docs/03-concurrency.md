@@ -231,6 +231,9 @@ loop {
   `select` non-blocking.
 * A `waitable fn` takes its receiver by shared borrow, so an arm that is not chosen
   consumes nothing.
+* Before it waits, `select` evaluates the receiver and arguments of every arm's call, arm
+  by arm from the first, each left to right (section 5.1). Only the chosen arm's
+  operation then takes effect.
 * If several operations are ready, one is picked uniformly at random.
 * The waitable functions in the standard library are `Chan.recv`, `Task.wait` (then
   `join()` returns at once), `Clock.after_ms` and `Scope.canceled`.

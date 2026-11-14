@@ -184,11 +184,11 @@ Its exact form is the implementer's choice. It must have these properties.
 
   | Kind | Trap | Guards |
   |---|---|---|
-  | `bounds` | T01 | an index or slice, and with a width `k` the vector accesses `@load`, `@store` and the `_tail` forms |
-  | `overflow` | T02 | `+ - *`, unary `-` |
+  | `bounds` | T01, T02, T14 | an index (T01) or a slice (T02), and with a width `k` the vector accesses `@load`, `@store` and the `_tail` forms (T14) |
+  | `overflow` | T03 | `+ - *`, unary `-`, and their assignment forms |
   | `division` | T04, T05 | `/ %`: one check with two outcomes |
   | `shift` | T06 | `<< >>` |
-  | `narrow` | T03 | `@narrow` |
+  | `narrow` | T07 | `@narrow` |
   | `gather` | T14 | the index ranges of `@gather` and `@scatter`; never removed |
   | `scatter_distinct` | T15 | distinct indices of `@scatter`; never removed |
   | `dispatch_cover` | T16 | that every input and output of a `dispatch` covers its range; never removed |
