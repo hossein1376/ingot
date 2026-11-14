@@ -88,6 +88,6 @@ requested range, each as a `quickfix` with a `WorkspaceEdit`.
 
 | Step | State |
 |---|---|
-| L1 | design |
+| L1 | done |
 | L2 | design |
 | L3 | design |

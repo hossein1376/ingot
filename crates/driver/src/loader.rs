@@ -12,6 +12,7 @@
 //! `*.fixed.ingot` files are expected results, not modules. They are enabled by
 //! `LoadOptions::harness`.
 
+use crate::files::{Files, Overlays};
 use crate::manifest::{self, Manifest};
 use ingot_diag::diagnostic::Diagnostic;
 use ingot_diag::source::{Source, Sources, Span};
@@ -19,10 +20,12 @@ use ingot_syntax::lexer::lex;
 use ingot_syntax::token::TokenKind;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LoadOptions {
     /// The conformance harness's conventions (see the module comment).
     pub harness: bool,
+    /// Text used in place of files on disk (tools.md §6).
+    pub overlays: Overlays,
 }
 
 #[derive(Clone, Debug)]
@@ -83,14 +86,19 @@ pub fn load(path: &Path) -> std::io::Result<LoadedPackage> {
 }
 
 pub fn load_with(path: &Path, options: LoadOptions) -> std::io::Result<LoadedPackage> {
-    if path.is_dir() {
-        load_dir(path, options, "")
+    let files = Files::new(options.overlays.clone());
+    load_with_files(path, &files, options.harness)
+}
+
+fn load_with_files(path: &Path, files: &Files, harness: bool) -> std::io::Result<LoadedPackage> {
+    if files.is_dir(path) {
+        load_dir_files(path, files, harness, "")
     } else {
-        load_file(path, options)
+        load_file(path, files, harness)
     }
 }
 
-fn load_file(path: &Path, options: LoadOptions) -> std::io::Result<LoadedPackage> {
+fn load_file(path: &Path, files: &Files, harness: bool) -> std::io::Result<LoadedPackage> {
     // A file inside a package is checked as part of that package: walk up to the
     // directory with `ingot.toml`. A bare file name has the empty path as its
     // parent, which means the current directory.
@@ -103,12 +111,12 @@ fn load_file(path: &Path, options: LoadOptions) -> std::io::Result<LoadedPackage
     let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
     let mut dir = Some(start.as_path());
     while let Some(d) = dir {
-        if d.join("ingot.toml").exists() {
-            return load_dir(d, options, "");
+        if files.is_dir(d) && files.exists(&d.join("ingot.toml")) {
+            return load_dir_files(d, files, harness, "");
         }
         dir = d.parent();
     }
-    let text = std::fs::read_to_string(path)?;
+    let text = files.read_to_string(path)?;
     // A single file is its own package root, so its path is relative to the
     // directory that contains it (tools.md §1: paths are relative to the
     // package root).
@@ -143,6 +151,16 @@ fn load_file(path: &Path, options: LoadOptions) -> std::io::Result<LoadedPackage
 /// Load the package rooted at `dir`. Every source's displayed path starts with
 /// `prefix` (the standard library's files are shown as `std/...`).
 pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Result<LoadedPackage> {
+    let files = Files::new(options.overlays);
+    load_dir_files(dir, &files, options.harness, prefix)
+}
+
+fn load_dir_files(
+    dir: &Path,
+    files: &Files,
+    harness: bool,
+    prefix: &str,
+) -> std::io::Result<LoadedPackage> {
     let dir_name = dir
         .canonicalize()
         .ok()
@@ -160,8 +178,8 @@ pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Resu
     // The manifest.
     let manifest_path = dir.join("ingot.toml");
     let manifest_display = format!("{prefix}ingot.toml");
-    if manifest_path.exists() {
-        let text = std::fs::read_to_string(&manifest_path)?;
+    if files.exists(&manifest_path) {
+        let text = files.read_to_string(&manifest_path)?;
         let source = Source::with_absolute(manifest_display, manifest_path.clone(), text);
         let (manifest, diags) = manifest::parse(&source);
         package.sources.add(source);
@@ -177,7 +195,7 @@ pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Resu
             package.manifest_failed = true;
             package.diagnostics.extend(diags);
         }
-    } else if options.harness {
+    } else if harness {
         // The harness convention: a directory test is a package named after it.
     } else {
         let source = Source::with_absolute(manifest_display, manifest_path, String::new());
@@ -191,13 +209,13 @@ pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Resu
         package.manifest_failed = true;
     }
 
-    let mut files = Vec::new();
-    collect_ingot(dir, &mut files)?;
-    files.sort();
-    for file in files {
+    let mut module_files = Vec::new();
+    collect_ingot(dir, files, &mut module_files)?;
+    module_files.sort();
+    for file in module_files {
         let rel = file.strip_prefix(dir).unwrap_or(&file);
         let rel_path = relative_path(rel);
-        if options.harness && rel_path.ends_with(".fixed.ingot") {
+        if harness && rel_path.ends_with(".fixed.ingot") {
             continue;
         }
         let components = module_components(rel);
@@ -209,7 +227,7 @@ pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Resu
                 components.join(".")
             };
         let display = format!("{prefix}{rel_path}");
-        let bytes = std::fs::read(&file)?;
+        let bytes = files.read(&file)?;
         let (text, unreadable, bad) = match String::from_utf8(bytes) {
             Ok(t) => (t, false, 0),
             Err(e) => {
@@ -255,18 +273,18 @@ pub fn load_dir(dir: &Path, options: LoadOptions, prefix: &str) -> std::io::Resu
     Ok(package)
 }
 
-fn collect_ingot(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?.flatten().collect();
-    entries.sort_by_key(|e| e.path());
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if path.is_dir() {
-            if matches!(name.as_ref(), "target" | ".git") || name.starts_with('.') {
+fn collect_ingot(dir: &Path, files: &Files, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let mut entries = files.read_dir(dir)?;
+    entries.sort();
+    for path in entries {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if files.is_dir(&path) {
+            if matches!(name.as_str(), "target" | ".git") || name.starts_with('.') {
                 continue;
             }
-            collect_ingot(&path, out)?;
+            collect_ingot(&path, files, out)?;
         } else if path.extension().map(|x| x == "ingot").unwrap_or(false) {
             out.push(path);
         }
@@ -298,9 +316,13 @@ pub(crate) fn relative_path(rel: &Path) -> String {
 /// Where the standard library's source is: `$INGOT_STD`, then next to the
 /// executable, then relative to this crate's source tree.
 pub fn std_root() -> Option<PathBuf> {
+    std_root_with(&Files::default())
+}
+
+fn std_root_with(files: &Files) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("INGOT_STD") {
         let path = PathBuf::from(path);
-        if path.join("ingot.toml").exists() {
+        if files.exists(&path.join("ingot.toml")) {
             return Some(path);
         }
     }
@@ -308,25 +330,26 @@ pub fn std_root() -> Option<PathBuf> {
         && let Some(dir) = exe.parent()
     {
         for candidate in [dir.join("std"), dir.join("../std"), dir.join("../../std")] {
-            if candidate.join("ingot.toml").exists() {
+            if files.exists(&candidate.join("ingot.toml")) {
                 return Some(candidate);
             }
         }
     }
     let development = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
-    development
-        .join("ingot.toml")
-        .exists()
+    files
+        .exists(&development.join("ingot.toml"))
         .then_some(development)
 }
 
-/// Load the standard library as a package. Its files are shown as `std/...`.
-pub fn load_std() -> std::io::Result<LoadedPackage> {
-    let Some(root) = std_root() else {
+/// Load the standard library as a package, with the overlays of `options`. Its files
+/// are shown as `std/...`.
+pub fn load_std(options: &LoadOptions) -> std::io::Result<LoadedPackage> {
+    let files = Files::new(options.overlays.clone());
+    let Some(root) = std_root_with(&files) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "cannot find the standard library (a directory `std` with an `ingot.toml`); set INGOT_STD",
         ));
     };
-    load_dir(&root, LoadOptions::default(), "std/")
+    load_dir_files(&root, &files, false, "std/")
 }

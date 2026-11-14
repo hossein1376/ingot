@@ -68,8 +68,12 @@ pub fn fix_path(path: &Path) -> std::io::Result<FixOutcome> {
 }
 
 pub fn fix_path_with(path: &Path, options: &Options) -> std::io::Result<FixOutcome> {
-    let mut package = loader::load_with(path, options.load)?;
-    fix_package_with(&mut package, options)
+    // Fixing writes to disk; it has no overlay support (tools.md §6 overlays belong to
+    // serve). Keep the harness convention, drop any overlays a library caller passes.
+    let mut options = options.clone();
+    options.load.overlays = Default::default();
+    let mut package = loader::load_with(path, options.load.clone())?;
+    fix_package_with(&mut package, &options)
 }
 
 pub fn fix_package(package: &mut LoadedPackage) -> std::io::Result<FixOutcome> {

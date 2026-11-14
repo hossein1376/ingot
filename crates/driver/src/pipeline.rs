@@ -7,6 +7,7 @@
 //! phase 6 cannot evaluate, is not accepted: `Analysis` says so in `not_implemented`,
 //! and the command line exits with status 2 instead of 0.
 
+use crate::files::{self, Files};
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
 use ingot_diag::source::{Source, Sources};
@@ -131,7 +132,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     let std = if is_std || package.manifest_failed {
         None
     } else {
-        Some(loader::load_std()?)
+        Some(loader::load_std(&options.load)?)
     };
 
     // One list of sources: the package's own, then the standard library's.
@@ -259,20 +260,11 @@ pub fn analyze_path(path: &Path) -> io::Result<Analysis> {
 }
 
 pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis> {
-    let package = loader::load_with(path, options.load)?;
-    let only = if path.is_file() {
+    let package = loader::load_with(path, options.load.clone())?;
+    let files = Files::new(options.load.overlays.clone());
+    let only = if files.is_file(path) {
         let root = &package.root;
-        path.strip_prefix(root)
-            .ok()
-            .map(loader::relative_path)
-            .or_else(|| {
-                path.canonicalize().ok().and_then(|p| {
-                    root.canonicalize()
-                        .ok()
-                        .and_then(|r| p.strip_prefix(&r).ok().map(loader::relative_path))
-                })
-            })
-            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        package_relative(path, root)
     } else {
         None
     };
@@ -285,6 +277,27 @@ pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis>
             .retain(|d| d.file == file || !d.file.ends_with(".ingot"));
     }
     Ok(analysis)
+}
+
+/// The path of `path` relative to the package root, using `/`. A file that an overlay
+/// makes exist has no canonical path of its own, so its directory is canonicalised
+/// instead.
+fn package_relative(path: &Path, root: &Path) -> Option<String> {
+    if let Ok(rel) = path.strip_prefix(root) {
+        return Some(loader::relative_path(rel));
+    }
+    let canonical = path
+        .canonicalize()
+        .ok()
+        .unwrap_or_else(|| files::normalize(path));
+    let root = root
+        .canonicalize()
+        .unwrap_or_else(|_| files::normalize(root));
+    if let Ok(rel) = canonical.strip_prefix(&root) {
+        return Some(loader::relative_path(rel));
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
 }
 
 /// A source for a diagnostic that has no file: the command line.
