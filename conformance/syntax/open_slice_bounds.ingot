@@ -1,18 +1,18 @@
 //! expect: accept
 //! section: 5.5
 
-fn whole(a: []u8) -> []u8 {
+fn whole(a: []u8) -> []u8 from a {
     return a[..];
 }
 
-fn tail(a: []u8) -> []u8 {
+fn tail(a: []u8) -> []u8 from a {
     return a[2..];
 }
 
-fn upto(a: []u8) -> []u8 {
+fn upto(a: []u8) -> []u8 from a {
     return a[..2];
 }
 
-fn array(a: [4]u8) -> []u8 {
+fn array(a: &[4]u8) -> []u8 from a {
     return &a[..];
 }

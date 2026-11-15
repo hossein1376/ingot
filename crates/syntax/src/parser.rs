@@ -924,7 +924,7 @@ impl<'a> Parser<'a> {
                             name: "static".to_string(),
                             inner: false,
                             is_static: true,
-                            span: Span::new(start, self.span().end),
+                            span: Span::new(start, self.prev_end()),
                         });
                     } else {
                         let (name, name_span) = self.expect_ident();
