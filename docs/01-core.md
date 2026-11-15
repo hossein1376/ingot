@@ -718,7 +718,7 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   | `Send`, `Sync` | crossing task boundaries (section 20) |
   | `Owned` | holding no borrow, so a value may outlive everything around it (section 13.6) |
   | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Only scalars satisfy them, so each implies `Copy`, `Discard`, `Owned`, `Send` and `Sync` |
-  | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value |
+  | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value. Only non-linear types satisfy `Fn` and `FnMut` (section 5.6: a closure that owns a non-`Copy` capture is only `FnOnce`), so each of those two implies `Discard` |
 
   With no bound, a `T` can only be moved, borrowed and passed on, and each `T` value
   must be consumed exactly once, because `T` might be linear.
