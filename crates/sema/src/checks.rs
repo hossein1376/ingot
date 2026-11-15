@@ -1411,12 +1411,24 @@ impl Cx<'_, '_> {
                 );
             }
         }
-        if !f.from.is_empty() && !self.type_may_hold_borrow(f.ret) {
+        let error_may = f.error.is_some_and(|e| self.type_may_hold_borrow(e));
+        let error_written = f.error.is_some_and(|e| self.d.written_with_borrow(e));
+        if !f.from.is_empty() && !self.type_may_hold_borrow(f.ret) && !error_may {
             self.error(
                 "E1206",
                 "`from` on a return type that can hold no borrow",
                 file,
                 f.from[0].span,
+            );
+        }
+        // E1201. The fix, when the body can supply one, is attached after phase 9.
+        // The clause covers `T ! E`, so either type being written with a borrow counts.
+        if f.from.is_empty() && (self.d.written_with_borrow(f.ret) || error_written) {
+            self.error(
+                "E1201",
+                "the return type holds a borrow and needs a `from` clause",
+                file,
+                f.ret_span,
             );
         }
         // E1601, E1604: the C boundary.

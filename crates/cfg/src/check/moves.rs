@@ -330,7 +330,9 @@ impl<'a> Cx<'a> {
         match &stmt.kind {
             StmtKind::StorageStart(l) => self.storage_start(flow, *l),
             StmtKind::StorageEnd(l) => self.end_storage(flow, *l, block, index),
-            StmtKind::Assign { place, value } => self.assign(flow, place, value, span, defer),
+            StmtKind::Assign { place, value } => {
+                self.assign(flow, place, value, span, stmt.read_span, defer)
+            }
             StmtKind::Use(op) => self.use_operand(flow, op, span, defer),
             StmtKind::Cancel(_) | StmtKind::EnterUnsafe | StmtKind::Check(_) => {}
             StmtKind::Abandon(l) => self.mark_gone(flow, &PathKey::local(*l)),
@@ -580,6 +582,7 @@ impl<'a> Cx<'a> {
         place: &Place,
         value: &Rvalue,
         span: Span,
+        read_span: Option<Span>,
         defer: Option<DeferCopy>,
     ) {
         self.use_indices(flow, place, span, defer);
@@ -601,7 +604,9 @@ impl<'a> Cx<'a> {
                 live: BTreeSet::new(),
             },
         };
-        self.use_rvalue(flow, value, span, defer);
+        // The overwrite and the move of the destination stay on the statement. A
+        // copied place read is reported at the place, when lowering recorded one.
+        self.use_rvalue(flow, value, read_span.unwrap_or(span), defer);
         if let Some(path) = path_key(place) {
             if let Some(ty) = dest_ty
                 && self.obligation(flow, &path, ty, 0)

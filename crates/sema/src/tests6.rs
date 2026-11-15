@@ -1569,7 +1569,7 @@ fn self_has_the_implementing_type_e0517() {
 #[test]
 fn a_dyn_interface_may_not_take_or_return_self_by_value_or_be_generic_e0510() {
     let d = app(
-        "interface Ok1 { fn a(self: &Self, other: &Self) -> i64; fn b(self: &mut Self) -> []u8; }\n\
+        "interface Ok1 { fn a(self: &Self, other: &Self) -> i64; fn b(self: &mut Self) -> []u8 from self; }\n\
          interface ByValue { fn a(self: Self) -> i64; }\n\
          interface Returns { fn dup(self: &Self) -> ?Self; }\n\
          interface Generic { fn map[T](self: &Self, x: T); }\n\

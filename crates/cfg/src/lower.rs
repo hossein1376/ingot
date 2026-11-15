@@ -774,10 +774,42 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         if !self.reachable {
             return;
         }
+        self.emit_reading(kind, span, None);
+    }
+
+    fn emit_reading(&mut self, kind: StmtKind, span: Span, read_span: Option<Span>) {
+        if !self.reachable {
+            return;
+        }
         let defer = self.copy;
         if let Some(block) = self.cfg.blocks.get_mut(self.cur as usize) {
-            block.stmts.push(Stmt { span, kind, defer });
+            block.stmts.push(Stmt {
+                span,
+                kind,
+                defer,
+                read_span,
+            });
         }
+    }
+
+    /// Span of a copied user, parameter or scope place, when it is narrower than the
+    /// statement. Analysis A reports E1001 there. A move, a temporary and a copy whose
+    /// span is already the statement keep `None`.
+    fn copied_place_span(&self, op: &Operand, init_span: Span) -> Option<Span> {
+        let Operand::Place(place, PlaceUse::Copy) = op else {
+            return None;
+        };
+        let PlaceBase::Local(id) = place.base else {
+            return None;
+        };
+        let kind = self.cfg.locals.get(id as usize)?.kind;
+        if !matches!(kind, LocalKind::Param | LocalKind::User | LocalKind::Scope) {
+            return None;
+        }
+        if init_span == self.stmt_span {
+            return None;
+        }
+        Some(init_span)
     }
 
     fn push_frame(&mut self, span: Span) {
@@ -1150,15 +1182,21 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 // A let of one name binds the initializer directly; any other pattern
                 // needs the value in a place.
                 if let PatKind::Bind { local } = &self.pkg.pat(*pattern).kind {
+                    let init_span = self.span(*init);
+                    let read_span = self.copied_place_span(&op, init_span);
                     let l = self.declare_binding(*local);
                     let value = match op {
                         Operand::Place(p, use_) => Rvalue::Use(Operand::Place(p, use_)),
                         op => Rvalue::Use(op),
                     };
-                    self.emit(StmtKind::Assign {
-                        place: Place::local(l),
-                        value,
-                    });
+                    self.emit_reading(
+                        StmtKind::Assign {
+                            place: Place::local(l),
+                            value,
+                        },
+                        self.stmt_span,
+                        read_span,
+                    );
                 } else {
                     let place = match op {
                         Operand::Place(p, _) => p,
@@ -1719,9 +1757,13 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             return Some(self.materialize(value, ty, span));
         }
         if let Some(coerce) = coerce {
+            let name = self.cx.sema.qualified_name(coerce.interface);
             let value = Rvalue::DynCast {
                 operand: op,
-                coercion: DynCoercionKind::Interface(Box::new(coerce)),
+                coercion: DynCoercionKind::Interface {
+                    name,
+                    coercion: Box::new(coerce),
+                },
             };
             return Some(self.materialize(value, ty, span));
         }

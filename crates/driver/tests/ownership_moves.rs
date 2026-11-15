@@ -886,7 +886,7 @@ fn f() -> i64 {
 }
 ",
         &[
-            "E1001 was moved `let m = b.len;` move=`b`",
+            "E1001 was moved `b.len` move=`b`",
             "E1001 was moved `b.len` move=`b`",
         ],
     );

@@ -248,18 +248,23 @@ rejected reports nothing more; a failure the interpreter cannot handle is
 phase 8, on every CFG phase 8 produced for the checked package: function and test
 bodies, and the closure and `par for` bodies they contain. Constant-evaluation CFGs are
 a separate set and are not checked. The analysis does not change the CFG. `check/mod.rs`
-is the entry point; `check/moves.rs` is Analysis A (moves and linear values, E1001–E1006).
+is the entry point. `check/moves.rs` is Analysis A (moves and linear values, E1001–E1006).
+`check/origins.rs` is Analysis B (origin sets). It computes `O(x)` for every local whose
+type is or may be a view, and records the loan created at each borrow. Block entry states
+and `sets_before` replay a block up to any statement for Analysis C. The function
+boundary reports E1202, E1203, E1204 and E1205. Phase 6 reports E1201 from the signature
+when a borrow-written return has no `from` clause; phase 9 runs Analysis B against an
+empty clause and the driver attaches that clause to the E1201.
 A path is a local followed by projections. A field and a tuple index are distinct per
 index, every array or slice element is the one step `[_]`, a dereference is `.*` and a
 variant payload is `.v`. Two paths overlap when one is a prefix of the other. The
-dataflow tracks init, moved and maybe, plus the variants an enum path may hold and,
+move dataflow tracks init, moved and maybe, plus the variants an enum path may hold and,
 separately, which of those variants are still obligations: both variants of a `T ! E`,
 and for every other enum only a variant whose payload is linear. The join of a
 `match`, `try`, `catch` or `orelse` does not report a leak that every arm consumed.
 A consuming `for` over an array moves each element with `for_elem` and, on the normal
 exit only, `iter_consumed` of the array temporary.
-The other phase-9 analyses and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry
-stays.
+Loans, scopes, tasks and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry stays.
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;

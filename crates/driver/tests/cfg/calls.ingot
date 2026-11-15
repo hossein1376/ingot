@@ -38,7 +38,7 @@ fn receivers(p: Pair, ys: []mut i64) -> i64 {
     return total + y + h;
 }
 
-fn id(xs: []i64) -> []i64 {
+fn id(xs: []i64) -> []i64 from xs {
     return xs;
 }
 

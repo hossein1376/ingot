@@ -132,6 +132,9 @@ pub struct Stmt {
     /// Set on a statement copied from a deferred block: which `defer` it came from and
     /// which exit of the block triggered the copy.
     pub defer: Option<DeferCopy>,
+    /// Span of a copied place read when `span` is the whole `let`. Analysis A reports
+    /// E1001 at this span. `None` means the read is reported at `span`.
+    pub read_span: Option<Span>,
 }
 
 /// Where a copied deferred statement came from, and why it runs.
@@ -411,7 +414,12 @@ pub enum AggregateKind {
 /// A `&T` to `&dyn I`, or a borrow of a closure to `&dyn Fn(..)`.
 #[derive(Clone, Debug)]
 pub enum DynCoercionKind {
-    Interface(Box<DynCoercion>),
+    Interface {
+        /// Qualified name, `package.module.Iface`. The definition id shifts when
+        /// `std/` gains a file, so the dump must not print it.
+        name: String,
+        coercion: Box<DynCoercion>,
+    },
     Fn(Box<FnDynCoercion>),
 }
 

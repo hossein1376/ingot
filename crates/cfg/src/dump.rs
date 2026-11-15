@@ -291,8 +291,8 @@ impl<'a> Dumper<'a> {
                 format!("cast {name} {}", self.operand(operand))
             }
             Rvalue::DynCast { operand, coercion } => match coercion {
-                DynCoercionKind::Interface(c) => {
-                    format!("dyn-cast iface#{} {}", c.interface.0, self.operand(operand))
+                DynCoercionKind::Interface { name, .. } => {
+                    format!("dyn-cast {name} {}", self.operand(operand))
                 }
                 DynCoercionKind::Fn(c) => {
                     format!("dyn-cast {} {}", c.kind.name(), self.operand(operand))

@@ -7,8 +7,9 @@
 //! each `par for` body. [`dump::dump`] prints a CFG as deterministic text; the format
 //! is described at the top of `dump.rs`. [`validate`] checks the structural rules every
 //! CFG must satisfy. [`check`] is phase 9: Analysis A (moves and linear values) lives
-//! in `check::moves`. The rest of phase 9 and phase 10 are not implemented; a body that
-//! reached phase 8 still contributes [`UNCHECKED_OWNERSHIP`].
+//! in `check::moves`, Analysis B (origin sets) in `check::origins`. Loans, scopes and
+//! phase 10 are not implemented; a body that reached phase 8 still contributes
+//! [`UNCHECKED_OWNERSHIP`].
 //!
 //! The lowering reports no diagnostics. A body that phase 7 rejected is not lowered
 //! (the phase gate of pipeline section 3). A construct the lowering does not handle
