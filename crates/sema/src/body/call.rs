@@ -1989,8 +1989,8 @@ impl Checker<'_, '_, '_> {
 
     // ------------------------------------------------- spawn, dispatch (typed)
 
-    /// `spawn call in scope`. The rules of `spawn` that need the ownership checker
-    /// (E1401, E1403) belong to phase 9; E1404 and E1405 are decided here.
+    /// `spawn call in scope`. E1401 and E1403 are phase 9. E1404 and E1405 are
+    /// decided here.
     pub(crate) fn spawn(
         &mut self,
         e: ExprId,
@@ -1999,9 +1999,6 @@ impl Checker<'_, '_, '_> {
         value: bool,
     ) -> (TypeId, ExprRes) {
         let _ = e;
-        if !self.kernel {
-            self.ni_unchecked("the rules of `spawn`: E1401 and E1403 (phase 9, S6 to S9)");
-        }
         let ct = self.expr(call, None);
         let st = self.expr(scope, None);
         if !self.is_poison(st) && !self.is_never(st) {

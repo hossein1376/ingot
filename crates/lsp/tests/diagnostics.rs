@@ -218,7 +218,10 @@ fn not_implemented_is_a_log_message_not_a_diagnostic() {
     client.initialize(false);
     client.open(&document, text);
     let message = client.log_containing("not implemented");
-    assert!(message.contains("ownership"), "{message}");
+    assert!(
+        message.contains("check removal and cost items"),
+        "{message}"
+    );
     assert!(client.published(&document).is_empty());
 }
 

@@ -624,12 +624,6 @@ impl Checker<'_, '_, '_> {
         step: Option<ExprId>,
         body: BlockId,
     ) {
-        if par && !self.kernel {
-            self.ni_unchecked(
-                "E1401 not_send, E1402 capture_not_sync and E1407 par_for_outer_mutation \
-                 (phase 9, S6 to S9)",
-            );
-        }
         if let Some(g) = grain {
             let i64_ = self.i64_();
             self.expect(g, i64_);

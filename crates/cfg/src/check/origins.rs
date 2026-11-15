@@ -62,11 +62,31 @@ pub struct Loan {
 pub type OriginSet = BTreeSet<Origin>;
 pub type OriginMap = BTreeMap<Local, OriginSet>;
 
+/// Where a scope operand points. `Local` is the `&Scope` of a `scope` block.
+/// `Param` is a scope parameter (`Self`). `Through` is some other place whose
+/// origins decide the store.
+enum ScopeTarget {
+    Local(Local),
+    Param(u32),
+    Through(Place),
+}
+
+#[derive(Default)]
+struct ScopeAcc {
+    seen: BTreeSet<Local>,
+    locals: BTreeSet<Local>,
+    params: BTreeSet<u32>,
+    through: Vec<Place>,
+    conservative: bool,
+}
+
 /// Entry state of every block, and every loan the body created.
 #[derive(Clone, Debug)]
 pub struct Origins {
     pub entry: Vec<Option<OriginMap>>,
     pub loans: Vec<Loan>,
+    /// Spawn (or `into` store) that put each loan into a scope. E1403's `spawn` label.
+    pub captured: BTreeMap<u32, Span>,
     pub diverged: bool,
 }
 
@@ -75,6 +95,7 @@ impl Origins {
         Origins {
             entry: vec![None; blocks],
             loans: Vec::new(),
+            captured: BTreeMap::new(),
             diverged: false,
         }
     }
@@ -244,6 +265,12 @@ pub(super) fn check_cfg(
             if cx.diverged {
                 break;
             }
+            // Select stores each arm on the edge. The entry states already hold
+            // that; this pass repeats it so the loans and E1204 match the fixpoint.
+            let _ = cx.successor_flows(b, &flow);
+            if cx.diverged {
+                break;
+            }
         }
         cx.finish_from_fix();
     }
@@ -258,6 +285,7 @@ pub(super) fn check_cfg(
     let origins = Origins {
         entry,
         loans: cx.loans,
+        captured: cx.captured,
         diverged: cx.diverged,
     };
     Output {
@@ -327,6 +355,8 @@ struct Cx<'a> {
     needs: BTreeSet<Need>,
     fix_blocked: bool,
     fixes: Vec<FromFix>,
+    /// Loan id to the span of the spawn or call that stored it into a scope.
+    captured: BTreeMap<u32, Span>,
 }
 
 impl<'a> Cx<'a> {
@@ -395,6 +425,7 @@ impl<'a> Cx<'a> {
             needs: BTreeSet::new(),
             fix_blocked: false,
             fixes: Vec::new(),
+            captured: BTreeMap::new(),
         }
     }
 
@@ -439,14 +470,14 @@ impl<'a> Cx<'a> {
             };
             let mut flow = start_state;
             self.transfer_block(&mut flow, b);
-            for s in self.successors(b) {
+            for (s, edge) in self.successor_flows(b, &flow) {
                 if s >= n {
                     continue;
                 }
                 let changed = match entry.get_mut(s) {
-                    Some(Some(have)) => merge(have, &flow),
+                    Some(Some(have)) => merge(have, &edge),
                     _ => {
-                        entry[s] = Some(flow.clone());
+                        entry[s] = Some(edge);
                         true
                     }
                 };
@@ -596,19 +627,110 @@ impl<'a> Cx<'a> {
             Terminator::Call {
                 target, args, dest, ..
             } => self.transfer_call(flow, target, args, dest.as_ref()),
-            // Spawn, par for, dispatch and select are later steps. Leaving their
-            // results empty under-approximates; it does not invent an E12xx.
+            Terminator::Spawn {
+                target,
+                args,
+                scope,
+                dest,
+                ..
+            } => self.transfer_spawn(flow, target, args, scope, dest.as_ref()),
+            Terminator::Dispatch {
+                kernel,
+                kernel_name,
+                kernel_args,
+                args,
+                dest,
+                ..
+            } => {
+                let fn_ref = FnRef {
+                    def: *kernel,
+                    args: kernel_args.clone(),
+                    source: FnSource::Free,
+                };
+                let operands: Vec<Operand> = args.iter().map(|a| a.value.clone()).collect();
+                let target = CallTarget::Fn {
+                    fn_ref: Box::new(fn_ref),
+                    name: kernel_name.clone(),
+                };
+                self.transfer_call(flow, &target, &operands, dest.as_ref());
+            }
+            // The scope holds argument loans until `scope_wait`. Drop them here:
+            // the same scope local is used again on the next iteration of a loop,
+            // and a use after the wait must not see this iteration's loans.
+            Terminator::ScopeWait { scope, .. } => {
+                flow.remove(scope);
+            }
+            // `par for` borrows its captures and reborrows or consumes its iterand
+            // in the statements above this terminator. Select's calls are per edge
+            // (`successor_flows`): each arm is one call, and the arms disagree.
             Terminator::Goto(_)
             | Terminator::Branch { .. }
             | Terminator::Switch { .. }
             | Terminator::Trap { .. }
-            | Terminator::Spawn { .. }
-            | Terminator::ScopeWait { .. }
             | Terminator::Select { .. }
             | Terminator::ParFor { .. }
-            | Terminator::Dispatch { .. }
             | Terminator::Unreachable => {}
         }
+    }
+
+    /// One flow per successor. A `select` applies that arm's call and no other.
+    fn successor_flows(&mut self, block: usize, flow: &OriginMap) -> Vec<(usize, OriginMap)> {
+        let Some(term) = self.cfg.blocks.get(block).map(|b| b.term.clone()) else {
+            return Vec::new();
+        };
+        match term {
+            Terminator::Select { ops } => ops
+                .iter()
+                .map(|op| {
+                    let mut edge = flow.clone();
+                    if let Some(call) = &op.call {
+                        let saved = self.span;
+                        self.span = op.span;
+                        self.transfer_call(&mut edge, &call.target, &call.args, Some(&call.dest));
+                        self.span = saved;
+                    }
+                    (op.successor as usize, edge)
+                })
+                .collect(),
+            _ => self
+                .successors(block)
+                .into_iter()
+                .map(|s| (s, flow.clone()))
+                .collect(),
+        }
+    }
+
+    /// `spawn f(a_1..a_n) in s` (checker.md §7). Steps 1 and 2 of §4.5 run as for
+    /// a call. `O(s)` gains every argument set. A scope parameter is `Self(s)`.
+    /// The handle, if any, is a shared loan on `s` plus the call's result set.
+    fn transfer_spawn(
+        &mut self,
+        flow: &mut OriginMap,
+        target: &CallTarget,
+        args: &[Operand],
+        scope: &Operand,
+        dest: Option<&Place>,
+    ) {
+        let arg_sets: Vec<OriginSet> = args.iter().map(|a| self.eval_operand(flow, a)).collect();
+        let result = match target {
+            CallTarget::Fn { fn_ref, .. } => self.call_fn(flow, fn_ref, args, &arg_sets, None),
+            CallTarget::Value { callee, .. } => {
+                let cset = self.eval_operand(flow, callee);
+                let cset = self.unwrap_call_borrow(flow, &cset);
+                self.value_result(flow, &arg_sets, &cset)
+            }
+        };
+        let targets = self.scope_targets(scope);
+        self.store_into_targets(flow, &targets, &union_all(&arg_sets));
+        let Some(dest) = dest else {
+            return;
+        };
+        let mut handle = result;
+        for place in self.handle_places(&targets) {
+            let cursor = self.walk(flow, &place);
+            handle.extend(self.finish_borrow(flow, &cursor, Mutability::Shared, false));
+        }
+        self.store_place(flow, dest, &handle, true);
     }
 
     fn eval_rvalue(
@@ -1031,6 +1153,184 @@ impl<'a> Cx<'a> {
         let origins = flow.get(&root).cloned().unwrap_or_default();
         let rest = after_first_deref(&steps);
         self.widen(flow, &origins, &rest, &set, 0);
+    }
+
+    /// `O(s) ∪= set` for every scope `op` may name. A copy chain is followed
+    /// through every whole-value assignment, so `if c { b } else { a }` stores
+    /// into both scopes. A scope parameter is §6.2.
+    fn store_into_scope(&mut self, flow: &mut OriginMap, op: &Operand, set: &OriginSet) {
+        if set.is_empty() || self.diverged {
+            return;
+        }
+        let targets = self.scope_targets(op);
+        self.store_into_targets(flow, &targets, set);
+    }
+
+    fn store_into_targets(
+        &mut self,
+        flow: &mut OriginMap,
+        targets: &[ScopeTarget],
+        set: &OriginSet,
+    ) {
+        for target in targets {
+            match target {
+                ScopeTarget::Local(local) => {
+                    union_into(flow, *local, set);
+                    self.note_captured(set);
+                }
+                ScopeTarget::Param(index) => self.check_store_param(*index, set),
+                ScopeTarget::Through(place) => {
+                    let through = Operand::Place(place.clone(), PlaceUse::Copy);
+                    self.store_through(flow, &through, set);
+                    self.note_captured(set);
+                }
+            }
+        }
+    }
+
+    fn note_captured(&mut self, set: &OriginSet) {
+        for origin in set {
+            if let Origin::Loan(id) = *origin {
+                self.captured.entry(id).or_insert(self.span);
+            }
+        }
+    }
+
+    /// Every scope a `&Scope` operand may refer to.
+    ///
+    /// Each local in the copy chain contributes every whole-value copy into it,
+    /// so both arms of an `if` are kept. A source that is not a plain copy of a
+    /// place cannot be named: the operand is then treated as every scope local
+    /// and every scope parameter in the function (over-approximation, never
+    /// silence). A place with no such assignment is [`ScopeTarget::Through`]:
+    /// its origin set decides the store.
+    fn scope_targets(&self, op: &Operand) -> Vec<ScopeTarget> {
+        let Operand::Place(start, _) = op else {
+            return self.every_scope();
+        };
+        let mut acc = ScopeAcc::default();
+        self.walk_scope(start.clone(), 0, &mut acc);
+        if acc.conservative
+            || (acc.locals.is_empty() && acc.params.is_empty() && acc.through.is_empty())
+        {
+            return self.every_scope();
+        }
+        let mut out = Vec::new();
+        for local in acc.locals {
+            out.push(ScopeTarget::Local(local));
+        }
+        for index in acc.params {
+            out.push(ScopeTarget::Param(index));
+        }
+        for place in acc.through {
+            out.push(ScopeTarget::Through(place));
+        }
+        out
+    }
+
+    /// Places the handle's shared loan is taken from. A scope local is borrowed
+    /// itself, so a handle returned out of that `scope` block is E1203. A
+    /// parameter or other reference is borrowed through `.*`, so the loan's
+    /// origin is the reference's and not the parameter's own storage.
+    fn handle_places(&self, targets: &[ScopeTarget]) -> Vec<Place> {
+        let mut out = Vec::new();
+        for target in targets {
+            let place = match target {
+                ScopeTarget::Local(local) => Place::local(*local),
+                ScopeTarget::Param(index) => {
+                    let Some(local) = self.cfg.params.get(*index as usize).copied() else {
+                        continue;
+                    };
+                    Place::local(local).deref()
+                }
+                ScopeTarget::Through(place) => place.clone().deref(),
+            };
+            out.push(place);
+        }
+        out
+    }
+
+    fn every_scope(&self) -> Vec<ScopeTarget> {
+        let mut out = Vec::new();
+        for (i, loc) in self.cfg.locals.iter().enumerate() {
+            if loc.kind == LocalKind::Scope {
+                out.push(ScopeTarget::Local(i as Local));
+            }
+        }
+        for (i, local) in self.cfg.params.iter().copied().enumerate() {
+            if self
+                .cfg
+                .locals
+                .get(local as usize)
+                .is_some_and(|l| self.is_scope_ty(l.ty))
+            {
+                out.push(ScopeTarget::Param(i as u32));
+            }
+        }
+        out
+    }
+
+    fn walk_scope(&self, place: Place, depth: u32, acc: &mut ScopeAcc) {
+        if acc.conservative {
+            return;
+        }
+        if depth > self.cfg.locals.len() as u32 {
+            acc.conservative = true;
+            return;
+        }
+        let Some(root) = place.root() else {
+            acc.conservative = true;
+            return;
+        };
+        let Some(loc) = self.cfg.locals.get(root as usize) else {
+            acc.conservative = true;
+            return;
+        };
+        if loc.kind == LocalKind::Scope && place.proj.is_empty() {
+            acc.locals.insert(root);
+            return;
+        }
+        if loc.kind == LocalKind::Param && place.proj.is_empty() && self.is_scope_ty(loc.ty) {
+            if let Some(index) = self.cfg.params.iter().position(|p| *p == root) {
+                acc.params.insert(index as u32);
+            }
+            return;
+        }
+        if !acc.seen.insert(root) {
+            return;
+        }
+        let mut copies = Vec::new();
+        let mut any = false;
+        for block in &self.cfg.blocks {
+            for stmt in &block.stmts {
+                let StmtKind::Assign { place: dest, value } = &stmt.kind else {
+                    continue;
+                };
+                if dest.proj.is_empty() && dest.root() == Some(root) {
+                    any = true;
+                    match value {
+                        Rvalue::Use(Operand::Place(src, _)) => copies.push(src.clone()),
+                        _ => {
+                            acc.conservative = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if !any {
+            acc.through.push(place);
+            return;
+        }
+        for src in copies {
+            let extra = place.proj.clone();
+            let mut next = src;
+            next.proj.extend(extra);
+            self.walk_scope(next, depth.saturating_add(1), acc);
+            if acc.conservative {
+                return;
+            }
+        }
     }
 
     fn store_through(&mut self, flow: &mut OriginMap, op: &Operand, set: &OriginSet) {
@@ -1536,7 +1836,17 @@ impl<'a> Cx<'a> {
             let Some(arg) = args.get(dest_i) else {
                 continue;
             };
-            self.store_through(flow, arg, set);
+            let dest_is_scope = sig
+                .params
+                .get(dest_i)
+                .is_some_and(|d| self.is_scope_ty(d.ty));
+            if dest_is_scope {
+                // §4.5 step 1: a scope destination is `O(s) ∪= A_x`, or a check
+                // against `Self` when the argument is itself a scope parameter.
+                self.store_into_scope(flow, arg, set);
+            } else {
+                self.store_through(flow, arg, set);
+            }
         }
         let type_params = self.callee_type_params(fn_ref);
         let mut u_of: Vec<(DefId, OriginSet)> = Vec::new();

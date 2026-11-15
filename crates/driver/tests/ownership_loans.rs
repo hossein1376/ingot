@@ -5,7 +5,7 @@
 //! related labels.
 
 use ingot_diag::source::Span;
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_OWNERSHIP};
+use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
 
 fn analyze(name: &str, files: &[(&str, &str)]) -> Analysis {
     let dir = std::env::temp_dir().join(format!(
@@ -39,8 +39,8 @@ fn assert_unchecked(analysis: &Analysis) {
         analysis
             .not_implemented
             .iter()
-            .any(|m| m == UNCHECKED_OWNERSHIP),
-        "phase 9 must keep the ownership entry, got {:?}\n{}",
+            .any(|m| m == UNCHECKED_CHECK_REMOVAL),
+        "phase 10 must keep the check-removal entry, got {:?}\n{}",
         analysis.not_implemented,
         fmt_all(analysis)
     );
@@ -93,7 +93,7 @@ fn expect(name: &str, source: &str, diags: &[&str]) {
     let extra: Vec<&String> = analysis
         .not_implemented
         .iter()
-        .filter(|m| *m != UNCHECKED_OWNERSHIP)
+        .filter(|m| *m != UNCHECKED_CHECK_REMOVAL)
         .collect();
     assert!(
         extra.is_empty(),
@@ -581,6 +581,44 @@ fn f(n: i64) -> i64 {
 }
 ",
         &["E1101 `x` is assigned while borrowed `x = i;` borrow=`&x` later_use=`r.*`"],
+    );
+}
+
+#[test]
+fn a_compound_assignment_is_one_access() {
+    expect(
+        "add-assign",
+        "\
+fn f() {
+    var x: i64 = 0;
+    let r = &mut x;
+    x += 1;
+    r.* = 2;
+}
+",
+        &["E1101 `x` is assigned while borrowed `x += 1;` borrow=`&mut x` later_use=`r.* = 2;`"],
+    );
+}
+
+#[test]
+fn identical_text_on_two_lines_is_two_reports() {
+    expect(
+        "same-text",
+        "\
+fn f() {
+    var x: i64 = 0;
+    let r = &mut x;
+    let a = &mut x;
+    _ = a;
+    let b = &mut x;
+    _ = b;
+    r.* = 1;
+}
+",
+        &[
+            "E1102 `x` is borrowed exclusively while borrowed `&mut x` borrow=`&mut x` later_use=`r.* = 1;`",
+            "E1102 `x` is borrowed exclusively while borrowed `&mut x` borrow=`&mut x` later_use=`r.* = 1;`",
+        ],
     );
 }
 

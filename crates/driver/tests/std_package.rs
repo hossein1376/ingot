@@ -48,7 +48,7 @@ fn std_resolves_without_a_diagnostic() {
     // (S5b).
     assert_eq!(
         analysis.not_implemented,
-        vec![ingot_cfg::UNCHECKED_OWNERSHIP.to_string()]
+        vec![ingot_cfg::UNCHECKED_CHECK_REMOVAL.to_string()]
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
     assert_eq!(analysis.files, 14);

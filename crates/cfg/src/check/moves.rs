@@ -842,6 +842,12 @@ impl<'a> Cx<'a> {
             }
             Touch::Move => match self.move_class(place) {
                 MoveClass::Illegal => {
+                    // The body sees an outer local through a shared borrow, so this
+                    // move would be E1002. checker.md §7 names it E1407, and that is
+                    // the only code (`check::tasks`).
+                    if self.par_for_capture(place) {
+                        return;
+                    }
                     self.error(
                         flow,
                         "E1002",
@@ -999,6 +1005,14 @@ impl<'a> Cx<'a> {
             sites,
             loops,
         })
+    }
+
+    /// Root is the capture record of a `par for` body. Item parameters are later.
+    fn par_for_capture(&self, place: &Place) -> bool {
+        if !matches!(self.cfg.key.body, BodyKey::ParFor(_)) {
+            return false;
+        }
+        self.cfg.params.first().copied() == place.root()
     }
 
     fn move_class(&mut self, place: &Place) -> MoveClass {

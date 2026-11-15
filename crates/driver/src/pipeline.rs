@@ -4,9 +4,10 @@
 //! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
 //! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phase 9 runs
 //! Analysis A (moves and linear values), Analysis B (origin sets) and Analysis C
-//! (loans, E1101–E1105) on the checked package's CFGs. A `from` clause computed for
-//! E1201 is attached to that diagnostic. Scopes, tasks and phase 10 are not done, so a
-//! package with a body that passes phase 7 still records that in `not_implemented`. A
+//! (loans, E1101–E1105 and E1403) and the task rules (E1401, E1402, E1407) on the
+//! checked package's CFGs. A `from` clause computed for E1201 is attached to that
+//! diagnostic. Phase 10 is not done, so a package with a body that passes phase 7
+//! still records that in `not_implemented`. A
 //! constant that phase 6 cannot evaluate is not accepted either. The command line exits
 //! with status 2 instead of 0 when
 //! `not_implemented` is non-empty.
@@ -26,7 +27,7 @@ use std::path::Path;
 pub const UNCHECKED: &str = ingot_sema::UNCHECKED_BODIES;
 
 /// What the pipeline does not do yet for a body that passed phase 7.
-pub const UNCHECKED_OWNERSHIP: &str = ingot_cfg::UNCHECKED_OWNERSHIP;
+pub const UNCHECKED_CHECK_REMOVAL: &str = ingot_cfg::UNCHECKED_CHECK_REMOVAL;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -235,8 +236,8 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         not_implemented.extend(bodies.not_implemented.iter().cloned());
         not_implemented.extend(lowered_not_implemented);
-        // Phase 9, analyses A, B and C. Constant-evaluation CFGs are not in `cfgs`.
-        // Scopes, tasks and phase 10 are still open: the ownership entry stays.
+        // Phase 9, analyses A, B and C, plus the task rules. Constant-evaluation
+        // CFGs are not in `cfgs`. Phase 10 is still open.
         // E1201 was copied out of the declarations above; attach the clause here.
         let owned =
             ingot_cfg::check::check_ownership(&output.sema, &mut bodies.declarations, &all, &cfgs);
@@ -250,7 +251,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
                     ingot_sema::typed::BodyKind::Fn | ingot_sema::typed::BodyKind::Test
                 )
         }) {
-            not_implemented.push(UNCHECKED_OWNERSHIP.to_string());
+            not_implemented.push(UNCHECKED_CHECK_REMOVAL.to_string());
         }
         front_end = Some(FrontEnd {
             resolved: output,

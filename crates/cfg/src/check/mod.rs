@@ -1,13 +1,14 @@
 //! Phase 9, the ownership checker (checker.md).
 //!
 //! Analysis A (moves and linear values, E1001–E1006) is [`moves`]. Analysis B
-//! (origin sets, E1202–E1205) is [`origins`]. Analysis C (loans, E1101–E1105) is
-//! [`loans`]. Scopes, tasks and phase 10 are not done. Phase 9 never changes the
-//! CFG. The driver still records [`crate::UNCHECKED_OWNERSHIP`].
+//! (origin sets, E1202–E1205) is [`origins`]. Analysis C (loans, E1101–E1105 and
+//! E1403) is [`loans`]. [`tasks`] is E1401, E1402 and E1407. Phase 9 never changes
+//! the CFG. The driver still records [`crate::UNCHECKED_CHECK_REMOVAL`] for phase 10.
 
 mod loans;
 mod moves;
 mod origins;
+mod tasks;
 
 pub use origins::FromFix;
 
@@ -49,6 +50,7 @@ pub fn check_ownership(
             not_implemented.extend(loans.not_implemented);
         }
     }
+    diagnostics.extend(tasks::check(sema, decls, sources, cfgs));
     not_implemented.sort();
     not_implemented.dedup();
     OwnershipReport {

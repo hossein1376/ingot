@@ -227,13 +227,6 @@ impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
         self.cx.ni(what);
     }
 
-    /// Record a part of the language that is not checked yet, without failing the
-    /// body: the construct is fully typed and only a later phase's rules are missing
-    /// (the phase-9 `spawn` and `par for` rules).
-    pub(crate) fn ni_unchecked(&mut self, what: impl Into<String>) {
-        self.cx.ni(what);
-    }
-
     pub(crate) fn file_path(&self) -> String {
         self.cx.sources.get(self.file).path.clone()
     }

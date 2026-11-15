@@ -137,7 +137,7 @@ fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
     let o = ingot(&["check", "--json"], &dir);
     assert_eq!(o.status.code(), Some(2));
     assert!(
-        stderr(&o).contains("not implemented: ownership checking and check removal"),
+        stderr(&o).contains("not implemented: check removal and cost items"),
         "{}",
         stderr(&o)
     );
@@ -145,7 +145,7 @@ fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
     let summary = out.lines().last().unwrap();
     assert!(summary.contains("\"ok\":false"), "{summary}");
     assert!(
-        summary.contains("\"not_implemented\":[\"ownership checking and check removal"),
+        summary.contains("\"not_implemented\":[\"check removal and cost items"),
         "{summary}"
     );
     assert!(summary.contains("\"errors\":0"), "{summary}");

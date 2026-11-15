@@ -7,7 +7,7 @@
 //! its temporary, and exclusive from that terminator on.
 //!
 //! Access checks use [`Origins`] and the same transfer as [`super::origins::sets_before`].
-//! Scopes and tasks are not checked here: no E1403.
+//! A storage end whose live holder is a scope is E1403, not E1105.
 
 use crate::check::origins::{self, Loan, LoanStep, Origin, OriginMap, Origins};
 use crate::model::*;
@@ -151,10 +151,10 @@ impl<'a> Cx<'a> {
                 let Some(loan) = self.origins.loans.get(*id as usize) else {
                     continue;
                 };
-                if loan.block == block as u32 && loan.stmt == index as u32 {
+                if access.except == Some(*id) {
                     continue;
                 }
-                if access.except == Some(*id) {
+                if self.activated_later(&access, loan, block) {
                     continue;
                 }
                 if !self.hit(&access, loan) {
@@ -165,11 +165,33 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Two-phase loans that activate at the same terminator (`dispatch` of one
+    /// slice twice) are checked in creation order: an activation conflicts with
+    /// the loans created before it, so a pair is reported once, at the later one.
+    fn activated_later(&self, access: &Access, loan: &Loan, block: usize) -> bool {
+        let Some(own) = access.except else {
+            return false;
+        };
+        let Some(own_loan) = self.origins.loans.get(own as usize) else {
+            return false;
+        };
+        let here = |id: u32| self.act.get(&id).is_some_and(|(b, _)| *b == block);
+        here(own) && here(loan.id) && (loan.block, loan.stmt) > (own_loan.block, own_loan.stmt)
+    }
+
     fn hit(&self, access: &Access, loan: &Loan) -> bool {
         if access.kind == Kind::End {
             return loan.on_local && loan.local == access.local;
         }
         loan.local == access.local && overlaps(&loan.proj, &access.steps)
+    }
+
+    /// `local` is the capture record of a `par for` body. Item parameters are later.
+    fn par_for_capture(&self, local: Local) -> bool {
+        if !matches!(self.cfg.key.body, BodyKey::ParFor(_)) {
+            return false;
+        }
+        self.cfg.params.first().copied() == Some(local)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -184,6 +206,14 @@ impl<'a> Cx<'a> {
         live: &Live,
     ) {
         if access.kind == Kind::End && held_by_scope(self.cfg, loan.id, map, live) {
+            self.report_1403(access, loan);
+            return;
+        }
+        // Assigning, moving or exclusively borrowing a `par for` capture is
+        // E1407 (`check::tasks`), not E1101, E1102 or E1104.
+        if self.par_for_capture(access.local)
+            && matches!(access.kind, Kind::Assign | Kind::Excl | Kind::Move)
+        {
             return;
         }
         let code = match access.kind {
@@ -246,6 +276,47 @@ impl<'a> Cx<'a> {
             diag.relate("borrow", loan.span);
             diag.relate("later_use", later);
         }
+        self.diags.push(diag);
+    }
+
+    /// The loan is on a local of the scope block and a live scope holds it
+    /// (checker.md §7). Primary is the borrow. `spawn` is the terminator that
+    /// stored the loan into the scope. `declared` is the local.
+    fn report_1403(&mut self, access: &Access, loan: &Loan) {
+        let primary = if loan.span == Span::default() {
+            access.span
+        } else {
+            loan.span
+        };
+        let key = (
+            code_id("E1403"),
+            primary.start,
+            primary.end,
+            loan.id,
+            0usize,
+        );
+        if !self.seen.insert(key) {
+            return;
+        }
+        let mut diag = Diagnostic::new(
+            "E1403",
+            format!(
+                "`{}` is borrowed by a task past the end of its scope",
+                access.name
+            ),
+            self.source,
+            primary,
+        );
+        if let Some(span) = self.origins.captured.get(&loan.id).copied() {
+            diag.relate("spawn", span);
+        }
+        let declared = self
+            .cfg
+            .locals
+            .get(loan.local as usize)
+            .map(|l| l.decl_span)
+            .unwrap_or(loan.span);
+        diag.relate("declared", declared);
         self.diags.push(diag);
     }
 
@@ -332,7 +403,11 @@ impl<'a> Cx<'a> {
                 continue;
             }
             seen[idx] = true;
-            let span = live.spans.get(&local).copied().unwrap_or_default();
+            // The use that keeps a scope live may be a copy of its name. The
+            // holder is the scope, so `later_use` is the `scope_wait` (§5.2).
+            let span = scope_wait_span(self.cfg, local)
+                .or_else(|| live.spans.get(&local).copied())
+                .unwrap_or_default();
             queue.push_back((local, span, true));
         }
         while let Some((local, span, direct)) = queue.pop_front() {
@@ -441,7 +516,11 @@ impl<'a> Cx<'a> {
         let span = stmt.span;
         match &stmt.kind {
             StmtKind::Assign { place, value } => {
-                self.rvalue_accesses(types, block, index, value, span, out);
+                // `π op= e` reads and writes `π` as one access, checked as the
+                // store (§5.2). The read is the copy into a temporary.
+                if !self.compound_read(block, index, stmt) {
+                    self.rvalue_accesses(types, block, index, value, span, out);
+                }
                 self.place_access(types, place, Kind::Assign, span, true, out);
             }
             StmtKind::Use(op) => self.operand_access(types, op, span, out),
@@ -712,6 +791,43 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// The statement copies `π` into a temporary, a later binary at the same span
+    /// uses that temporary, and a later store at that span writes `π` back.
+    /// That is the read half of a compound assignment.
+    fn compound_read(&self, block: usize, index: usize, stmt: &Stmt) -> bool {
+        let StmtKind::Assign { place: dest, value } = &stmt.kind else {
+            return false;
+        };
+        let Some(temp) = whole_local(dest) else {
+            return false;
+        };
+        let Rvalue::Use(Operand::Place(src, _)) = value else {
+            return false;
+        };
+        let Some(stmts) = self.cfg.blocks.get(block).map(|b| &b.stmts) else {
+            return false;
+        };
+        let mut saw_bin = false;
+        for later in stmts.iter().skip(index + 1) {
+            if later.span != stmt.span {
+                continue;
+            }
+            let StmtKind::Assign { place, value } = &later.kind else {
+                continue;
+            };
+            match value {
+                Rvalue::Binary { lhs, .. } => {
+                    if operand_root(lhs) == Some(temp) {
+                        saw_bin = true;
+                    }
+                }
+                Rvalue::Use(_) if saw_bin && place_same(place, src) => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// `@forget` of a `Copy` place is snapshotted as a copy. The copy is not a
     /// move, so the move is reported here, on the source place.
     fn forget_access(
@@ -837,8 +953,26 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// A scope that holds `id` and is use-live would be E1403, which this step does
-/// not report. Analysis B does not flow loans into a scope, so this stays empty.
+/// Span of the `scope_wait` for a scope local. Other locals have none.
+fn scope_wait_span(cfg: &Cfg, local: Local) -> Option<Span> {
+    if cfg
+        .locals
+        .get(local as usize)
+        .is_none_or(|l| l.kind != LocalKind::Scope)
+    {
+        return None;
+    }
+    for block in &cfg.blocks {
+        if let Terminator::ScopeWait { scope, .. } = &block.term
+            && *scope == local
+        {
+            return Some(block.term_span);
+        }
+    }
+    None
+}
+
+/// A scope holds `id` and is use-live. The storage end is then E1403.
 fn held_by_scope(cfg: &Cfg, id: u32, map: &OriginMap, live: &Live) -> bool {
     let origin = Origin::Loan(id);
     for (local, set) in map {
@@ -873,6 +1007,7 @@ fn code_id(code: &str) -> u16 {
         "E1103" => 1103,
         "E1104" => 1104,
         "E1105" => 1105,
+        "E1403" => 1403,
         _ => 0,
     }
 }
@@ -886,6 +1021,35 @@ fn whole_local(place: &Place) -> Option<Local> {
         place.root()
     } else {
         None
+    }
+}
+
+fn operand_root(op: &Operand) -> Option<Local> {
+    let Operand::Place(place, _) = op else {
+        return None;
+    };
+    place.root()
+}
+
+fn place_same(a: &Place, b: &Place) -> bool {
+    let base = match (&a.base, &b.base) {
+        (PlaceBase::Local(x), PlaceBase::Local(y)) => x == y,
+        (PlaceBase::Static(x), PlaceBase::Static(y)) => x == y,
+        _ => false,
+    };
+    base && a.proj.len() == b.proj.len() && a.proj.iter().zip(&b.proj).all(|(p, q)| proj_same(p, q))
+}
+
+fn proj_same(a: &Projection, b: &Projection) -> bool {
+    match (a, b) {
+        (Projection::Field { index: i, .. }, Projection::Field { index: j, .. }) => i == j,
+        (Projection::TupleField(i), Projection::TupleField(j)) => i == j,
+        (Projection::Index(_), Projection::Index(_)) => true,
+        (Projection::Deref, Projection::Deref) | (Projection::DerefRaw, Projection::DerefRaw) => {
+            true
+        }
+        (Projection::Payload { variant: i }, Projection::Payload { variant: j }) => i == j,
+        _ => false,
     }
 }
 

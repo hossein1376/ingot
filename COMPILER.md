@@ -275,11 +275,19 @@ terminator on. Each access is checked against every live loan that overlaps it a
 not created by the same statement. The kill rule of §4.4 drops the loans an assignment
 removes, so those do not report E1101. The storage end of a local reports E1105 for a
 loan on that local's storage, except when every holder is kept live only by the
-`return` or `fail` that follows: that loan is E1203. Each report carries `borrow` and
-`later_use`. E1105 carries `scope_end` for each exit span Analysis A would use for
-E1003, and omits the label when there is none. Scopes and tasks are not checked here,
-so there is no E1403.
-Scopes, tasks and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry stays.
+`return` or `fail` that follows: that loan is E1203. It reports E1403 instead when a
+live holder is a scope: `spawn` stored the loan into that scope, and the local's
+storage ends before `scope_wait`. Each report carries `borrow` and `later_use`.
+E1105 carries `scope_end` for each exit span Analysis A would use for E1003, and
+omits the label when there is none. E1403 carries `spawn` and `declared`.
+`check/tasks.rs` checks the task rules. A `spawn` argument and the spawned call's
+result must be `Send` (E1401), and so must a `par for` item. A `par for` body that
+reads an outer local whose type is not `Sync` is E1402. A body that assigns to, moves
+or exclusively borrows an outer local is E1407, and that is the only code for that
+use. Analysis B applies a `spawn`'s argument effects and stores those origins into
+the scope, the same way as `into`. A scope parameter without `into` is E1204. Each
+`select` arm is applied on its own successor. Phase 10 is what remains: the
+`UNCHECKED_CHECK_REMOVAL` entry stays.
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;

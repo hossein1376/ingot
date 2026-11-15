@@ -12,7 +12,7 @@
 //! The tests call the library on the test harness's own small thread stack:
 //! `analyze_with` must provide the stack the limit assumes to every caller.
 
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_OWNERSHIP};
+use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
 use std::path::PathBuf;
 
 /// `g0`'s `@static_assert` calls `g1`, whose `@static_assert` calls `g2`, ...
@@ -78,7 +78,7 @@ fn assert_only_ownership(analysis: &Analysis) {
         analysis
             .not_implemented
             .iter()
-            .all(|m| m == UNCHECKED_OWNERSHIP),
+            .all(|m| m == UNCHECKED_CHECK_REMOVAL),
         "{:?}",
         analysis.not_implemented
     );

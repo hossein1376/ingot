@@ -5,7 +5,7 @@
 //! the related labels.
 
 use ingot_diag::source::Span;
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_OWNERSHIP};
+use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
 
 fn analyze(name: &str, files: &[(&str, &str)]) -> Analysis {
     let dir = std::env::temp_dir().join(format!(
@@ -39,8 +39,8 @@ fn assert_unchecked(analysis: &Analysis) {
         analysis
             .not_implemented
             .iter()
-            .any(|m| m == UNCHECKED_OWNERSHIP),
-        "phase 9 must keep the ownership entry, got {:?}\nE10: {:?}\nother: {:?}",
+            .any(|m| m == UNCHECKED_CHECK_REMOVAL),
+        "phase 10 must keep the check-removal entry, got {:?}\nE10: {:?}\nother: {:?}",
         analysis.not_implemented,
         e10(analysis),
         others(analysis)

@@ -7,8 +7,9 @@
 //! is described at the top of `dump.rs`. [`validate`] checks the structural rules every
 //! CFG must satisfy. [`check`] is phase 9: Analysis A (moves and linear values) lives
 //! in `check::moves`, Analysis B (origin sets) in `check::origins`, and Analysis C
-//! (loans, E1101–E1105) in `check::loans`. Scopes, tasks and phase 10 are not
-//! implemented; a body that reached phase 8 still contributes [`UNCHECKED_OWNERSHIP`].
+//! (loans, E1101–E1105 and E1403) in `check::loans`. Task rules (E1401, E1402 and
+//! E1407) live in `check::tasks`. Phase 10 is not implemented; a body that reached
+//! phase 8 still contributes [`UNCHECKED_CHECK_REMOVAL`].
 //!
 //! The lowering reports no diagnostics. A body that phase 7 rejected is not lowered
 //! (the phase gate of pipeline section 3). A construct the lowering does not handle
@@ -25,7 +26,6 @@ pub mod validate;
 pub use lower::{Lowered, lower_for_eval, lower_package};
 pub use model::*;
 
-/// What is left after phase 8 for a body that passed phases 7 and 8: phases 9 and 10
-/// do not exist yet. This replaces the phase-7 message once the body has a CFG.
-pub const UNCHECKED_OWNERSHIP: &str =
-    "ownership checking and check removal (pipeline phases 9 and 10)";
+/// What phase 10 still does not check, once a body has a CFG. Phase 9 records its
+/// own diagnostics and does not add an entry here.
+pub const UNCHECKED_CHECK_REMOVAL: &str = "check removal and cost items (pipeline phase 10)";
