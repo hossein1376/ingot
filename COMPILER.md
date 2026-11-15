@@ -286,7 +286,8 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S4d | relay | The rest of `228062e` in phase 7: builtin signatures (SIMD, `unsafe`), format strings (E0422), function values, `I.name(..)`, `std`'s inherent impls on built-in types | done (93f6a05) |
 | S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | done (dec58aa) |
 | S5b | relay | Constant evaluation by interpreting CFGs, with bodies pulled forward (pipeline §4.6, E0806–E0808, E0812) | done (e073e7f) |
-| S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
+| S6 | grok + relay | Ownership, Analysis A: moves and linear values (checker.md §3, E1001–E1006) | done (46ad614) |
+| S7–S9 | grok + relay | Ownership: origins; loans; scopes and tasks (`docs/impl/checker.md` §4–§7) | `borrows/*`, `origins/*`, `concurrency/*` reject tests |
 | S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
 
