@@ -408,8 +408,10 @@ place the language permits a different association order is a `reduce` kernel
 integer to a wider one, unless the source is signed and the target unsigned (`u8` to
 `i32` and `i8` to `i64` compile, `i8` to `u64` does not), any 32-bit-or-smaller integer to `f64`,
 any 16-bit-or-smaller integer to `f32`, `f32` to `f64`, `bool` to any integer, a
-payload-free enum to its tag type, `&T` to `*T`, `&mut T` to `*mut T`. Everything else is
-a builtin that names what happens to values that do not fit:
+payload-free enum to its tag type, `&T` to `*T`, `&mut T` to `*mut T`, `*T` to `*U` and
+`*mut T` to `*mut U` for any `T` and `U`, `*T` and `*mut T` to each other, and a raw
+pointer to and from `u64`. A raw pointer's value is its address, so these keep it. Everything
+else is a builtin that names what happens to values that do not fit:
 
 | Builtin | Meaning |
 |---|---|
@@ -717,6 +719,7 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   | `Discard` | letting a value go out of scope unused |
   | `Send`, `Sync` | crossing task boundaries (section 20) |
   | `Owned` | holding no borrow, so a value may outlive everything around it (section 13.6) |
+  | `AtomicValue` | the atomic builtins (section 15). Satisfied by the integers, `bool`, raw pointers and payload-free enums, and nothing else. Implies `Copy`, `Discard`, `Owned` and `Eq`, but not `Send` or `Sync` (a raw pointer is neither) |
   | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Only scalars satisfy them, so each implies `Copy`, `Discard`, `Owned`, `Send` and `Sync` |
   | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value. Only non-linear types satisfy `Fn` and `FnMut` (section 5.6: a closure that owns a non-`Copy` capture is only `FnOnce`), so each of those two implies `Discard` |
 

@@ -257,9 +257,17 @@ So every type with interior mutability bounds its contents with `Owned`:
 `Mutex[T]`, `RwLock[T]`, `Chan[T, A]` and `Once[T]` accept no view types. Borrowed data
 reaches other tasks as arguments to `spawn` and as the items of `par for`, where the
 flow is written down. Channels and locks carry owned values, indices and handles.
-A `Scope` is the one built-in exception, and `into` covers it (section 18). An arena is
-not such a type: allocating through `&Arena` hands out new memory and offers no way to
-read back what another holder stored.
+A `Scope` is the one built-in exception, and `into` covers it (section 18). An arena may
+hold views: allocating through `&Arena` hands out new memory and offers no way to read
+back what another holder stored.
+
+**The cell.** `std.sync.Cell[T: Owned]` is the one language item whose contents may be
+written through a shared borrow, in `unsafe` (section 15). A type **has interior
+mutability** when it contains a `Cell` by value: as itself, or in a field, an array
+element, a tuple part or an enum payload, but not behind a borrow or a pointer.
+`Atomic`, `Mutex`, `RwLock`, `Once`, `Chan` and `Arena` contain one. The bound on
+`Cell` is what makes every such type's contents `Owned`. An arena's cell holds only its
+bump pointer, which is why the arena itself may hand out views.
 
 ### 13.7 What this does not express
 
@@ -371,7 +379,12 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 * Inside, and only inside, code may: dereference a raw pointer, call an `unsafe fn` or an
   `extern` function or call through an `extern fn` pointer, use the builtins below, and
   write `unsafe impl Send`/`Sync`. Creating a raw pointer is safe (`&x as *T`, a slice's
-  `.ptr`); using it is not.
+  `.ptr`); using it is not. `@offset(p, n)` is also safe: for `p: *T` or `*mut T` and
+  `n: i64` it gives the same pointer type at the address `p + n * @sizeof(T)`, wrapping,
+  and never traps.
+* Writing through a raw pointer to bytes that the program reached through a shared
+  borrow is undefined behavior, unless those bytes are inside a `Cell` (section 13.6).
+  This is the obligation a block takes on when it writes through `&x as *T as *mut T`.
 
   | Builtin | Signature |
   |---|---|
@@ -385,8 +398,17 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   | `@unchecked_load(V, s, i)`, `@unchecked_store(s, i, v)` | as `@load` and `@store` (section 26.3), with no check |
   | `@slice_from_raw(p, len)` | `p: *T` gives `[]T`, `p: *mut T` gives `[]mut T`; `len: i64`, at most 2^62 |
   | `@borrow_from_raw(p)` | `p: *T` gives `&T`, `p: *mut T` gives `&mut T` |
+  | `@atomic_load(p, order)` | `p: *T` or `*mut T` to a live, aligned `T: AtomicValue`; gives `T`. `order` is not `release` or `acq_rel` |
+  | `@atomic_store(p, v, order)` | `p: *mut T`, `v: T`; `void`. `order` is not `acquire` or `acq_rel` |
+  | `@atomic_swap(p, v, order)` | as `@atomic_store`; gives the previous value |
+  | `@atomic_cmpxchg(p, expected, new, success, failure)` | gives `T ! T`: the previous value on success, the observed value as the error otherwise. `failure` is not `release` or `acq_rel`, and not stronger than `success` |
+  | `@atomic_cmpxchg_weak(p, expected, new, success, failure)` | the same, and may fail although the values were equal |
+  | `@atomic_add`, `@atomic_sub`, `@atomic_and`, `@atomic_or`, `@atomic_xor` `(p, v, order)` | `T: Int`; gives the previous value. `add` and `sub` wrap |
 
-  The `@unchecked_*` list is closed: one per check kind of section 31.
+  The `@unchecked_*` list is closed: one per check kind of section 31. Every `order` argument
+  of an atomic builtin is a constant expression of type `std.sync.AtomicOrder`, a
+  payload-free enum `relaxed, acquire, release, acq_rel, seq_cst`. `@fence(order)` is
+  the one safe atomic builtin: `void`, and `order` is not `relaxed`.
 * `unsafe` does not turn off any check on safe constructs. Borrows are still checked and
   `a[i]` is still bounds-checked inside the block.
 * An `unsafe` block that contains nothing that needs it is an error, so that the list
