@@ -358,6 +358,48 @@ impls (an impl itself is not a symbol), constants, statics, aliases and tests. M
 generic parameters, parameters and locals are not symbols. In server mode `PATH` is the
 argument `path`.
 
+### `ingot query complete FILE:LINE:COL`
+
+The names that could be written at the position, for an editor's completion list. The
+position is the cursor: the byte offset it names, not a token. The **partial name** is
+the identifier that ends at the cursor, or nothing when no identifier ends there.
+
+```json
+{"type":"completion","name":"twice","item":"fn","path":"app.lib.Ticket.twice",
+ "signature":"pub fn twice(self: &Ticket) -> i64","doc":"Twice the seat."}
+{"type":"completion","name":"seat","item":"field","path":"app.lib.Ticket.seat",
+ "signature":"pub seat: i64"}
+{"type":"completion","name":"count","item":"local","of":"i64"}
+```
+
+What is offered depends on what comes before the partial name:
+
+* **`value.`**: the fields of the value's type, looking through borrows as a field
+  access does; its methods (inherent, from the impls of interfaces, and for a type
+  parameter those of its bounds); and the members the language gives the type (`len`
+  of an array or slice, `ptr` of a slice).
+* **`module.`**, where the name before the dot is a module: the items of that module
+  that the current module may name.
+* **`Type.`**: the variants of an enum, and the functions of the type's inherent impls;
+  for an interface, its methods.
+* **Anything else**: the locals and parameters in scope at the cursor (declared before
+  it, in a block, arm, loop or closure that contains it), the generic parameters of the
+  enclosing item, the module's items and imports, and the built-in names (pipeline
+  §4.3).
+
+Only names that start with the partial name are offered, case included: since types and
+values are spelled differently (spec §1), `Ti` offers types and `ti` values. Lines are in
+order of `name`, then `path`. Each has `name` and `item` (§5's list, plus `builtin` for
+a built-in name); a declared item also has `path`, `signature` and `doc` as `query def`
+gives them; a local or parameter has `of`, its type, when it is known. A name that
+appears twice in scope (a shadowed local) is offered once, as the innermost.
+
+The code at the cursor is usually incomplete: `t.` with nothing after the dot is the
+common case, and the file then has a syntax error. The answer must be what the program
+completed at the cursor would have: how the compiler gets there is not specified. A
+context the compiler cannot work out (the type before the dot is unknown because of an
+error) gives no lines and `ok: true`.
+
 ### `ingot rename FILE:LINE:COL NEW [--dry-run]`
 
 Renames a local, parameter, field, item or module across the package.
@@ -439,14 +481,14 @@ An LSP server is a translation layer over `ingot serve`.
 | rename | `rename --dry-run`, returned as a workspace edit |
 | formatting | `fmt --stdin` |
 | `didOpen`, `didChange`, `didClose` | `overlay` |
+| completion | `query complete` |
 | semantic tokens | the lexer's token classes alone |
 | inlay hints | `query type` for unannotated bindings, `query borrows` for origins |
 
 * **Positions differ.** LSP lines and characters are 0-based, and characters count
   UTF-16 units unless the client agrees to `utf-8` in `positionEncodings`. The adapter
   asks for `utf-8`, and otherwise converts each line.
-* Completion is not specified for v1. Agents do not need it, and it can be added as a
-  `query complete` without changing anything else.
+* Completion is `query complete` (§5). Agents do not need it; editors do.
 
 ### Syntax trees for other tools
 

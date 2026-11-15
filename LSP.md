@@ -43,7 +43,8 @@ editor ──LSP (JSON-RPC, stdio)──▶ ingot-lsp ──serve lines, in-proc
 |---|---|---|
 | L1 | `json.rs`; loader overlays (`LoadOptions` gets a map path → text, used by every file read, `std` included); the `error` line of one-shot failures (tools.md §1); `ingot serve` with `check`, `overlay`, `cancel`, `shutdown` (other commands answer "not implemented in serve" for now) | serve tests: a request script gives exactly the one-shot lines; the conformance suite's `check` run through serve is byte-identical |
 | L2 | `ingot-lsp`: framing, lifecycle, full-text sync, `publishDiagnostics`, code actions, position encodings; editor wiring | an LSP transcript test (spawn the binary, golden responses); diagnostics live in the editor |
-| L3 | `ingot query def`, `query type`, `query symbols` (one-shot and serve); the lexer keeps `///` doc comments on declarations; LSP definition, hover, document and workspace symbols | query tests over fixture packages; hover and jump work in the editor |
+| L3 | `ingot query def`, `query type`, `query symbols` (one-shot and serve); signatures and `///` doc comments cut from the source; LSP definition, hover, document and workspace symbols | query tests over fixture packages; hover and jump work in the editor |
+| L4 | `ingot query complete` (one-shot and serve), working on incomplete code; LSP completion | completion tests for each context of tools.md §5, including `t.` with nothing after the dot; completion works in the editor |
 
 The MVP is usable after L2; L3 makes it pleasant. Later steps (refs, rename, inlay
 hints, borrows, fmt, completion, incremental) wait for the compiler and spec parts they
@@ -103,6 +104,15 @@ token's. Nothing found gives `null`.
 `SymbolInformation` with `containerName` = the path without its last segment. (Zed's
 outline panel uses the grammar's `outline.scm`; LSP symbols serve the symbol search.)
 
+**Completion (L4)** comes from `query complete` at the cursor, answered after the
+batch's changes like the other queries. `completionProvider` has `triggerCharacters:
+["."]`. Each line becomes a `CompletionItem`: `label` = `name`, `detail` = `signature`
+(or `of` for a local), `documentation` = `doc` as Markdown, `kind` by `item`: `fn` 3
+(2 after a `.` on a value), `field` 5, `variant` 20, `struct` 22, `enum` 13, `interface`
+8, `type` 25, `generic` 25, `const` 21, `static` 6, `local` and `param` 6, `module` 9,
+`builtin` 7. The list is complete (`isIncomplete: false`); the client filters further as
+the user types.
+
 **Workspace symbols** run `query symbols --match TEXT` on each package that has an open
 document, in package order, and concatenate the results.
 
@@ -113,6 +123,7 @@ document, in package order, and concatenate the results.
 | L1 | done |
 | L2 | done |
 | L3 | done |
+| L4 | design |
 
 Known gaps after L3: `query def` gives nothing on the `.Item` of `T.Item` (the HIR keeps
 no definition for it); an ambiguous name gives one line, not several; `query refs`,
