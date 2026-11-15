@@ -320,7 +320,8 @@ All six are decided. The recommendation was accepted in each case.
 
 - **D1. `AllocErr` variants.** **Decided: changed.** `out_of_memory` for a failed
   request and `bad_request` for an invalid size or alignment; neither traps. The
-  original recommendation had only `out_of_memory`.
+  original recommendation had only `out_of_memory`; the human kept `bad_request` so
+  that std never traps on bad input (§35).
 - **D2. Allocation failure with a linear value.** **Decided: accepted.** `AllocFail[T]`
   returns the value; it is linear when `T` is.
 - **D3. `copy` on a short destination.** **Decided: accepted.** It traps (T02); a short
