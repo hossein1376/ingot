@@ -152,6 +152,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0420 | `array_slice_needs_borrow` | `a[lo..hi]` on an array place without `&` or `&mut` | the expression | insert `&` before it |
 | E0421 | `value_in_void_return` | `return expr;` in a function without a result, or `return;` in one with a result | the `return` | — |
 | E0422 | `bad_format_string` | a format string of `@format` or `@debug` (§35) with a malformed placeholder, a spec the argument's type does not support, or a placeholder count that differs from the argument count | the placeholder inside the literal, or the first extra argument | — |
+| E0423 | `bad_atomic` | an atomic builtin (§15) on a type that is not `AtomicValue` (or not `Int` for `@atomic_add` and the other arithmetic ones), an `order` that is not a constant, or an `order` the operation does not allow | the offending argument | — |
 
 ## 6. Declarations (E05xx)
 

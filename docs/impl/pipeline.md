@@ -394,6 +394,9 @@ These hold for any back end. With LLVM they translate as noted.
 * **Borrows.** An exclusive borrow parameter may be marked non-aliasing for the
   optimizer. A shared borrow of a type without interior mutability may be marked
   read-only. A shared borrow of a type with interior mutability must not be.
+* **Atomics.** Each atomic builtin (§15) is one atomic instruction with the given
+  ordering, never split, widened or removed. (LLVM: `load atomic`, `store atomic`,
+  `atomicrmw`, `cmpxchg`, `fence`.)
 * **Uninitialized values do not exist** in the generated code for safe functions:
   padding bytes are unspecified but every field is written before any read.
 * **Layout** follows §25 exactly. The compiler's own calling convention is free, except
@@ -442,7 +445,9 @@ importing them.
 | `std.exec.seq`, `.simd`, `.par` | the CPU executors of §27.2, which support `i64 u64 f64` |
 | `std.gpu.Queue`, `std.gpu.Buffer` | the GPU executor and its storage (§28) |
 | `std.hash.Hasher`, `std.fmt.Formatter` | the parameter types of `Hash.hash` and `Format.format` (§4.4) |
-| `std.sync.Atomic` | maps its operations to single instructions; has interior mutability |
+| `std.sync.Cell` | the cell of §13.6: a type that contains one by value has interior mutability |
+| `std.sync.AtomicOrder` | the type of every `order` argument of the atomic builtins (§15) |
+| `std.sync.Atomic` | maps its operations to single instructions; contains a `Cell` |
 | `std.mem.Allocator` | what "a call that may allocate" means for `ingot cost` |
 
 ## 9. Tools
@@ -500,19 +505,10 @@ so that earlier work does not rule it out.
 * The standard library's API is an outline (§35), so `alloc`, `lock` and `park_point`
   cost items cannot be fully defined yet.
 * The debug-information format is not specified.
-* **Interior mutability has no primitive.** §15 speaks of a type that builds it out of
-  `unsafe`, `Mutex[T]` holds its `T` inline, and §7 above lets a shared borrow be marked
-  read-only unless the type "has interior mutability", but nothing defines that property
-  or the cell type that creates it. It is to be designed with `std.sync`: one language
-  item whose contents may be written through a shared borrow in `unsafe`, and "a type has
-  interior mutability if it contains that cell or an `Atomic` by value". Until then
-  checker.md's widening rule stays as written (see its §10).
 * **There is no builtin reference.** Builtins are named across eight sections. One
   appendix table (name, signature, constant or not, `unsafe` or not, trap) is to be
-  written, and with it the builtins still missing entirely: pointer offset, pointer casts
-  between pointee types, pointer to and from `u64`, and the atomic operations. It is
-  also to say what `@abs`, `@min`, `@max` and the other §26.2 math builtins do on
-  integers, scalar and vector, and whether `@div_or`, `@rem_or`, `@shl` and `@shr` are
+  written. It is also to say what `@abs`, `@min`, `@max` and the other §26.2 math
+  builtins do on integers, scalar and vector, and whether `@div_or`, `@rem_or`, `@shl` and `@shr` are
   lane-wise on integer vectors.
 * **`@format` has no type yet.** Its format string is checked (§35), but which writers
   it takes (`&io.Writer`, `&mut fmt.Formatter`) and the error it returns are to be

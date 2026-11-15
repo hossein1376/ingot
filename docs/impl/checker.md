@@ -439,5 +439,5 @@ that are in fact safe.
   also holds `Inner(req)`, for a `req: &Request`, is reported although nothing can be
   stored through `req`. The fix is for widening to skip `Param(p)` and `Inner(p)` when
   `p` is a shared borrow or shared slice of a type without interior mutability, and to
-  skip a shared loan on such a local. It waits for the definition of interior
-  mutability (pipeline.md §11); until then the rule stays as written.
+  skip a shared loan on such a local. Interior mutability is now defined (§13.6, the
+  cell), so the fix can be made; until it is, the rule stays as written.
