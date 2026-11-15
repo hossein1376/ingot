@@ -252,31 +252,35 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
         } else {
             VALUE_PLACEHOLDER
         };
-        let inserted = format!("{}{}{}", &text[..offset], placeholder, &text[offset..]);
-        let mut retry = match analyze_text(&file, overlays, inserted) {
-            Ok(analysis) => analysis,
-            Err(error) => return failure("complete", error.to_string(), started),
-        };
-        let Some(retry_index) = source_index(&retry, &file) else {
-            return empty("complete", started);
-        };
-        file_index = retry_index;
-        if !file_parsed(&retry, retry_index) {
-            // The line may still be missing its `;` (a cursor at the end of
-            // `let x = t.`). Close the expression the way the completed line would.
-            let inserted = format!("{}{};{}", &text[..offset], placeholder, &text[offset..]);
-            retry = match analyze_text(&file, overlays, inserted) {
+        // What follows the placeholder, tried in order until the file parses: nothing
+        // (`f(t.` already closed), a `;` (the end of `let x = t.`), and `();` for a name
+        // typed at the start of a statement (`co`, `t.`), where only a call may stand
+        // (spec §7, E0206). Each keeps the bytes before the cursor as they are.
+        let mut parsed = None;
+        for suffix in ["", ";", "();"] {
+            let inserted = format!(
+                "{}{}{}{}",
+                &text[..offset],
+                placeholder,
+                suffix,
+                &text[offset..]
+            );
+            let retry = match analyze_text(&file, overlays, inserted) {
                 Ok(analysis) => analysis,
                 Err(error) => return failure("complete", error.to_string(), started),
             };
             let Some(retry_index) = source_index(&retry, &file) else {
                 return empty("complete", started);
             };
-            file_index = retry_index;
-            if !file_parsed(&retry, retry_index) {
-                return empty("complete", started);
+            if file_parsed(&retry, retry_index) {
+                parsed = Some((retry, retry_index));
+                break;
             }
         }
+        let Some((retry, retry_index)) = parsed else {
+            return empty("complete", started);
+        };
+        file_index = retry_index;
         // The retry text has the same bytes before the cursor.
         member_end = offset + placeholder.len();
         analysis = retry;

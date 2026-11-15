@@ -830,6 +830,19 @@ fn completion_after_a_value_dot_offers_fields_methods_and_builtin_members() {
     let names = completion_names(&completions(&after(&main, "t.", 0)));
     assert!(names.contains(&"seat".to_string()), "{names:?}");
 
+    // `t.` typed at the start of a statement, where only a call may stand (E0206).
+    let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let n = 1;\n    t.\n    return n;\n}\n";
+    fs::write(&main, text).unwrap();
+    let names = completion_names(&completions(&after(&main, "    t.", 0)));
+    assert!(names.contains(&"seat".to_string()), "{names:?}");
+    assert!(names.contains(&"twice".to_string()), "{names:?}");
+
+    // A name typed at the start of a statement offers the names in scope.
+    let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let count = 1;\n    co\n    return count;\n}\n";
+    fs::write(&main, text).unwrap();
+    let names = completion_names(&completions(&after(&main, "    co", 0)));
+    assert!(names.contains(&"count".to_string()), "{names:?}");
+
     // The members the language gives a slice.
     let text = "fn run(s: []u8) -> i64 {\n    let x = s.;\n    return x;\n}\n";
     fs::write(&main, text).unwrap();
