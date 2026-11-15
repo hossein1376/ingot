@@ -52,7 +52,7 @@ callee from the signature alone.
 
   | Element of `S` | Contributes |
   |---|---|
-  | a loan with root `y` | `O(y)` at the current point |
+  | a loan on path `λ` | the origin set of a read of `λ` (§4.3) at the current point: `O(y)` for `λ = y` with no dereference, and `inner` applied once per dereference otherwise, so a loan on `p.*` contributes `Inner(p)`, not `Param(p)` |
   | `Param(p)` or `Inner(p)` | `Inner(p)` |
 
   `inner*(S)` is `S` closed under `inner`.
@@ -196,7 +196,7 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
 2. **Type-parameter flow.** For each type parameter `T` of `f`, let `U_T` be the union,
    over every parameter `q` whose type mentions `T`, of:
    `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner*(A_q)` if it
-   occurs inside one. Then for every parameter `p` passed by `&mut` whose type mentions
+   occurs inside one. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
    `T`, store `U_T` through `a_p` as in step 1.
 3. **Result.** `S(dest)` is the union of:
    * for each `from p`: `A_p ∪ inner*(A_p)`;
@@ -278,8 +278,8 @@ For `return v` where `v` has a view type, each origin in `S(v)`:
 |---|---|---|
 | a loan on local storage | never allowed | E1203 |
 | any other loan | none. It is a reborrow through a borrow, and the other origins in the set cover it | |
-| `Param(p)` | `from p`, or the result type mentions a type parameter that the type of `p` mentions | E1202, fix adds `p` |
-| `Inner(p)` | `from p` or `from p.*`, or the same type-parameter condition | E1202, fix adds `p.*` |
+| `Param(p)` | `from p`, or the result type mentions a type parameter that occurs in the type of `p` outside any borrow | E1202, fix adds `p` |
+| `Inner(p)` | `from p` or `from p.*`, or the result type mentions a type parameter that the type of `p` mentions | E1202, fix adds `p.*` |
 | `Self(s)` | `from s` | E1202 |
 
 **In a closure body** a returned view may hold any parameter or capture origin, because
@@ -297,8 +297,12 @@ element of `S` must be one of:
 
 * `Inner(p)` itself (moving things around inside `p`);
 * `Param(x)` or `Inner(x)` where `x` is declared `into p`;
-* `Param(x)` or `Inner(x)` where the types of `x` and `p` mention a common type
-  parameter;
+* `Param(x)` where a type parameter that the type of `p` mentions occurs in the type
+  of `x` outside any borrow, or `Inner(x)` where the types of `x` and `p` mention a
+  common type parameter. This is exactly what the caller adds by type-parameter flow
+  (§4.5 step 2): `A_x` when `T` is outside a borrow in `x`'s type, only `inner*(A_x)`
+  when it is inside one. So `fn set[T](h: &mut Holder[T], x: &T) { h.r = x; }` stores
+  the borrow `x` itself, which the caller does not add, and needs `into h`;
 * a loan that is not on local storage.
 
 `Param(x)` or `Inner(x)` otherwise is E1204, with the fix ` into p` on `x` when `p` is
