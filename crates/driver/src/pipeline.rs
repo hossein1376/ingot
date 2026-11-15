@@ -40,7 +40,20 @@ impl Default for Options {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+/// What phases 5 to 7 produced, kept for queries after `check` has printed its
+/// diagnostics (L3). Nothing in `check` reads it.
+pub struct FrontEnd {
+    /// Phase 5's definitions and the HIR of every loaded package, std included.
+    pub resolved: ingot_sema::Output,
+    /// Phase 6's signatures, types and properties.
+    pub declarations: ingot_sema::Declarations,
+    /// Phase 7's typed bodies of the checked package.
+    pub bodies: ingot_sema::typed::Bodies,
+    /// Index of the checked package among `resolved.packages`.
+    pub checked: usize,
+}
+
+#[derive(Default)]
 pub struct Analysis {
     pub sources: Sources,
     pub diagnostics: Vec<Diagnostic>,
@@ -54,6 +67,8 @@ pub struct Analysis {
     /// Phase 8's CFGs for the checked package, one per function and test body and one
     /// per closure and `par for` body.
     pub cfgs: ingot_cfg::Cfgs,
+    /// The front end, kept when phases 5 to 7 ran.
+    pub front_end: Option<FrontEnd>,
 }
 
 impl Analysis {
@@ -161,6 +176,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     });
 
     let mut cfgs = ingot_cfg::Cfgs::default();
+    let mut front_end = None;
     // With dependencies the imports of their packages cannot be resolved, and
     // reporting every one of them as unresolved would be wrong: stop at what is known.
     if !package.manifest_failed && package.not_implemented.is_empty() {
@@ -189,9 +205,9 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         let lowered_not_implemented = lowered.not_implemented;
         cfgs = lowered.cfgs;
-        diagnostics.extend(output.diagnostics);
-        diagnostics.extend(bodies.declarations.diagnostics);
-        diagnostics.extend(bodies.diagnostics);
+        diagnostics.extend(output.diagnostics.iter().cloned());
+        diagnostics.extend(bodies.declarations.diagnostics.iter().cloned());
+        diagnostics.extend(bodies.diagnostics.iter().cloned());
         // A bare variant name that E0603 reports is not also an unused binding (E0311);
         // the binding error is made in phase 4, before the pattern is typed.
         let pattern_errors: std::collections::BTreeSet<(String, usize, usize)> = diagnostics
@@ -203,16 +219,17 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             !(d.code == "E0311"
                 && pattern_errors.contains(&(d.file.clone(), d.span.start, d.span.end)))
         });
-        not_implemented.extend(output.not_implemented);
+        not_implemented.extend(output.not_implemented.iter().cloned());
         // Phase 7 does what phase 6 reports as unchecked.
         not_implemented.extend(
             bodies
                 .declarations
                 .not_implemented
-                .into_iter()
-                .filter(|m| m != UNCHECKED),
+                .iter()
+                .filter(|m| *m != UNCHECKED)
+                .cloned(),
         );
-        not_implemented.extend(bodies.not_implemented);
+        not_implemented.extend(bodies.not_implemented.iter().cloned());
         not_implemented.extend(lowered_not_implemented);
         if bodies.bodies.bodies.values().any(|b| {
             !b.failed
@@ -223,6 +240,12 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         }) {
             not_implemented.push(UNCHECKED_OWNERSHIP.to_string());
         }
+        front_end = Some(FrontEnd {
+            resolved: output,
+            declarations: bodies.declarations,
+            bodies: bodies.bodies,
+            checked: std_count,
+        });
     }
     not_implemented.dedup();
     sort_diagnostics(&mut diagnostics);
@@ -238,6 +261,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         target: options.target.clone(),
         files,
         cfgs,
+        front_end,
     })
 }
 

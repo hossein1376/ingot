@@ -8,4 +8,5 @@ pub mod fix;
 pub mod loader;
 pub mod manifest;
 pub mod pipeline;
+pub mod query;
 pub mod serve;

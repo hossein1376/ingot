@@ -2,6 +2,7 @@ use ingot_driver::commands;
 use ingot_driver::conformance;
 use ingot_driver::files::Overlays;
 use ingot_driver::fix;
+use ingot_driver::query;
 use ingot_driver::serve;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -96,6 +97,36 @@ fn run(args: &[String]) -> Result<u8, String> {
                 fix::write_back(&outcome).map_err(|e| e.to_string())?;
             }
             Ok(if ok { 0 } else { 1 })
+        }
+        "query" => {
+            let kind = args.get(1).map(String::as_str).unwrap_or("");
+            let started = Instant::now();
+            let outcome = if has_flag(args, "--name") {
+                query::failure(kind, "not implemented: `query --name`".to_string(), started)
+            } else {
+                let at = positional_from(args, 2, &[]);
+                let path = positional_from(args, 2, &["--match"]);
+                let match_text = flag_value(args, "--match")?;
+                query::run(
+                    kind,
+                    at.as_deref(),
+                    path.as_deref(),
+                    match_text.as_deref(),
+                    &Overlays::default(),
+                    started,
+                )
+            };
+            if json {
+                for line in &outcome.lines {
+                    println!("{line}");
+                }
+            } else {
+                print!("{}", outcome.human);
+                if let Some(message) = &outcome.error {
+                    eprintln!("ingot: {message}");
+                }
+            }
+            Ok(outcome.exit)
         }
         "serve" => {
             let stdin = std::io::stdin();
@@ -194,6 +225,23 @@ fn positional(args: &[String], value_flags: &[&str]) -> Option<PathBuf> {
             continue;
         }
         return Some(PathBuf::from(arg));
+    }
+    None
+}
+
+fn positional_from(args: &[String], start: usize, value_flags: &[&str]) -> Option<String> {
+    let mut i = start;
+    while i < args.len() {
+        let arg = &args[i];
+        if value_flags.contains(&arg.as_str()) {
+            i += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return Some(arg.clone());
     }
     None
 }

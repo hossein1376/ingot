@@ -547,3 +547,100 @@ fn the_conformance_suite_is_the_same_in_both_modes() {
         entries.len()
     );
 }
+
+fn obj(members: Vec<(&str, Json)>) -> Json {
+    Json::Object(
+        members
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect(),
+    )
+}
+
+fn s(value: &str) -> Json {
+    Json::String(value.to_string())
+}
+
+fn query_at(path: &Path, needle: &str) -> String {
+    let text = fs::read_to_string(path).unwrap();
+    let offset = text.find(needle).unwrap();
+    let line = text[..offset].matches('\n').count() + 1;
+    let start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    format!("{}:{}:{}", path.display(), line, offset - start + 1)
+}
+
+fn one_shot_query(args: &[&str]) -> (Vec<String>, i32) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ingot"));
+    command.arg("query");
+    command.args(args);
+    command.arg("--json");
+    let output = command.output().unwrap();
+    (
+        stdout(&output).lines().map(String::from).collect(),
+        output.status.code().unwrap(),
+    )
+}
+
+#[test]
+fn query_through_serve_equals_the_one_shot_command() {
+    let dir = package(
+        "query",
+        "name = \"app\"\n",
+        "import app.lib;\n\nfn f(t: lib.Ticket) -> i64 {\n    return t.seat;\n}\n",
+    );
+    fs::write(
+        dir.join("lib.ingot"),
+        "pub struct Ticket { pub seat: i64 }\n",
+    )
+    .unwrap();
+    let main = dir.join("main.ingot");
+
+    let def_at = query_at(&main, "seat");
+    let type_at = query_at(&main, "t: lib.Ticket");
+    let dir_string = dir.to_string_lossy().into_owned();
+    let cases: Vec<(Vec<&str>, Json)> = vec![
+        (
+            vec!["def", &def_at],
+            obj(vec![("kind", s("def")), ("at", s(&def_at))]),
+        ),
+        (
+            vec!["type", &type_at],
+            obj(vec![("kind", s("type")), ("at", s(&type_at))]),
+        ),
+        (
+            vec!["symbols", &dir_string],
+            obj(vec![("kind", s("symbols")), ("path", s(&dir_string))]),
+        ),
+        (
+            vec!["symbols", &dir_string, "--match", "Ticket"],
+            obj(vec![
+                ("kind", s("symbols")),
+                ("path", s(&dir_string)),
+                ("match", s("Ticket")),
+            ]),
+        ),
+        (
+            vec!["def", "--name", "app.lib.Ticket"],
+            obj(vec![("kind", s("def")), ("name", s("app.lib.Ticket"))]),
+        ),
+    ];
+    for (args, request_args) in cases {
+        let (one_shot, status) = one_shot_query(&args);
+        let script = format!(
+            "{{\"id\":1,\"command\":\"query\",\"args\":{}}}\n",
+            request_args.to_text()
+        );
+        let served = serve(&script);
+        assert_eq!(served.status.code(), Some(0), "{}", stderr(&served));
+        let lines: Vec<String> = stdout(&served).lines().map(String::from).collect();
+        assert!(!lines.is_empty(), "{args:?}");
+        assert_eq!(
+            summary_of(&lines).get("type").and_then(Json::as_str),
+            Some("summary")
+        );
+        assert_eq!(exit_of(&lines), i64::from(status), "{args:?}");
+        let served: Vec<String> = lines.iter().map(|line| as_one_shot(line, 1)).collect();
+        let one_shot: Vec<String> = one_shot.iter().map(|line| zero_ms(line)).collect();
+        assert_eq!(served, one_shot, "{args:?}");
+    }
+}

@@ -112,4 +112,8 @@ document, in package order, and concatenate the results.
 |---|---|
 | L1 | done |
 | L2 | done |
-| L3 | design |
+| L3 | done |
+
+Known gaps after L3: `query def` gives nothing on the `.Item` of `T.Item` (the HIR keeps
+no definition for it); an ambiguous name gives one line, not several; `query refs`,
+`query borrows`, `rename` and `--name` are not built.

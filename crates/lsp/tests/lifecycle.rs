@@ -23,6 +23,21 @@ fn initialize_chooses_utf8_only_when_the_client_offers_it() {
                 .and_then(Json::as_i64),
             Some(1)
         );
+        for provider in [
+            "definitionProvider",
+            "hoverProvider",
+            "documentSymbolProvider",
+            "workspaceSymbolProvider",
+        ] {
+            assert_eq!(
+                result
+                    .get("capabilities")
+                    .and_then(|capabilities| capabilities.get(provider))
+                    .and_then(Json::as_bool),
+                Some(true),
+                "{provider}"
+            );
+        }
         assert_eq!(
             result
                 .get("serverInfo")
@@ -53,7 +68,7 @@ fn an_unknown_request_is_method_not_found() {
     let mut client = Client::spawn(&[]);
     client.initialize(false);
     let id = client.request(
-        "textDocument/hover",
+        "textDocument/references",
         obj(vec![("textDocument", obj(vec![]))]),
     );
     let response = client.response(id);

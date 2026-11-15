@@ -4,7 +4,7 @@
 use crate::position::{self, Encoding};
 use crate::uri;
 use ingot_diag::json::Json;
-use ingot_driver::{files, loader, serve};
+use ingot_driver::{files, loader, query as driver_query, serve};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -102,7 +102,7 @@ impl Server {
     /// the code-action requests. Returns an exit status when `exit` arrived.
     pub fn handle_batch(&mut self, messages: &[String]) -> Option<u8> {
         let mut touched: BTreeMap<PathBuf, CheckTarget> = BTreeMap::new();
-        let mut code_actions = Vec::new();
+        let mut deferred: Vec<(String, Json, Json)> = Vec::new();
         for text in messages {
             let value = match ingot_diag::json::parse(text) {
                 Ok(value) => value,
@@ -126,7 +126,7 @@ impl Server {
                 return Some(if self.shutdown { 0 } else { 1 });
             }
             match id {
-                Some(id) => self.handle_request(&method, id, &params, &mut code_actions),
+                Some(id) => self.handle_request(&method, id, &params, &mut deferred),
                 None => self.handle_notification(&method, &params, &mut touched),
             }
         }
@@ -144,8 +144,15 @@ impl Server {
         for (_, target) in touched {
             self.check(&target);
         }
-        for (id, params) in code_actions {
-            self.code_action(id, &params);
+        for (method, id, params) in deferred {
+            match method.as_str() {
+                "textDocument/codeAction" => self.code_action(id, &params),
+                "textDocument/definition" => self.definition(id, &params),
+                "textDocument/hover" => self.hover(id, &params),
+                "textDocument/documentSymbol" => self.document_symbol(id, &params),
+                "workspace/symbol" => self.workspace_symbol(id, &params),
+                _ => {}
+            }
         }
         None
     }
@@ -155,7 +162,7 @@ impl Server {
         method: &str,
         id: Json,
         params: &Json,
-        code_actions: &mut Vec<(Json, Json)>,
+        deferred: &mut Vec<(String, Json, Json)>,
     ) {
         if self.shutdown {
             self.error(id, -32600, "the server has been shut down");
@@ -174,7 +181,11 @@ impl Server {
                 self.shutdown = true;
                 self.result(id, Json::Null);
             }
-            "textDocument/codeAction" => code_actions.push((id, params.clone())),
+            "textDocument/codeAction"
+            | "textDocument/definition"
+            | "textDocument/hover"
+            | "textDocument/documentSymbol"
+            | "workspace/symbol" => deferred.push((method.to_string(), id, params.clone())),
             other => self.error(id, -32601, &format!("unknown request `{other}`")),
         }
     }
@@ -219,6 +230,10 @@ impl Server {
                 )]),
             ),
             ("positionEncoding", string(self.encoding.name())),
+            ("definitionProvider", Json::Bool(true)),
+            ("hoverProvider", Json::Bool(true)),
+            ("documentSymbolProvider", Json::Bool(true)),
+            ("workspaceSymbolProvider", Json::Bool(true)),
         ]);
         self.result(
             id,
@@ -638,6 +653,301 @@ impl Server {
         self.result(id, Json::Array(actions));
     }
 
+    fn query_request(&mut self, kind: &str, args: Vec<(String, Json)>) -> Vec<Json> {
+        let mut all = vec![("kind".to_string(), string(kind))];
+        all.extend(args);
+        let lines = self.compiler_request("query", all);
+        if let Some(error) = lines
+            .iter()
+            .find(|line| line.get("type").and_then(Json::as_str) == Some("error"))
+        {
+            let message = error
+                .get("message")
+                .and_then(Json::as_str)
+                .unwrap_or("query failed");
+            // Logged, not shown: hover and definition run on every pointer move, and a
+            // pop-up per failed query would be noise.
+            let message = message.to_string();
+            self.log(1, &message);
+            return Vec::new();
+        }
+        lines
+    }
+
+    fn document(&self, params: &Json) -> Option<(String, PathBuf, String)> {
+        let uri = params
+            .get("textDocument")
+            .and_then(|document| document.get("uri"))
+            .and_then(Json::as_str)?;
+        let path = uri::from_uri(uri)?;
+        let path = files::normalize(&path);
+        let text = self
+            .open
+            .get(uri)
+            .map(|document| document.text.clone())
+            .or_else(|| std::fs::read_to_string(&path).ok())?;
+        Some((uri.to_string(), path, text))
+    }
+
+    fn query_position(
+        &self,
+        text: &str,
+        path: &Path,
+        params: &Json,
+    ) -> Option<(String, Option<ingot_diag::source::Span>)> {
+        let position = params.get("position")?;
+        let line = position.get("line").and_then(Json::as_i64)?.max(0) as u32;
+        let character = position.get("character").and_then(Json::as_i64)?.max(0) as u32;
+        let offset = position::position_to_offset(text, line, character, self.encoding);
+        let (query_line, byte_character) =
+            position::offset_to_position(text, offset, Encoding::Utf8);
+        Some((
+            format!(
+                "{}:{}:{}",
+                path.display(),
+                query_line + 1,
+                byte_character + 1
+            ),
+            driver_query::token_span(text, offset),
+        ))
+    }
+
+    fn target_for(&self, path: &Path) -> CheckTarget {
+        let files = self.current_files();
+        check_target(path, &files)
+    }
+
+    fn definition(&mut self, id: Json, params: &Json) {
+        let mut locations = Vec::new();
+        if let Some((_uri, path, text)) = self.document(params)
+            && let Some((at, _token)) = self.query_position(&text, &path, params)
+        {
+            let target = self.target_for(&path);
+            let lines = self.query_request("def", vec![("at".to_string(), string(&at))]);
+            for line in &lines {
+                if line.get("type").and_then(Json::as_str) != Some("definition") {
+                    continue;
+                }
+                let Some(span) = line.get("span") else {
+                    continue;
+                };
+                let Some(file) = span.get("file").and_then(Json::as_str) else {
+                    continue;
+                };
+                let Some(path) = self.place(file, &target) else {
+                    self.log(1, &format!("cannot place a definition in `{file}`"));
+                    continue;
+                };
+                let Some(text) = self.text_for_path(&path) else {
+                    continue;
+                };
+                let Some((start, end)) = offsets(span) else {
+                    continue;
+                };
+                locations.push(object(vec![
+                    ("uri", string(&self.uri_for_path(&path))),
+                    ("range", range_for(&text, start, end, self.encoding)),
+                ]));
+            }
+        }
+        self.result(
+            id,
+            if locations.is_empty() {
+                Json::Null
+            } else {
+                Json::Array(locations)
+            },
+        );
+    }
+
+    fn hover(&mut self, id: Json, params: &Json) {
+        let Some((_uri, path, text)) = self.document(params) else {
+            self.result(id, Json::Null);
+            return;
+        };
+        let Some((at, token)) = self.query_position(&text, &path, params) else {
+            self.result(id, Json::Null);
+            return;
+        };
+        let target = self.target_for(&path);
+        let definitions = self.query_request("def", vec![("at".to_string(), string(&at))]);
+        let types = self.query_request("type", vec![("at".to_string(), string(&at))]);
+        let definition = definitions
+            .iter()
+            .find(|line| line.get("type").and_then(Json::as_str) == Some("definition"));
+        let type_line = types
+            .iter()
+            .find(|line| line.get("type").and_then(Json::as_str) == Some("type_at"));
+
+        let mut range = token.map(|token| range_for(&text, token.start, token.end, self.encoding));
+        if let Some(type_line) = type_line
+            && let Some(span) = type_line.get("span")
+            && let Some(file) = span.get("file").and_then(Json::as_str)
+            && let Some(path) = self.place(file, &target)
+            && let Some(text) = self.text_for_path(&path)
+            && let Some((start, end)) = offsets(span)
+        {
+            range = Some(range_for(&text, start, end, self.encoding));
+        }
+
+        let item = definition
+            .and_then(|line| line.get("item"))
+            .and_then(Json::as_str)
+            .unwrap_or("");
+        let name = definition
+            .and_then(|line| line.get("path"))
+            .and_then(Json::as_str)
+            .unwrap_or("");
+        let signature = definition
+            .and_then(|line| line.get("signature"))
+            .and_then(Json::as_str);
+        let doc = definition
+            .and_then(|line| line.get("doc"))
+            .and_then(Json::as_str);
+        let of = type_line
+            .and_then(|line| line.get("of"))
+            .and_then(Json::as_str);
+        let mut code = String::new();
+        if matches!(item, "param" | "local") {
+            if let Some(of) = of {
+                code = format!("{name}: {of}");
+            } else if !name.is_empty() {
+                code = name.to_string();
+            }
+        } else if let Some(signature) = signature {
+            code = signature.to_string();
+        } else if !name.is_empty() {
+            code = name.to_string();
+        }
+        if code.is_empty() && of.is_none() {
+            self.result(id, Json::Null);
+            return;
+        }
+        let mut value = String::new();
+        if !code.is_empty() {
+            code = code.replace("```", "` ` `");
+            value.push_str("```ingot\n");
+            value.push_str(&code);
+            value.push_str("\n```");
+        }
+        if let Some(doc) = doc {
+            if !value.is_empty() {
+                value.push_str("\n\n");
+            }
+            value.push_str(doc);
+        }
+        let same_span = definition
+            .zip(type_line)
+            .is_some_and(|(a, b)| same_query_span(a.get("span"), b.get("span")));
+        // A function's type is its signature again; locals and parameters show it in
+        // the code block already.
+        if let Some(of) = of
+            && !matches!(item, "param" | "local" | "fn")
+            && !same_span
+        {
+            if !value.is_empty() {
+                value.push_str("\n\n");
+            }
+            value.push_str(&format!("type: {of}"));
+        }
+        let Some(range) = range else {
+            self.result(id, Json::Null);
+            return;
+        };
+        self.result(
+            id,
+            object(vec![
+                (
+                    "contents",
+                    object(vec![
+                        ("kind", string("markdown")),
+                        ("value", string(&value)),
+                    ]),
+                ),
+                ("range", range),
+            ]),
+        );
+    }
+
+    fn document_symbol(&mut self, id: Json, params: &Json) {
+        let mut symbols = Vec::new();
+        if let Some((_uri, path, _text)) = self.document(params) {
+            let target = self.target_for(&path);
+            let lines = self.query_request(
+                "symbols",
+                vec![("path".to_string(), string(&path.to_string_lossy()))],
+            );
+            symbols = self.symbols_from_lines(&lines, &target);
+        }
+        self.result(id, Json::Array(symbols));
+    }
+
+    fn workspace_symbol(&mut self, id: Json, params: &Json) {
+        let filter = params.get("query").and_then(Json::as_str).unwrap_or("");
+        let files = self.current_files();
+        let mut packages: BTreeMap<PathBuf, CheckTarget> = BTreeMap::new();
+        for document in self.open.values() {
+            let target = check_target(&document.path, &files);
+            packages.entry(target.key.clone()).or_insert(target);
+        }
+        let mut symbols = Vec::new();
+        for target in packages.values() {
+            let mut args = vec![("path".to_string(), string(&target.path.to_string_lossy()))];
+            if !filter.is_empty() {
+                args.push(("match".to_string(), string(filter)));
+            }
+            let lines = self.query_request("symbols", args);
+            symbols.extend(self.symbols_from_lines(&lines, target));
+        }
+        self.result(id, Json::Array(symbols));
+    }
+
+    fn symbols_from_lines(&mut self, lines: &[Json], target: &CheckTarget) -> Vec<Json> {
+        let mut out = Vec::new();
+        for line in lines {
+            if line.get("type").and_then(Json::as_str) != Some("symbol") {
+                continue;
+            }
+            let Some(path) = line.get("path").and_then(Json::as_str) else {
+                continue;
+            };
+            let item = line.get("item").and_then(Json::as_str).unwrap_or("");
+            let Some(span) = line.get("span") else {
+                continue;
+            };
+            let Some(file) = span.get("file").and_then(Json::as_str) else {
+                continue;
+            };
+            let Some(file_path) = self.place(file, target) else {
+                continue;
+            };
+            let Some(text) = self.text_for_path(&file_path) else {
+                continue;
+            };
+            let Some((start, end)) = offsets(span) else {
+                continue;
+            };
+            let name = path.rsplit('.').next().unwrap_or(path);
+            let container = path.rsplit_once('.').map(|(left, _)| left);
+            let mut members = vec![
+                ("name", string(name)),
+                ("kind", number(symbol_kind(item, path))),
+                (
+                    "location",
+                    object(vec![
+                        ("uri", string(&self.uri_for_path(&file_path))),
+                        ("range", range_for(&text, start, end, self.encoding)),
+                    ]),
+                ),
+            ];
+            if let Some(container) = container {
+                members.push(("containerName", string(container)));
+            }
+            out.push(object(members));
+        }
+        out
+    }
+
     fn text_for_path(&self, path: &Path) -> Option<String> {
         if let Some(document) = self.open.values().find(|document| document.path == path) {
             return Some(document.text.clone());
@@ -702,6 +1012,36 @@ impl Server {
 impl Default for Server {
     fn default() -> Self {
         Server::new()
+    }
+}
+
+fn same_query_span(a: Option<&Json>, b: Option<&Json>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    a.get("file") == b.get("file") && offsets(a) == offsets(b)
+}
+
+fn symbol_kind(item: &str, path: &str) -> i64 {
+    match item {
+        "fn" => {
+            let method = path
+                .rsplit_once('.')
+                .and_then(|(container, _)| container.rsplit('.').next())
+                .and_then(|container| container.chars().next())
+                .is_some_and(char::is_uppercase);
+            if method { 6 } else { 12 }
+        }
+        "struct" => 23,
+        "enum" => 10,
+        "variant" => 22,
+        "field" => 8,
+        "interface" => 11,
+        "type" => 26,
+        "const" => 14,
+        "static" => 13,
+        "test" => 12,
+        _ => 12,
     }
 }
 

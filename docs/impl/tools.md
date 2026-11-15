@@ -267,7 +267,9 @@ The rules shared by the queries:
   is its module's path and its name as written, without quotes. A generic parameter, a
   parameter and a local have their bare name.
 * **`span`** is the declared name; **`extent`** is the whole declaration, from its first
-  token (after its doc comment) to its last. A parameter or local has no `extent`.
+  token (after its doc comment) to its last. A parameter or local has no `extent`. A
+  module has no name in its file: its `span` is the empty span at the start of the
+  file, and it has no `extent`.
 * **`signature`** is the declaration as written, without its body: what comes before
   the `{` of a function's or test's block or of a struct's, enum's, interface's or
   impl's members, with the space before it removed. A `const`, `static`, alias, field

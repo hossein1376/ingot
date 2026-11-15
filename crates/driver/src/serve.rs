@@ -9,6 +9,7 @@
 
 use crate::commands;
 use crate::files::Overlays;
+use crate::query;
 use ingot_diag::diagnostic::json_string;
 use ingot_diag::json::Json;
 use std::fmt::Write as _;
@@ -18,7 +19,7 @@ use std::time::Instant;
 /// The one-shot commands serve knows by name but does not implement yet.
 const NOT_IN_SERVE: &[&str] = &[
     "fix", "explain", "fmt", "build", "run", "test", "bench", "api", "cost", "audit", "layout",
-    "targets", "asm", "query", "rename",
+    "targets", "asm", "rename",
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -88,6 +89,7 @@ impl Server {
             "check" => self.check(id, &args, started),
             "overlay" => self.overlay(id, &args, started),
             "cancel" => self.cancel(id, &args, started),
+            "query" => self.query(id, &args, started),
             "shutdown" => self.shutdown(id, &args, started),
             other if NOT_IN_SERVE.contains(&other) => error_response(
                 id,
@@ -127,6 +129,50 @@ impl Server {
             );
         }
         let output = commands::check(Path::new(&path), target.as_deref(), &self.overlays);
+        respond(output.lines, id, output.exit)
+    }
+
+    fn query(&mut self, id: &Json, args: &[(String, Json)], started: Instant) -> Vec<String> {
+        let kind = match optional_string(args, "kind") {
+            Ok(Some(kind)) => kind,
+            Ok(None) => {
+                return query_failure(id, "", "`query` needs `kind`", started);
+            }
+            Err(message) => {
+                return query_failure(id, "", &message, started);
+            }
+        };
+        if args.iter().any(|(name, _)| name == "name") {
+            return query_failure(id, &kind, "not implemented: `query --name`", started);
+        }
+        let allowed: &[&str] = match kind.as_str() {
+            "def" | "type" => &["kind", "at", "name"],
+            "symbols" => &["kind", "path", "match", "name"],
+            _ => &["kind", "at", "path", "match", "name"],
+        };
+        if let Err(message) = only_args(args, "query", allowed) {
+            return query_failure(id, &kind, &message, started);
+        }
+        let at = match optional_string(args, "at") {
+            Ok(at) => at,
+            Err(message) => return query_failure(id, &kind, &message, started),
+        };
+        let path = match optional_string(args, "path") {
+            Ok(path) => path,
+            Err(message) => return query_failure(id, &kind, &message, started),
+        };
+        let match_text = match optional_string(args, "match") {
+            Ok(text) => text,
+            Err(message) => return query_failure(id, &kind, &message, started),
+        };
+        let output = query::run(
+            &kind,
+            at.as_deref(),
+            path.as_deref(),
+            match_text.as_deref(),
+            &self.overlays,
+            started,
+        );
         respond(output.lines, id, output.exit)
     }
 
@@ -263,6 +309,10 @@ fn extra_summary(id: &Json, command: &str, started: Instant) -> String {
 
 fn error_response(id: &Json, command: &str, message: &str, started: Instant) -> Vec<String> {
     respond(commands::failure_lines(command, message, started), id, 2)
+}
+
+fn query_failure(id: &Json, kind: &str, message: &str, started: Instant) -> Vec<String> {
+    respond(query::failure_lines(kind, message, started), id, 2)
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
