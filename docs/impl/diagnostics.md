@@ -256,7 +256,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1102 | `exclusive_borrow_conflict` | an exclusive borrow is taken while another loan that overlaps it is live | the new borrow, or the call whose receiver takes it | — |
 | E1103 | `use_while_exclusively_borrowed` | a place is read or borrowed shared while an exclusive loan that overlaps it is live | the use | — |
 | E1104 | `move_while_borrowed` | a place is moved, or consumed by `@forget`, while a loan on it is live | the move | — |
-| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live, including a temporary whose statement ends while a borrow of it is still used | the borrow expression (`scope_end`, `later_use`) | — |
+| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live | the borrow expression (`scope_end`, `later_use`) | — |
 
 ## 12. Origins (E12xx)
 
