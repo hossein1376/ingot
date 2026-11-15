@@ -178,7 +178,10 @@ this distinction a method could hand out the same `[]mut u8` twice. Slicing a *s
 slice stored in `p.*` copies it first, which is why `rest` above is `from self.*`.
 
 The body is checked against the clause: returning a borrow whose origin is not covered
-is an error, and the fix adds the missing source.
+is an error, and the fix adds the missing source. The clause covers the whole result
+`T ! E`: a borrow that leaves through `fail e` is checked exactly like one that leaves
+through `return v`, and a signature whose `T` or `E` is written with a borrow must have
+a clause.
 
 ### 13.2 `into`: where a stored borrow goes
 

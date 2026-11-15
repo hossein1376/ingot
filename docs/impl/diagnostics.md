@@ -262,9 +262,9 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E1201 | `missing_from` | a return type is written with a borrow in it and the signature has no `from` clause | the return type | append the `from` clause the body requires |
-| E1202 | `origin_not_declared` | a returned view may hold a parameter origin that the `from` clause does not cover | the returned expression (`signature`) | add the missing origin to the clause |
-| E1203 | `returns_local_borrow` | a returned view may hold a loan on a local of this function | the returned expression (`borrow`) | — |
+| E1201 | `missing_from` | a return type `T` or error type `E` is written with a borrow in it and the signature has no `from` clause | the return type | append the `from` clause the body requires |
+| E1202 | `origin_not_declared` | a returned or failed view may hold a parameter origin that the `from` clause does not cover | the returned expression (`signature`) | add the missing origin to the clause |
+| E1203 | `returns_local_borrow` | a returned or failed view may hold a loan on a local of this function | the returned expression (`borrow`) | — |
 | E1204 | `store_needs_into` | a view from parameter `x` is stored where it reaches parameter `p`, including a `spawn` into a scope parameter, and `x` is not declared `into p` | the store or `spawn` (`signature`) | when `p` is `&mut` or `&Scope`, append ` into p` to parameter `x`; otherwise none |
 | E1205 | `local_borrow_escapes_through_parameter` | a loan on a local of this function is stored where it reaches a parameter | the store or `spawn` (`borrow`) | — |
 | E1206 | `bad_origin_clause` | `from x` or `into p` names something that is not a parameter; `p.*` on a parameter that is not a borrow; `into p` where `p` is neither `&mut` nor `&Scope`; `from` on a return type that can hold no borrow (one with no borrow written in it and no `Self`, associated type or type parameter) | the clause | for the last case, delete the clause |

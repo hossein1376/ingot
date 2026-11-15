@@ -272,7 +272,7 @@ rooted at a different local (`r.*...`), so it does not overlap and needs no exce
 
 ### 6.1 Returns
 
-For `return v` where `v` has a view type, each origin in `S(v)`:
+For `return v`, and for `fail e`, where the value has a view type, each origin in `S(v)`:
 
 | Origin | Requirement | Error |
 |---|---|---|
