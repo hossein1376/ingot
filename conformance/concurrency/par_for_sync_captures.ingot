@@ -1,0 +1,15 @@
+//! expect: accept
+//! section: 19, 20
+
+import std.sync.Atomic;
+
+fn touch(a: &Atomic[i64], k: i64) {
+    _ = a;
+    _ = k;
+}
+
+fn f(a: &Atomic[i64], n: i64) {
+    par for i in 0..4 {
+        touch(a, i + n);
+    }
+}

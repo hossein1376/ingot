@@ -1,0 +1,24 @@
+//! expect: accept
+//! section: 13.2, 18
+
+import std.task.Scope;
+
+struct Queue { n: i64 }
+
+fn work(q: &Queue) {
+    _ = q.n;
+}
+
+fn start(s: &Scope, q: &Queue into s) {
+    spawn work(q) in s;
+}
+
+fn f() -> i64 {
+    let q = Queue.{ n: 1 };
+    var done: i64 = 0;
+    scope s {
+        start(s, &q);
+        done = 1;
+    }
+    return q.n + done;
+}

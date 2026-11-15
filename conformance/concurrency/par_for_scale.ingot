@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 19
+
+fn scale(xs: []mut i64, k: i64) {
+    par for x in xs {
+        x.* = x.* * k;
+    }
+}

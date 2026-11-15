@@ -1,0 +1,14 @@
+//! expect: accept
+//! section: 13.2, 18
+
+import std.task.Scope;
+
+struct Queue { n: i64 }
+
+fn work(q: &Queue) {
+    _ = q.n;
+}
+
+fn start(s: &Scope, q: &Queue into s) {
+    spawn work(q) in s;
+}

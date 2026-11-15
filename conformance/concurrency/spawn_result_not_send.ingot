@@ -1,0 +1,15 @@
+//! expect: reject
+//! section: 18, 20
+
+struct Boxy { p: *mut i64 }
+
+fn make() -> Boxy {
+    return Boxy.{ p: @zero };
+}
+
+fn f() {
+    scope s {
+        let h = spawn make() in s; //~ E1401
+        @forget(h);
+    }
+}

@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 18, 20
+
+struct Boxy { p: *mut i64 }
+
+fn take(b: Boxy) {
+    _ = b.p;
+}
+
+fn f() {
+    var x: i64 = 0;
+    let b = Boxy.{ p: &mut x as *mut i64 };
+    scope s {
+        spawn take(b) in s; //~ E1401
+    }
+}
