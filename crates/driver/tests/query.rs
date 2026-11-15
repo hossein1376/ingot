@@ -1058,6 +1058,36 @@ fn completion_offers_keywords_beside_names_and_builtins_after_an_at() {
 }
 
 #[test]
+fn completion_works_among_the_items_of_a_module() {
+    let (_dir, main) = complete_package("complete-items");
+    let body = "fn add(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n\n";
+
+    // A partial keyword where an item would start: no name can stand there.
+    for (typed, expected) in [
+        ("pu", vec!["pub"]),
+        ("st", vec!["static", "struct"]),
+        ("pub st", vec!["static", "struct"]),
+    ] {
+        let text = format!("{body}{typed}\n");
+        fs::write(&main, &text).unwrap();
+        let names = completion_names(&completions(&after(&main, typed, 0)));
+        assert_eq!(names, expected, "{typed}");
+    }
+
+    // A type in a signature that is not finished: the scalar types are built-in names.
+    let text = format!("{body}fn f() -> i6\n");
+    fs::write(&main, &text).unwrap();
+    let names = completion_names(&completions(&after(&main, "f() -> i6", 0)));
+    assert_eq!(names, ["i64"]);
+
+    // The items of the module are offered there too.
+    let text = format!("{body}ad\n");
+    fs::write(&main, &text).unwrap();
+    let names = completion_names(&completions(&after(&main, "ad", 1)));
+    assert!(names.contains(&"add".to_string()), "{names:?}");
+}
+
+#[test]
 fn completion_in_a_file_with_another_syntax_error_gives_no_lines() {
     let (_dir, main) = complete_package("complete-error");
     let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\nfn broken( {\n";

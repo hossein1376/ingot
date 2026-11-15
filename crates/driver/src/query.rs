@@ -6,7 +6,7 @@ use crate::pipeline::{self, Analysis, FrontEnd};
 use ingot_diag::diagnostic::json_string;
 use ingot_diag::json::Json;
 use ingot_diag::source::{Source, Sources, Span};
-use ingot_sema::defs::{DefId, DefKind, ImportTarget, ModuleId, PackageId, Vis};
+use ingot_sema::defs::{Builtin, DefId, DefKind, ImportTarget, ModuleId, PackageId, Vis};
 use ingot_sema::hir;
 use ingot_sema::hir::{ExprId, LocalId, PatId, Res};
 use ingot_sema::sigs::{Head, ItemSig, Tri};
@@ -265,8 +265,9 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
     }
     // The first try uses the text as written. A file with an E01xx/E02xx error declares
     // nothing, so a cursor after a dot needs a placeholder identifier to make it parse.
-    let member_start = partial_start;
+    let mut member_start = partial_start;
     let member_end;
+    let mut cursor = offset;
     if !file_parsed(&analysis, file_index) {
         let placeholder = if partial.starts_with(|c: char| c.is_ascii_uppercase()) {
             TYPE_PLACEHOLDER
@@ -294,16 +295,46 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
                 return empty("complete", started);
             };
             if file_parsed(&retry, retry_index) {
-                parsed = Some((retry, retry_index));
+                // The retry text has the same bytes before the cursor.
+                parsed = Some((retry, retry_index, offset + placeholder.len()));
                 break;
             }
         }
-        let Some((retry, retry_index)) = parsed else {
+        // Where no name can stand, such as among the items of a module (`pu` before
+        // `pub`, `fn f() -> i6`), no placeholder parses. Leave the partial name out, and
+        // failing that the cursor's whole line: the program around the cursor is then
+        // complete, and the cursor stands where the line was.
+        if parsed.is_none() {
+            let line_start = text[..partial_start]
+                .rfind('\n')
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let line_end = text[offset..]
+                .find('\n')
+                .map(|index| offset + index)
+                .unwrap_or(text.len());
+            for (from, to) in [(partial_start, offset), (line_start, line_end)] {
+                let removed = format!("{}{}", &text[..from], &text[to..]);
+                let retry = match analyze_text(&file, overlays, removed) {
+                    Ok(analysis) => analysis,
+                    Err(error) => return failure("complete", error.to_string(), started),
+                };
+                let Some(retry_index) = source_index(&retry, &file) else {
+                    return empty("complete", started);
+                };
+                if file_parsed(&retry, retry_index) {
+                    member_start = from;
+                    cursor = from;
+                    parsed = Some((retry, retry_index, from));
+                    break;
+                }
+            }
+        }
+        let Some((retry, retry_index, end)) = parsed else {
             return empty("complete", started);
         };
         file_index = retry_index;
-        // The retry text has the same bytes before the cursor.
-        member_end = offset + placeholder.len();
+        member_end = end;
         analysis = retry;
     } else {
         // The file parsed: the partial name (or an empty span at the cursor) is the
@@ -313,7 +344,7 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
     finish_completion(
         analysis,
         file_index,
-        offset,
+        cursor,
         member_start,
         member_end,
         &partial,
@@ -2490,13 +2521,22 @@ impl Context<'_> {
                 chosen.insert(name, line);
             }
         }
-        let builtins: Vec<String> = self
+        // The built-in names (pipeline §4.3): those the built-in module binds, and the
+        // scalar types, which are pre-made definitions outside any scope.
+        let mut builtins: Vec<String> = self
             .sema
             .module(ingot_sema::defs::BUILTIN_MODULE)
             .types
             .keys()
             .cloned()
             .collect();
+        builtins.extend(
+            self.sema
+                .defs
+                .iter()
+                .filter(|def| matches!(def.kind, DefKind::Builtin(Builtin::Scalar(_))))
+                .map(|def| def.name.clone()),
+        );
         for name in builtins {
             chosen
                 .entry(name.clone())
