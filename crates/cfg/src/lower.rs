@@ -7,7 +7,7 @@
 
 use crate::model::*;
 use ingot_diag::source::Span;
-use ingot_sema::defs::Sema;
+use ingot_sema::defs::{DefId, Sema};
 use ingot_sema::hir::{
     self, BlockId, ExprId, ExprKind, LocalId, PatId, PatKind, StmtId, StmtKind as HirStmt,
 };
@@ -327,6 +327,9 @@ struct Lowerer<'a, 'b> {
     guard_places: BTreeMap<LocalId, Place>,
     failed: Option<String>,
     stmt_span: Span,
+    /// Set while lowering a `let`: bindings record the statement span so an E1003
+    /// edit can be inserted after the whole declaration, not after its first line.
+    let_span: Option<Span>,
 }
 
 impl<'a, 'b> Lowerer<'a, 'b> {
@@ -349,6 +352,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             guard_places: BTreeMap::new(),
             failed: None,
             stmt_span: Span::default(),
+            let_span: None,
         }
     }
 
@@ -456,15 +460,26 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         );
         self.start_local(self_local, true);
         self.cfg.params.push(self_local);
+        let mut fields = Vec::new();
         for (i, cap) in info.captures.iter().enumerate() {
+            let cap_local = self.pkg.local(cap.local);
+            let name = cap_local.name.clone();
+            let span = cap_local.span;
+            let fty = self.local_ty(cap.local);
+            fields.push(ClosureField {
+                ty: fty,
+                span,
+                name: name.clone(),
+            });
             let mut place = Place::local(self_local);
             if info.kind != FnKind::FnOnce {
                 place = place.deref();
             }
-            let name = self.pkg.local(cap.local).name.clone();
             let place = place.field(i, Some(name));
             self.capture_places.insert(cap.local, place);
         }
+        self.cfg.closure_ty = Some(rec_ty);
+        self.cfg.closure_fields = fields;
         for p in &closure.params {
             let ty = self.local_ty(p.local);
             let l = self.new_local(
@@ -792,6 +807,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             ty,
             ty_name,
             span,
+            decl_span: span,
         });
         id
     }
@@ -835,7 +851,13 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let name = self.pkg.local(id).name.clone();
         let span = self.pkg.local(id).span;
         let ty = self.local_ty(id);
-        let l = self.new_local(LocalKind::User, Some(name), Some(id), ty, span);
+        // `scope s` arrives holding `&Scope`. A user binding does not.
+        let kind = if self.pkg.local(id).kind == hir::LocalKind::Scope {
+            LocalKind::Scope
+        } else {
+            LocalKind::User
+        };
+        let l = self.new_local(kind, Some(name), Some(id), ty, span);
         self.local_map.insert(id, l);
         l
     }
@@ -845,6 +867,11 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     fn declare_binding(&mut self, id: LocalId) -> Local {
         let l = self.ensure_local(id);
         self.start_local(l, true);
+        if let Some(span) = self.let_span
+            && let Some(loc) = self.cfg.locals.get_mut(l as usize)
+        {
+            loc.decl_span = span;
+        }
         l
     }
 
@@ -876,11 +903,32 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
     }
 
+    /// How a parent consumes a place that already holds the expression's value.
+    /// A `Copy` type is read again; anything else moves out of the temporary.
+    fn consume_use(&mut self, ty: TypeId) -> PlaceUse {
+        if self.is_copy(ty) {
+            PlaceUse::Copy
+        } else {
+            PlaceUse::Move
+        }
+    }
+
     fn read_place(&mut self, place: Place, ty: TypeId) -> Operand {
         if self.guard_reads || self.is_copy(ty) {
             Operand::Place(place, PlaceUse::Copy)
         } else {
             Operand::Place(place, PlaceUse::Move)
+        }
+    }
+
+    /// Read one payload of an enum. `try`, `catch`, `orelse` and `for` consume the
+    /// enum by taking that payload. A linear enum stays live if the payload is only
+    /// copied, so the read is a move even when the payload type is `Copy`.
+    fn read_payload(&mut self, place: Place, payload_ty: TypeId, enum_ty: TypeId) -> Operand {
+        if !self.guard_reads && self.counts_linear(enum_ty) {
+            Operand::Place(place, PlaceUse::Move)
+        } else {
+            self.read_place(place, payload_ty)
         }
     }
 
@@ -1093,8 +1141,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let mark = self.temp_mark();
         match &stmt.kind {
             HirStmt::Let { pattern, init, .. } => {
+                self.let_span = Some(stmt.span);
                 let ty = self.ty(*init);
                 let Some(op) = self.lower_expr(*init) else {
+                    self.let_span = None;
                     return;
                 };
                 // A let of one name binds the initializer directly; any other pattern
@@ -1116,6 +1166,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     };
                     self.bind_pattern(*pattern, place);
                 }
+                self.let_span = None;
                 self.end_temps(mark);
             }
             HirStmt::Assign { place, op, value } => {
@@ -2312,7 +2363,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
         self.cur = join;
         self.reachable = true;
-        Some(Operand::Place(Place::local(result), PlaceUse::Copy))
+        Some(Operand::Place(
+            Place::local(result),
+            self.consume_use(self.bool_ty()),
+        ))
     }
 
     fn lower_if_expr(
@@ -2368,7 +2422,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
         self.cur = join;
         self.reachable = then_reach || else_reach;
-        dest.map(|l| Operand::Place(Place::local(l), PlaceUse::Copy))
+        dest.map(|l| Operand::Place(Place::local(l), self.consume_use(ty)))
     }
 
     /// Lower one branch of an `if` or `match` expression: a value goes to `dest`, or
@@ -2509,7 +2563,8 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.term(Terminator::Unreachable);
         self.cur = join;
         self.reachable = any_reach;
-        dest.map(|l| Operand::Place(Place::local(l), PlaceUse::Copy))
+        dest.zip(dest_ty)
+            .map(|(l, ty)| Operand::Place(Place::local(l), self.consume_use(ty)))
     }
 
     /// Bind a guard's names through shared borrows (or copies), lower the guard, and
@@ -2658,12 +2713,13 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let err_block = self.new_block();
         let join = self.new_block();
         self.switch_result(vplace.clone(), vt, 0, ok_block, 1, err_block);
-        // ok: move the payload out.
+        // ok: move the payload out. The arm starts with the tag it chose.
         self.cur = ok_block;
         self.reachable = true;
+        self.note_variant(vplace.clone(), vt, 0, true);
         self.push_frame(span);
         let payload = vplace.clone().payload(0);
-        let op = self.read_place(payload, ty);
+        let op = self.read_payload(payload, ty, vt);
         let op = self.snapshot(op, ty, span);
         self.emit(StmtKind::Assign {
             place: Place::local(dest),
@@ -2678,6 +2734,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         // err: bind the error and lower the handler.
         self.cur = err_block;
         self.reachable = true;
+        self.note_variant(vplace.clone(), vt, 1, true);
         self.push_frame(span);
         if binding.is_none() {
             let epay = vplace.clone().payload(1);
@@ -2689,7 +2746,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             let l = self.ensure_local(local);
             let sp = self.cfg.local(l).span;
             self.emit_at(StmtKind::StorageStart(l), sp);
-            let read = self.read_place(epay, ety);
+            let read = self.read_payload(epay, ety, vt);
             self.emit(StmtKind::Assign {
                 place: Place::local(l),
                 value: Rvalue::Use(read),
@@ -2720,7 +2777,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
         self.cur = join;
         self.reachable = true;
-        Some(Operand::Place(Place::local(dest), PlaceUse::Copy))
+        Some(Operand::Place(Place::local(dest), self.consume_use(ty)))
     }
 
     fn lower_orelse(&mut self, e: ExprId) -> Option<Operand> {
@@ -2744,6 +2801,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         // none: the handler.
         self.cur = none_block;
         self.reachable = true;
+        self.note_variant(vplace.clone(), vt, 0, true);
         self.push_frame(span);
         let handler_reach = match &handler {
             hir::Handler::Expr(h) => {
@@ -2768,9 +2826,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         // some: the payload.
         self.cur = some_block;
         self.reachable = true;
+        self.note_variant(vplace.clone(), vt, 1, true);
         self.push_frame(span);
         let payload = vplace.clone().payload(1);
-        let op = self.read_place(payload, ty);
+        let op = self.read_payload(payload, ty, vt);
         let op = self.snapshot(op, ty, span);
         self.emit(StmtKind::Assign {
             place: Place::local(dest),
@@ -2784,7 +2843,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
         self.cur = join;
         self.reachable = true;
-        Some(Operand::Place(Place::local(dest), PlaceUse::Copy))
+        Some(Operand::Place(Place::local(dest), self.consume_use(ty)))
     }
 
     fn switch_result(
@@ -2835,9 +2894,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         // ok: the payload is the value, in its own storage region.
         self.cur = ok_block;
         self.reachable = true;
+        self.note_variant(temp.clone(), enum_ty, 0, true);
         self.push_frame(span);
         let payload = temp.clone().payload(0);
-        let read = self.read_place(payload, ty);
+        let read = self.read_payload(payload, ty, enum_ty);
         let read = self.snapshot(read, ty, span);
         self.emit(StmtKind::Assign {
             place: Place::local(dest),
@@ -2853,6 +2913,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         // err: convert and leave the function.
         self.cur = err_block;
         self.reachable = true;
+        self.note_variant(temp.clone(), enum_ty, 1, true);
         self.push_frame(span);
         let conversion = match self.res(e) {
             ExprRes::Try(t) => t.conversion.clone(),
@@ -2860,7 +2921,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         };
         let err_ty = self.error_of_result_type(ot);
         let epay = temp.clone().payload(1);
-        let eread = self.read_place(epay, err_ty);
+        let eread = self.read_payload(epay, err_ty, enum_ty);
         let eread = self.snapshot(eread, err_ty, span);
         let error_value = match conversion {
             TryConversion::Identity => eread,
@@ -2891,7 +2952,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.frames.pop();
         self.cur = ok_end;
         self.reachable = true;
-        Some(Operand::Place(Place::local(dest), PlaceUse::Copy))
+        Some(Operand::Place(Place::local(dest), self.consume_use(ty)))
     }
 }
 
@@ -2973,7 +3034,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 );
                 self.test_cond(le, fail);
             }
-            PatKind::Variant { payload, .. } => {
+            PatKind::Variant { name, payload, .. } => {
                 let res = match &info.res {
                     ingot_sema::typed::PatRes::Variant(v) => v.clone(),
                     _ => {
@@ -2997,7 +3058,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     self.bool_ty(),
                     self.stmt_span,
                 );
-                self.test_cond(cond, fail);
+                self.test_variant(place.clone(), res.index as u32, name.clone(), cond, fail);
                 if let Some(payload_pat) = payload {
                     let payload_place = place.payload(res.index);
                     self.test_pattern(*payload_pat, payload_place, fail);
@@ -3055,6 +3116,185 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.reachable = true;
     }
 
+    /// A tag test. The block the test chose starts with `place is name`; the block for
+    /// a failed test starts with `place is not name` (pipeline.md §5).
+    fn test_variant(
+        &mut self,
+        place: Place,
+        variant: u32,
+        name: String,
+        cond: Operand,
+        fail: Block,
+    ) {
+        let temps: Vec<Local> = self
+            .frames
+            .last()
+            .map(|f| f.temps.clone())
+            .unwrap_or_default();
+        let ok = self.new_block();
+        let bad = self.new_block();
+        self.term(Terminator::Branch {
+            cond,
+            then_block: ok,
+            else_block: bad,
+        });
+        self.kill();
+        self.cur = bad;
+        self.reachable = true;
+        self.emit(StmtKind::Variant {
+            place: place.clone(),
+            variant,
+            name: name.clone(),
+            holds: false,
+        });
+        self.end_temp_list(&temps);
+        self.goto(fail);
+        self.cur = ok;
+        self.reachable = true;
+        self.emit(StmtKind::Variant {
+            place,
+            variant,
+            name,
+            holds: true,
+        });
+    }
+
+    /// `place is <variant>` (or `is not`, when `holds` is false) at the current point.
+    fn note_variant(&mut self, place: Place, ty: TypeId, index: u32, holds: bool) {
+        let name = self.variant_label(ty, index);
+        self.emit(StmtKind::Variant {
+            place,
+            variant: index,
+            name,
+            holds,
+        });
+    }
+
+    fn variant_label(&self, ty: TypeId, index: u32) -> String {
+        match self.kind(ty) {
+            TyKind::Optional(_) => {
+                if index == 0 {
+                    "none".to_string()
+                } else {
+                    "some".to_string()
+                }
+            }
+            TyKind::Result(_, _) => {
+                if index == 0 {
+                    "ok".to_string()
+                } else {
+                    "err".to_string()
+                }
+            }
+            TyKind::Adt(d, _) => self
+                .cx
+                .decls
+                .enum_sig(d)
+                .and_then(|s| s.variants.get(index as usize))
+                .map(|v| v.name.clone())
+                .unwrap_or_else(|| format!("v{index}")),
+            _ => format!("v{index}"),
+        }
+    }
+
+    /// `place` is the payload of a by-value `T ! E` (no dereference on the way).
+    fn by_value_result_payload(&mut self, place: &Place) -> bool {
+        if self.guard_reads {
+            return false;
+        }
+        let Some((Projection::Payload { .. }, parent)) = place.proj.split_last() else {
+            return false;
+        };
+        if place
+            .proj
+            .iter()
+            .any(|p| matches!(p, Projection::Deref | Projection::DerefRaw))
+        {
+            return false;
+        }
+        let parent = Place {
+            base: place.base.clone(),
+            proj: parent.to_vec(),
+        };
+        self.by_value_result(&parent)
+    }
+
+    /// `place` is a by-value `T ! E`.
+    fn by_value_result(&mut self, place: &Place) -> bool {
+        if self.guard_reads {
+            return false;
+        }
+        if place
+            .proj
+            .iter()
+            .any(|p| matches!(p, Projection::Deref | Projection::DerefRaw))
+        {
+            return false;
+        }
+        matches!(
+            self.cfg_place_ty(place).map(|t| self.kind(t)),
+            Some(TyKind::Result(_, _))
+        )
+    }
+
+    fn cfg_place_ty(&mut self, place: &Place) -> Option<TypeId> {
+        let PlaceBase::Local(l) = place.base else {
+            return None;
+        };
+        let mut ty = self.cfg.locals.get(l as usize)?.ty;
+        for proj in &place.proj {
+            ty = self.proj_ty(ty, proj)?;
+        }
+        Some(ty)
+    }
+
+    fn proj_ty(&mut self, ty: TypeId, proj: &Projection) -> Option<TypeId> {
+        match proj {
+            Projection::Field { index, .. } => {
+                let TyKind::Adt(def, args) = self.kind(ty) else {
+                    return None;
+                };
+                self.field_type(def, &args, *index)
+            }
+            Projection::TupleField(i) => match self.kind(ty) {
+                TyKind::Tuple(es) => es.get(*i).copied(),
+                _ => None,
+            },
+            Projection::Index(_) => match self.kind(ty) {
+                TyKind::Array(e, _) | TyKind::Slice(_, e) => Some(e),
+                _ => None,
+            },
+            Projection::Deref => match self.kind(ty) {
+                TyKind::Ref(_, e) | TyKind::Slice(_, e) => Some(e),
+                _ => None,
+            },
+            Projection::DerefRaw => match self.kind(ty) {
+                TyKind::RawPtr(_, e) => Some(e),
+                _ => None,
+            },
+            Projection::Payload { variant } => match self.kind(ty) {
+                TyKind::Optional(inner) => (*variant == 1).then_some(inner),
+                TyKind::Result(ok, err) => match variant {
+                    0 => Some(ok),
+                    1 => Some(err),
+                    _ => None,
+                },
+                TyKind::Adt(def, args) => {
+                    let payload = self
+                        .cx
+                        .decls
+                        .enum_sig(def)?
+                        .variants
+                        .get(*variant)?
+                        .payload?;
+                    let subst = self.cx.decls.subst_for(def, &args);
+                    Some(self.cx.decls.types.subst(payload, &subst))
+                }
+                _ => None,
+            },
+        }
+    }
+
     /// Bind the names of a pattern. The calls are already tested (or the pattern is
     /// irrefutable).
     fn bind_pattern(&mut self, pat: PatId, place: Place) {
@@ -3063,13 +3303,28 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             None => return,
         };
         let place = Self::apply_derefs(place, info.derefs);
+        // A by-value tag test of `T ! E` moves the chosen payload, even when it is
+        // `Copy` or `_` (pipeline.md §5). `match &r` looks through a dereference, so
+        // it stays a copy.
+        let force = self.by_value_result_payload(&place);
         match &self.pkg.pat(pat).kind {
-            PatKind::Wild => {}
+            PatKind::Wild => {
+                if force {
+                    self.emit(StmtKind::Use(Operand::Place(place, PlaceUse::Move)));
+                }
+            }
             PatKind::Bind { local } => {
                 let l = self.declare_binding(*local);
                 let mode = self.local_mode(*local);
                 let value = match mode {
-                    BindMode::Copy => Rvalue::Use(Operand::Place(place, PlaceUse::Copy)),
+                    BindMode::Copy => {
+                        let use_ = if force {
+                            PlaceUse::Move
+                        } else {
+                            PlaceUse::Copy
+                        };
+                        Rvalue::Use(Operand::Place(place, use_))
+                    }
                     BindMode::Move => Rvalue::Use(Operand::Place(place, PlaceUse::Move)),
                     BindMode::Ref => Rvalue::Borrow {
                         place,
@@ -3089,12 +3344,17 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             }
             PatKind::Literal(_) | PatKind::Range { .. } => {}
             PatKind::Variant { payload, .. } => {
+                let index = match &info.res {
+                    ingot_sema::typed::PatRes::Variant(v) => v.index,
+                    _ => 0,
+                };
                 if let Some(sub) = payload {
-                    let index = match &info.res {
-                        ingot_sema::typed::PatRes::Variant(v) => v.index,
-                        _ => 0,
-                    };
                     self.bind_pattern(*sub, place.payload(index));
+                } else if self.by_value_result(&place) {
+                    self.emit(StmtKind::Use(Operand::Place(
+                        place.payload(index),
+                        PlaceUse::Move,
+                    )));
                 }
             }
             PatKind::Tuple(elems) => {
@@ -3103,17 +3363,153 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 }
             }
             PatKind::Struct { fields, .. } => {
-                let order = match &info.res {
-                    ingot_sema::typed::PatRes::Struct { res, .. } => res.order.clone(),
-                    _ => Vec::new(),
+                let (def, args, order, omitted) = match &info.res {
+                    ingot_sema::typed::PatRes::Struct { res, omitted, .. } => (
+                        res.def,
+                        res.args.clone(),
+                        res.order.clone(),
+                        omitted.clone(),
+                    ),
+                    _ => {
+                        for (k, f) in fields.iter().enumerate() {
+                            self.bind_pattern(
+                                f.pattern,
+                                place.clone().field(k, Some(f.name.clone())),
+                            );
+                        }
+                        return;
+                    }
                 };
+                let n = self
+                    .cx
+                    .decls
+                    .struct_sig(def)
+                    .map(|s| s.fields.len())
+                    .unwrap_or(0);
+                let names: Vec<String> = self
+                    .cx
+                    .decls
+                    .struct_sig(def)
+                    .map(|s| s.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_default();
+                let mut moved = vec![false; n];
                 for (k, f) in fields.iter().enumerate() {
                     let index = order.get(k).copied().unwrap_or(k);
                     self.bind_pattern(f.pattern, place.clone().field(index, Some(f.name.clone())));
+                    if index < n && self.pattern_moves(f.pattern) {
+                        moved[index] = true;
+                    }
                 }
+                self.finish_struct_pattern(
+                    place,
+                    info.ty,
+                    info.derefs,
+                    def,
+                    &args,
+                    &moved,
+                    &omitted,
+                    &names,
+                );
             }
             PatKind::Poison => {}
         }
+    }
+
+    /// A binding moves its place when the binding mode is a move. A wildcard, a
+    /// literal and a range do not. Nested patterns move when any part of them does.
+    fn pattern_moves(&mut self, pat: PatId) -> bool {
+        match &self.pkg.pat(pat).kind {
+            PatKind::Wild | PatKind::Literal(_) | PatKind::Range { .. } | PatKind::Poison => false,
+            PatKind::Bind { local } => self.local_mode(*local) == BindMode::Move,
+            PatKind::Variant {
+                payload: Some(sub), ..
+            } => self.pattern_moves(*sub),
+            PatKind::Variant { payload: None, .. } => false,
+            PatKind::Tuple(elems) => elems.iter().any(|p| self.pattern_moves(*p)),
+            PatKind::Struct { fields, .. } => fields.iter().any(|f| self.pattern_moves(f.pattern)),
+        }
+    }
+
+    /// Consume a linear struct that a pattern took apart (memory.md §10, checker.md §3).
+    ///
+    /// Inside the struct's module, a pattern that moves no non-`Copy` field and drops
+    /// no linear field becomes one move of the whole place (`Token.{ id: _ }`). A
+    /// linear field the pattern does not move stays, so storage end reports E1003
+    /// once. Outside the module, each field the pattern did not already move and that
+    /// is not itself a dropped linear field is moved on its own, which Analysis A
+    /// reports as E1006. Patterns that looked through a borrow are left alone: a move
+    /// there would be out of a dereference.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_struct_pattern(
+        &mut self,
+        place: Place,
+        ty: TypeId,
+        derefs: u32,
+        def: DefId,
+        args: &[ingot_sema::ty::GenericArg],
+        moved: &[bool],
+        omitted: &[usize],
+        names: &[String],
+    ) {
+        if derefs != 0 || !self.counts_linear(ty) {
+            return;
+        }
+        if moved.is_empty() {
+            return;
+        }
+        let mut dropped_linear = false;
+        for (i, was_moved) in moved.iter().enumerate() {
+            if *was_moved {
+                continue;
+            }
+            let Some(fty) = self.field_type(def, args, i) else {
+                continue;
+            };
+            if self.counts_linear(fty) {
+                dropped_linear = true;
+            }
+        }
+        let _ = omitted;
+        let any_moved = moved.iter().any(|m| *m);
+        if self.same_module(def) {
+            if !dropped_linear && !any_moved {
+                self.emit(StmtKind::Use(Operand::Place(place, PlaceUse::Move)));
+            }
+            return;
+        }
+        for (i, was_moved) in moved.iter().enumerate() {
+            if *was_moved {
+                continue;
+            }
+            let Some(fty) = self.field_type(def, args, i) else {
+                continue;
+            };
+            if self.counts_linear(fty) {
+                continue;
+            }
+            let name = names.get(i).cloned();
+            let field = place.clone().field(i, name);
+            self.emit(StmtKind::Use(Operand::Place(field, PlaceUse::Move)));
+        }
+    }
+
+    fn counts_linear(&mut self, ty: TypeId) -> bool {
+        self.cx.decls.props(ty).maybe_linear == Tri::Yes
+    }
+
+    fn same_module(&self, def: DefId) -> bool {
+        self.cx.sema.def(def).module == self.cx.sema.def(self.cfg.key.owner).module
+    }
+
+    fn field_type(
+        &mut self,
+        def: DefId,
+        args: &[ingot_sema::ty::GenericArg],
+        index: usize,
+    ) -> Option<TypeId> {
+        let ty = self.cx.decls.struct_sig(def)?.fields.get(index)?.ty;
+        let subst = self.cx.decls.subst_for(def, args);
+        Some(self.cx.decls.types.subst(ty, &subst))
     }
 
     /// The binding places of a pattern, without binding them.
@@ -3512,6 +3908,11 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.cur = exit_head;
         self.reachable = true;
         self.stmt_span = span;
+        // The loop finished: every element was moved. A `break` targets `exit` and
+        // skips this, so the elements still in the array stay an obligation.
+        if consuming && var.is_some() {
+            self.emit(StmtKind::IterConsumed(base.clone()));
+        }
         self.end_iteration(loop_frame);
         self.goto(exit);
         self.cur = body_block;
@@ -3527,7 +3928,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     index: Operand::Place(Place::local(index), PlaceUse::Copy),
                 }
             } else if consuming {
-                Rvalue::Use(Operand::Place(elem_place, PlaceUse::Move))
+                Rvalue::Use(Operand::Place(elem_place, PlaceUse::ForElem))
             } else {
                 Rvalue::Use(Operand::Place(elem_place, PlaceUse::Copy))
             };
@@ -3658,16 +4059,19 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.cur = exit_head;
         self.reachable = true;
         self.stmt_span = span;
+        self.note_variant(Place::local(dest), ret_ty, 0, true);
         self.end_iteration(loop_frame);
         self.goto(exit);
         // The item is the payload of `.some`.
         self.cur = some_block;
         self.reachable = true;
+        self.stmt_span = span;
+        self.note_variant(Place::local(dest), ret_ty, 1, true);
         if let Some(var) = var {
             let ty = self.local_ty(var);
             let l = self.declare_binding(var);
             let payload = Place::local(dest).payload(1);
-            let read = self.read_place(payload, ty);
+            let read = self.read_payload(payload, ty, ret_ty);
             self.emit(StmtKind::Assign {
                 place: Place::local(l),
                 value: Rvalue::Use(read),

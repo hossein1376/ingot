@@ -590,7 +590,13 @@ impl Declarations {
                     }
                 }
             }
-            Bound::Fn(..) | Bound::Poison => {}
+            // Spec §8: only a non-linear type satisfies `Fn` or `FnMut` (a closure
+            // that owns a non-`Copy` capture is only `FnOnce`), so each implies
+            // `Discard`. `FnOnce` does not.
+            Bound::Fn(FnKind::Fn | FnKind::FnMut, _) => {
+                out.insert(PropBound::Discard);
+            }
+            Bound::Fn(FnKind::FnOnce, _) | Bound::Poison => {}
         }
     }
 

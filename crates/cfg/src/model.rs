@@ -57,6 +57,19 @@ pub struct Cfg {
     pub locals: Vec<CfgLocal>,
     pub blocks: Vec<BlockData>,
     pub entry: Block,
+    /// Set on a closure body: the capture record `C`. `None` on every other CFG.
+    /// Analysis A reads the captures as fields of this type (checker.md §4.6).
+    pub closure_ty: Option<TypeId>,
+    /// The captures of `closure_ty`, in field order. Empty on every other CFG.
+    pub closure_fields: Vec<ClosureField>,
+}
+
+/// One capture of a closure, stored as a field of the capture record.
+#[derive(Clone, Debug)]
+pub struct ClosureField {
+    pub ty: TypeId,
+    pub span: Span,
+    pub name: String,
 }
 
 impl Cfg {
@@ -97,7 +110,11 @@ pub struct CfgLocal {
     pub source: Option<LocalId>,
     pub ty: TypeId,
     pub ty_name: String,
+    /// The binding's name, or the expression that made a temporary.
     pub span: Span,
+    /// The `let` statement that declared this local, when lowering has one.
+    /// The E1003 edit inserts after this span. Equals `span` otherwise.
+    pub decl_span: Span,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +166,20 @@ pub enum StmtKind {
     /// A read with no other effect, kept so that liveness sees it (`_ = x`, and the
     /// discarded value of an expression statement).
     Use(Operand),
+    /// A tag test's result (pipeline.md §5): `place` holds variant `variant` (`holds`),
+    /// or does not (`!holds`). Emitted after every tag test of `match`, `if let`,
+    /// `while let`, `try`, `catch`, `orelse` and a `for` over an iterator. `name` is
+    /// the variant's source name, for the dump.
+    Variant {
+        place: Place,
+        variant: u32,
+        name: String,
+        holds: bool,
+    },
+    /// The normal exit of a consuming `for` over an array value. Every element was
+    /// moved (`PlaceUse::ForElem`), so this consumes the array temporary. A `break`
+    /// jumps past it; the elements still in the array stay an obligation.
+    IterConsumed(Place),
 }
 
 /// A place: a local or a `static`, followed by projections.
@@ -227,11 +258,16 @@ pub enum Projection {
     Payload { variant: usize },
 }
 
-/// A value read from a place: a copy or a move.
+/// A value read from a place: a copy, a move, or the element step of a consuming
+/// `for`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaceUse {
     Copy,
     Move,
+    /// `for t in array`. Not a tracked move and not E1002: the loop's normal exit
+    /// carries [`StmtKind::IterConsumed`], which consumes the array. Evaluation still
+    /// moves the element.
+    ForElem,
 }
 
 #[derive(Clone, Debug)]
@@ -688,6 +724,8 @@ impl Cfgs {
             locals: Vec::new(),
             blocks: Vec::new(),
             entry: 0,
+            closure_ty: None,
+            closure_fields: Vec::new(),
         }));
         id
     }

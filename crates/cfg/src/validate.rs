@@ -127,6 +127,8 @@ fn check_stmt(cfg: &Cfg, b: usize, stmt: &Stmt, errors: &mut Vec<String>) {
         }
         StmtKind::EnterUnsafe => {}
         StmtKind::Use(op) => check_operand(cfg, op, b, errors),
+        StmtKind::Variant { place, .. } => check_place(cfg, place, b, errors),
+        StmtKind::IterConsumed(place) => check_place(cfg, place, b, errors),
     }
 }
 
@@ -496,6 +498,8 @@ fn stmt_uses_local(stmt: &Stmt, l: Local) -> bool {
         }
         StmtKind::Use(op) => operand_uses_local(op, l),
         StmtKind::EnterUnsafe => false,
+        StmtKind::Variant { place, .. } => place_uses_local(place, l),
+        StmtKind::IterConsumed(place) => place_uses_local(place, l),
     }
 }
 

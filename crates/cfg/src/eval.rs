@@ -383,7 +383,10 @@ impl<'a> Evaluator<'a> {
                     let cheap = match &stmt.kind {
                         StmtKind::StorageStart(l) => Some(Cheap::Start(*l)),
                         StmtKind::StorageEnd(l) => Some(Cheap::End(*l)),
-                        StmtKind::Cancel(_) | StmtKind::Abandon(_) => Some(Cheap::Nothing),
+                        StmtKind::Cancel(_)
+                        | StmtKind::Abandon(_)
+                        | StmtKind::Variant { .. }
+                        | StmtKind::IterConsumed(_) => Some(Cheap::Nothing),
                         StmtKind::EnterUnsafe => Some(Cheap::Unsafe),
                         _ => None,
                     };
@@ -477,7 +480,10 @@ impl<'a> Evaluator<'a> {
                 let (alloc, path) = self.resolve_place(host, fi, place)?;
                 self.write_at(host, alloc, &path, v)
             }
-            StmtKind::Cancel(_) | StmtKind::Abandon(_) => Ok(()),
+            StmtKind::Cancel(_)
+            | StmtKind::Abandon(_)
+            | StmtKind::Variant { .. }
+            | StmtKind::IterConsumed(_) => Ok(()),
             StmtKind::EnterUnsafe => Err(self.e0807(host, E0807_UNSAFE)),
             StmtKind::Check(check) => self.check(host, fi, check),
             StmtKind::Use(op) => {
@@ -1490,7 +1496,7 @@ impl<'a> Evaluator<'a> {
             Operand::Const(c) => self.constant(host, fi, c),
             Operand::Place(p, use_) => {
                 let v = self.read_place(host, fi, p)?;
-                if *use_ == PlaceUse::Move {
+                if matches!(*use_, PlaceUse::Move | PlaceUse::ForElem) {
                     self.clear_place(host, fi, p)?;
                 }
                 Ok(v)

@@ -25,14 +25,17 @@
 //!   `<temp>`. Static roots are `static#D` for definition D.
 //! * A place is a root followed by `.field`, `.0` (tuple), `[index]`, `.*` or `.vN`
 //!   (the payload of variant N).
-//! * An operand is `copy %N`, `move %N`, or a constant: `const 5`, `const true`,
+//! * An operand is `copy %N`, `move %N`, `for_elem %N` (the element step of a
+//!   consuming `for`), or a constant: `const 5`, `const true`,
 //!   `const "text"`, `@zero i64`, `@uninit i64`, `const-param name`, `const name`,
 //!   `fn app.f`.
 //! * Every statement and every terminator ends with `; line:col`, its source span.
 //!   A statement copied from a deferred block adds `[defer 3:4 exit 9:1]`: where the
 //!   `defer` was, and which exit triggered the copy.
 //! * Statements are `storage_start %N`, `storage_end %N`, `PLACE = RVALUE`,
-//!   `check ...`, `cancel %N`, `abandon %N` and `use OPERAND`.
+//!   `check ...`, `cancel %N`, `abandon %N`, `use OPERAND`, `iter_consumed PLACE`
+//!   (the normal exit of a consuming `for` over an array), and a variant record
+//!   `PLACE is NAME` or `PLACE is not NAME` (the result of a tag test).
 //! * Checks name their trap code: `bounds (T01)`, `bounds (T02)`, `bounds (T14)`,
 //!   `overflow (T03)`, `division (T04/T05)`, `shift (T06)`, `narrow (T07)`,
 //!   `gather (T14)`, `scatter_distinct (T15)` and `dispatch_cover (T16)`. A check prints
@@ -194,6 +197,7 @@ impl<'a> Dumper<'a> {
         match op {
             Operand::Place(p, PlaceUse::Copy) => format!("copy {}", self.place(p)),
             Operand::Place(p, PlaceUse::Move) => format!("move {}", self.place(p)),
+            Operand::Place(p, PlaceUse::ForElem) => format!("for_elem {}", self.place(p)),
             Operand::Const(c) => self.const_(c),
         }
     }
@@ -371,6 +375,15 @@ impl<'a> Dumper<'a> {
             StmtKind::Abandon(l) => format!("abandon {}", self.local_ref(*l)),
             StmtKind::Check(check) => self.check(check),
             StmtKind::Use(op) => format!("use {}", self.operand(op)),
+            StmtKind::Variant {
+                place, name, holds, ..
+            } => format!(
+                "{} is {}{}",
+                self.place(place),
+                if *holds { "" } else { "not " },
+                name
+            ),
+            StmtKind::IterConsumed(place) => format!("iter_consumed {}", self.place(place)),
         }
     }
 

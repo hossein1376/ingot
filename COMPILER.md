@@ -172,9 +172,12 @@ removal and code generation; the ownership checker ignores it. A place rooted at
 `Static` takes no loans.
 
 **Statements.** `StorageStart/End`, `Assign { place, value }`, `EnterUnsafe`,
-`Cancel(s)`, `Abandon(dest)`, `Check(Check)` and `Use(operand)` (a no-op read for
-liveness). `EnterUnsafe` marks the entry of every `unsafe` block or expression: it is a
-no-op for phases 9 and 10, and the interpreter's E0807 test.
+`Cancel(s)`, `Abandon(dest)`, `Check(Check)`, `Use(operand)` (a no-op read for
+liveness) and `Variant { place, variant, name, holds }`. A variant record is what a tag
+test decided: `π is v` at the start of the block the test chose, `π is not v` at the
+start of the block for a failed test (`holds` is that boolean). `EnterUnsafe` marks the
+entry of every `unsafe` block or expression: it is a no-op for phases 9 and 10, and the
+interpreter's E0807 test. A variant record is also a no-op for the interpreter.
 `Abandon` is the one addition to pipeline section 5's list: it says an unchosen
 `select` arm's result storage holds no value, so the checker does not report the linear
 result as leaked.
@@ -240,6 +243,23 @@ substituted (`@sizeof(T)` interns the substituted type), floats are rounded at e
 operation to `f32`/`f64`, and a `static` may take another's address. A body phase 7
 rejected reports nothing more; a failure the interpreter cannot handle is
 `constant evaluation of <what>`, never a guess.
+
+**Phase 9** (`crates/cfg/src/check/`). The driver runs `check::check_ownership` after
+phase 8, on every CFG phase 8 produced for the checked package: function and test
+bodies, and the closure and `par for` bodies they contain. Constant-evaluation CFGs are
+a separate set and are not checked. The analysis does not change the CFG. `check/mod.rs`
+is the entry point; `check/moves.rs` is Analysis A (moves and linear values, E1001–E1006).
+A path is a local followed by projections. A field and a tuple index are distinct per
+index, every array or slice element is the one step `[_]`, a dereference is `.*` and a
+variant payload is `.v`. Two paths overlap when one is a prefix of the other. The
+dataflow tracks init, moved and maybe, plus the variants an enum path may hold and,
+separately, which of those variants are still obligations: both variants of a `T ! E`,
+and for every other enum only a variant whose payload is linear. The join of a
+`match`, `try`, `catch` or `orelse` does not report a leak that every arm consumed.
+A consuming `for` over an array moves each element with `for_elem` and, on the normal
+exit only, `iter_consumed` of the array temporary.
+The other phase-9 analyses and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry
+stays.
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;

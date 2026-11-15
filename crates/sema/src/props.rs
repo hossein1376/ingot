@@ -221,10 +221,24 @@ impl Declarations {
             },
             TyKind::Param(p) => {
                 let g = self.granted(p);
+                // A bound that failed to resolve is `Poison`. Linearity is unknown,
+                // and unknown is not a linear obligation. `Fn` and `FnMut` grant
+                // `Discard` (spec §8), so those parameters are not linear either.
+                let poison = self
+                    .param_bounds
+                    .get(&p)
+                    .into_iter()
+                    .flatten()
+                    .any(|b| matches!(b, Bound::Poison));
+                let maybe_linear = if poison {
+                    Tri::Unknown
+                } else {
+                    Tri::from_bool(!g.contains(&PropBound::Discard))
+                };
                 Props {
                     copy: Tri::from_bool(g.contains(&PropBound::Copy)),
                     linear: Tri::No,
-                    maybe_linear: Tri::from_bool(!g.contains(&PropBound::Discard)),
+                    maybe_linear,
                     view: Tri::No,
                     maybe_view: Tri::from_bool(!g.contains(&PropBound::Owned)),
                     send: Tri::from_bool(g.contains(&PropBound::Send)),

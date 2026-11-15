@@ -2,10 +2,12 @@
 //!
 //! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
 //! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
-//! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phases 9 and 10 do
-//! not exist yet. A package with a body that passes phase 7, or with a constant that
-//! phase 6 cannot evaluate, is not accepted: `Analysis` says so in `not_implemented`,
-//! and the command line exits with status 2 instead of 0.
+//! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phase 9 runs
+//! Analysis A (moves and linear values) on the checked package's CFGs and adds its
+//! diagnostics. The rest of phase 9 and phase 10 do not exist yet, so a package with a
+//! body that passes phase 7 still records that in `not_implemented`. A constant that
+//! phase 6 cannot evaluate is not accepted either. The command line exits with status
+//! 2 instead of 0 when `not_implemented` is non-empty.
 
 use crate::files::{self, Files};
 use crate::loader::{self, LoadOptions, LoadedPackage};
@@ -231,6 +233,14 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         not_implemented.extend(bodies.not_implemented.iter().cloned());
         not_implemented.extend(lowered_not_implemented);
+        // Phase 9, Analysis A. Constant-evaluation CFGs are not in `cfgs`. The entry
+        // for the rest of phase 9 and for phase 10 stays.
+        diagnostics.extend(ingot_cfg::check::check_ownership(
+            &output.sema,
+            &mut bodies.declarations,
+            &all,
+            &cfgs,
+        ));
         if bodies.bodies.bodies.values().any(|b| {
             !b.failed
                 && matches!(
