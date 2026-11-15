@@ -195,8 +195,9 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
    against `Self` if `a_p` is itself a scope parameter.
 2. **Type-parameter flow.** For each type parameter `T` of `f`, let `U_T` be the union,
    over every parameter `q` whose type mentions `T`, of:
-   `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner*(A_q)` if it
-   occurs inside one. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
+   `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner⁺(A_q)` if it
+   occurs inside one. `inner⁺(S)` is `inner*(inner(S))`: what is hidden inside the
+   borrow, without the borrow's own origins (its loan, `Param(q)`), which are not a `T`. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
    `T`, store `U_T` through `a_p` as in step 1.
 3. **Result.** `S(dest)` is the union of:
    * for each `from p`: `A_p ∪ inner*(A_p)`;
@@ -306,7 +307,7 @@ element of `S` must be one of:
 * a loan that is not on local storage.
 
 `Param(x)` or `Inner(x)` otherwise is E1204, with the fix ` into p` on `x` when `p` is
-`&mut` or `&Scope` (E1206 rejects `into` on anything else, so there is then no fix). A
+`&mut`, `[]mut` or `&Scope` (E1206 rejects `into` on anything else, so there is then no fix). A
 loan on local storage is E1205.
 
 ### 6.3 Interface implementations

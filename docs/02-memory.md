@@ -185,7 +185,7 @@ a clause.
 
 ### 13.2 `into`: where a stored borrow goes
 
-A function may store a view argument inside something it was given by `&mut`, or start
+A function may store a view argument inside something it was given by `&mut` or `[]mut`, or start
 a task with it in a scope it was given (section 18), but only if the parameter says so.
 
 ```ingot
