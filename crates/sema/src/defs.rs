@@ -327,6 +327,28 @@ impl Sema {
         &mut self.modules[id.0 as usize]
     }
 
+    /// Phase 5's rule for `target.name` as seen from `from`: the name is an item of
+    /// `target` (not an import bound there) and `from` may name it. Completion reads
+    /// this; `resolve::Resolver::lookup_item_in` keeps the same rule.
+    pub fn may_name_item(
+        &self,
+        target: ModuleId,
+        from: ModuleId,
+        ns: Ns,
+        name: &str,
+    ) -> Option<DefId> {
+        let t = self.module(target);
+        if t.poisoned || t.import_names.contains_key(&(ns, name.to_string())) {
+            return None;
+        }
+        let found = match ns {
+            Ns::Value => t.values.get(name),
+            Ns::Type => t.types.get(name),
+        };
+        let def = *found?;
+        (target == from || self.def(def).vis == Vis::Pub).then_some(def)
+    }
+
     /// The pre-made definition of a scalar type name.
     pub fn scalar_def(&self, scalar: ScalarTy) -> DefId {
         self.scalar_defs

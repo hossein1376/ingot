@@ -685,3 +685,319 @@ fn symbols_are_in_source_order_with_members() {
             .any(|symbol| symbol.get("path").and_then(Json::as_str) == Some("app.other"))
     );
 }
+
+// --------------------------------------------------------------- completion
+
+const COMPLETE_LIB: &str = r#"/// A ticket.
+pub struct Ticket {
+    /// The seat.
+    pub seat: i64,
+    pub row: i64,
+    private: i64,
+}
+
+impl Ticket {
+    /// Twice the seat.
+    pub fn twice(self: &Ticket) -> i64 {
+        return self.seat + self.seat;
+    }
+    pub fn label(self: &Ticket) -> i64 {
+        return self.row;
+    }
+}
+
+/// A named thing.
+pub interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+impl Named for Ticket {
+    fn name(self: &Ticket) -> i64 {
+        return self.seat;
+    }
+}
+
+/// A colour.
+pub enum Colour {
+    red,
+    green: i64,
+}
+
+pub fn helper(value: i64) -> i64 {
+    return value + 1;
+}
+
+fn private_helper() -> i64 {
+    return 0;
+}
+
+pub fn ticket() -> i64 {
+    return 1;
+}
+
+pub const max: i64 = 3;
+"#;
+
+fn after(path: &Path, needle: &str, nth: usize) -> String {
+    shift(&at(path, needle, nth), needle.len())
+}
+
+fn completions(position: &str) -> Vec<Json> {
+    let (lines, status) = query(&["complete", position]);
+    assert_eq!(status, 0, "{lines:?}");
+    let summary = lines.last().expect("summary");
+    assert_eq!(
+        summary.get("ok").and_then(Json::as_bool),
+        Some(true),
+        "{lines:?}"
+    );
+    lines_with_type(&lines, "completion")
+}
+
+fn completion_names(lines: &[Json]) -> Vec<String> {
+    let mut names: Vec<String> = lines
+        .iter()
+        .map(|line| line.get("name").and_then(Json::as_str).unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+fn complete_package(label: &str) -> (PathBuf, PathBuf) {
+    let dir = package(
+        label,
+        &[
+            ("ingot.toml", "name = \"app\"\n"),
+            ("lib.ingot", COMPLETE_LIB),
+            ("main.ingot", ""),
+        ],
+    );
+    let main = dir.join("main.ingot");
+    (dir, main)
+}
+
+#[test]
+fn completion_after_a_value_dot_offers_fields_methods_and_builtin_members() {
+    let (_dir, main) = complete_package("complete-value");
+
+    let text =
+        "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "t.", 0));
+    // `name` is supplied by the impl of `Named`: offered once, as the impl's method.
+    assert_eq!(
+        completion_names(&lines),
+        ["label", "name", "row", "seat", "twice"]
+    );
+    let name = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("name"))
+        .unwrap();
+    assert_eq!(text_field(name, "path"), "app.lib.Ticket.name");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| { line.get("name").and_then(Json::as_str) == Some("private") })
+    );
+    let seat = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("seat"))
+        .unwrap();
+    assert_eq!(text_field(seat, "item"), "field");
+    assert_eq!(text_field(seat, "path"), "app.lib.Ticket.seat");
+    assert_eq!(text_field(seat, "signature"), "pub seat: i64");
+    assert_eq!(text_field(seat, "doc"), "The seat.");
+
+    // A partial name parses as written: no placeholder is needed.
+    let text =
+        "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.se;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "t.se", 0));
+    assert_eq!(completion_names(&lines), ["seat"]);
+
+    // A `&T` parameter looks through the borrow.
+    let text =
+        "import app.lib;\nfn run(t: &lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let names = completion_names(&completions(&after(&main, "t.", 0)));
+    assert!(names.contains(&"seat".to_string()), "{names:?}");
+    assert!(names.contains(&"twice".to_string()), "{names:?}");
+
+    // A cursor at the end of a line, before the `;` the line still needs.
+    let text =
+        "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let names = completion_names(&completions(&after(&main, "t.", 0)));
+    assert!(names.contains(&"seat".to_string()), "{names:?}");
+
+    // The members the language gives a slice.
+    let text = "fn run(s: []u8) -> i64 {\n    let x = s.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "s.", 0));
+    let names = completion_names(&lines);
+    assert!(names.contains(&"len".to_string()), "{names:?}");
+    assert!(names.contains(&"ptr".to_string()), "{names:?}");
+    for name in ["len", "ptr"] {
+        let line = lines
+            .iter()
+            .find(|line| line.get("name").and_then(Json::as_str) == Some(name))
+            .unwrap();
+        assert_eq!(line.get("item").and_then(Json::as_str), Some("fn"));
+    }
+}
+
+#[test]
+fn completion_after_a_type_parameter_offers_its_bounds_methods() {
+    let (_dir, main) = complete_package("complete-bound");
+    let text = "import app.lib;\nfn run[T: lib.Named](v: &T) -> i64 {\n    let x = v.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "v.", 0));
+    assert_eq!(completion_names(&lines), ["name"]);
+    assert_eq!(text_field(&lines[0], "path"), "app.lib.Named.name");
+}
+
+#[test]
+fn completion_after_a_module_and_a_type_offers_their_items() {
+    let (_dir, main) = complete_package("complete-context");
+
+    let text = "import app.lib;\nfn run() -> i64 {\n    let x = lib.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "lib.", 0));
+    let names = completion_names(&lines);
+    assert_eq!(
+        names,
+        ["Colour", "Named", "Ticket", "helper", "max", "ticket"]
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .find(|line| line.get("name").and_then(Json::as_str) == Some("helper"))
+            .map(|line| text_field(line, "signature")),
+        Some("pub fn helper(value: i64) -> i64")
+    );
+
+    let text =
+        "import app.lib;\nfn run() -> lib.Colour {\n    let x = lib.Colour.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "lib.Colour.", 0));
+    assert_eq!(completion_names(&lines), ["green", "red"]);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.get("item").and_then(Json::as_str) == Some("variant"))
+    );
+
+    let text = "import app.lib;\nfn run() -> i64 {\n    let x = lib.Ticket.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "lib.Ticket.", 0));
+    assert_eq!(completion_names(&lines), ["label", "twice"]);
+}
+
+#[test]
+fn completion_offers_std_items_after_an_import() {
+    let (_dir, main) = complete_package("complete-std");
+    let text = "import app.lib;\nimport std.Env;\nfn run(e: &En) -> i64 {\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "&En", 0));
+    let env = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("Env"))
+        .expect("Env");
+    assert_eq!(text_field(env, "path"), "std.Env");
+}
+
+#[test]
+fn completion_offers_names_in_scope() {
+    let (_dir, main) = complete_package("complete-scope");
+
+    // A local before the cursor is offered; one after it is not.
+    let text = "fn run(a: i64) -> i64 {\n    let before = 1;\n    let x = 2;\n    let z = \"s\";\n    let after = 2;\n    return before + after + x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let position = after(&main, "\"s\"", 0);
+    let names = completion_names(&completions(&position));
+    assert!(names.contains(&"a".to_string()), "{names:?}");
+    assert!(names.contains(&"before".to_string()), "{names:?}");
+    assert!(names.contains(&"x".to_string()), "{names:?}");
+    assert!(!names.contains(&"z".to_string()), "{names:?}");
+    assert!(!names.contains(&"after".to_string()), "{names:?}");
+
+    // A closed block's local is not in scope.
+    let text = "fn run() -> i64 {\n    {\n        let closed = 1;\n    }\n    let x = clo;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "clo", 0));
+    assert!(lines.is_empty(), "{lines:?}");
+
+    // A shadowed name is offered once, as the innermost.
+    let text = "fn run() -> i64 {\n    let v = 1;\n    {\n        let v = true;\n        let x = v;\n    }\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "= v;", 0));
+    let vs: Vec<&Json> = lines
+        .iter()
+        .filter(|line| line.get("name").and_then(Json::as_str) == Some("v"))
+        .collect();
+    assert_eq!(vs.len(), 1, "{lines:?}");
+    assert_eq!(vs[0].get("of").and_then(Json::as_str), Some("bool"));
+
+    // A closure parameter.
+    let text =
+        "fn run() -> i64 {\n    let f = fn [](c: i64) -> i64 { return c; };\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "return c", 0));
+    let c = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("c"))
+        .expect("c");
+    assert_eq!(text_field(c, "item"), "param");
+    assert_eq!(text_field(c, "of"), "i64");
+
+    // A loop binding.
+    let text =
+        "fn run() -> i64 {\n    for i in 0..3 {\n        let z = i;\n    }\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "= i;", 0));
+    let i = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("i"))
+        .expect("i");
+    assert_eq!(text_field(i, "item"), "local");
+    assert_eq!(text_field(i, "of"), "i64");
+
+    // A generic parameter.
+    let text =
+        "import app.lib;\nfn run[T: lib.Named](v: &T) -> i64 {\n    let x = T;\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "= T;", 0));
+    let generic = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("T"))
+        .expect("T");
+    assert_eq!(text_field(generic, "item"), "generic");
+    assert_eq!(text_field(generic, "path"), "T");
+}
+
+#[test]
+fn completion_separates_types_from_values_and_offers_builtins() {
+    let (_dir, main) = complete_package("complete-case");
+    let text = "import app.lib.Ticket;\nimport app.lib.ticket;\n\nfn run() -> i64 {\n    let x = Ti;\n    let y = ti;\n    let z = Op;\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    assert_eq!(
+        completion_names(&completions(&after(&main, "= Ti", 0))),
+        ["Ticket"]
+    );
+    assert_eq!(
+        completion_names(&completions(&after(&main, "= ti", 0))),
+        ["ticket"]
+    );
+    let lines = completions(&after(&main, "= Op", 0));
+    assert_eq!(completion_names(&lines), ["Option"]);
+    assert_eq!(text_field(&lines[0], "item"), "builtin");
+}
+
+#[test]
+fn completion_in_a_file_with_another_syntax_error_gives_no_lines() {
+    let (_dir, main) = complete_package("complete-error");
+    let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\nfn broken( {\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "t.", 0));
+    assert!(lines.is_empty(), "{lines:?}");
+}

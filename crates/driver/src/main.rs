@@ -33,7 +33,9 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<u8, String> {
     let Some(command) = args.first().map(String::as_str) else {
-        return Err("usage: ingot <check|fix|serve|conformance> [options] [path]".to_string());
+        return Err(
+            "usage: ingot <check|fix|query|serve|conformance> [options] [path]".to_string(),
+        );
     };
     let json = has_flag(args, "--json");
     match command {

@@ -24,7 +24,10 @@
 //!
 //! A body in which phase 7 reported an error (or met poison) has [`TypedBody::failed`]
 //! set; phases 8 to 10 skip it (pipeline section 3, "Phase gates"). The information of a
-//! failed body is partial and must not be read.
+//! failed body is partial and must not be read. An entry of a failed body whose type is
+//! not poison is final once the expression that owns it has been typed (a coercion may
+//! rewrite the entry of the expression being coerced while it is typed, and nothing
+//! changes it later), and may be read by tools, not by phases 8 to 10.
 //!
 //! Types in a generic body mention the generic parameters (`TyKind::Param`): the body is
 //! checked once, never instantiated here (pipeline section 1).

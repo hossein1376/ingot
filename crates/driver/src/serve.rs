@@ -146,7 +146,7 @@ impl Server {
             return query_failure(id, &kind, "not implemented: `query --name`", started);
         }
         let allowed: &[&str] = match kind.as_str() {
-            "def" | "type" => &["kind", "at", "name"],
+            "def" | "type" | "complete" => &["kind", "at", "name"],
             "symbols" => &["kind", "path", "match", "name"],
             _ => &["kind", "at", "path", "match", "name"],
         };

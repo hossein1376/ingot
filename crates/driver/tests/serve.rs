@@ -644,3 +644,54 @@ fn query_through_serve_equals_the_one_shot_command() {
         assert_eq!(served, one_shot, "{args:?}");
     }
 }
+
+fn query_at_end(path: &Path, needle: &str) -> String {
+    let text = fs::read_to_string(path).unwrap();
+    let offset = text.find(needle).unwrap() + needle.len();
+    let line = text[..offset].matches('\n').count() + 1;
+    let start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    format!("{}:{}:{}", path.display(), line, offset - start + 1)
+}
+
+#[test]
+fn completion_through_serve_equals_the_one_shot_command() {
+    let dir = package(
+        "serve-complete",
+        "name = \"app\"\n",
+        "import app.lib;\nfn f(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\n",
+    );
+    fs::write(
+        dir.join("lib.ingot"),
+        "pub struct Ticket {\n    pub seat: i64,\n    pub row: i64,\n}\n",
+    )
+    .unwrap();
+    let main = dir.join("main.ingot");
+
+    let cases = [
+        "import app.lib;\nfn f(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\n",
+        "import app.lib;\nfn f(t: lib.Ticket) -> i64 {\n    let x = t.se;\n    return x;\n}\n",
+        "import app.lib;\nfn f() -> i64 {\n    let x = lib.;\n    return x;\n}\n",
+    ];
+    let needles = ["t.", "t.se", "lib."];
+    for (text, needle) in cases.into_iter().zip(needles) {
+        fs::write(&main, text).unwrap();
+        let at = query_at_end(&main, needle);
+        let (one_shot, _status) = one_shot_query(&["complete", &at]);
+        let script = format!(
+            "{{\"id\":1,\"command\":\"query\",\"args\":{{\"kind\":\"complete\",\"at\":\"{}\"}}}}\n",
+            at.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let served = serve(&script);
+        assert_eq!(served.status.code(), Some(0), "{}", stderr(&served));
+        let lines: Vec<String> = stdout(&served).lines().map(String::from).collect();
+        assert!(!lines.is_empty(), "{needle}");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("\"type\":\"completion\""))
+        );
+        let served: Vec<String> = lines.iter().map(|line| as_one_shot(line, 1)).collect();
+        let one_shot: Vec<String> = one_shot.iter().map(|line| zero_ms(line)).collect();
+        assert_eq!(served, one_shot, "{needle}");
+    }
+}

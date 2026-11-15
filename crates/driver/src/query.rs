@@ -1,5 +1,5 @@
-//! `ingot query` (tools.md §5): `def`, `type` and `symbols` over the front end that
-//! `pipeline::Analysis` keeps for us.
+//! `ingot query` (tools.md §5): `def`, `type`, `symbols` and `complete` over the front
+//! end that `pipeline::Analysis` keeps for us.
 
 use crate::files::{Files, Overlays};
 use crate::pipeline::{self, Analysis, FrontEnd};
@@ -9,7 +9,8 @@ use ingot_diag::source::{Source, Sources, Span};
 use ingot_sema::defs::{DefId, DefKind, ImportTarget, ModuleId, PackageId, Vis};
 use ingot_sema::hir;
 use ingot_sema::hir::{ExprId, LocalId, PatId, Res};
-use ingot_sema::sigs::Tri;
+use ingot_sema::sigs::{Head, ItemSig, Tri};
+use ingot_sema::ty::{TyKind, TypeId};
 use ingot_sema::typed::{ExprRes, PatRes, TypedBody};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::token::{Token, TokenKind};
@@ -46,6 +47,16 @@ pub fn run(
             query_position(kind, at, overlays, started)
         }
         "symbols" => query_symbols(path, match_text, overlays, started),
+        "complete" => {
+            let Some(at) = at else {
+                return failure(
+                    kind,
+                    "`query complete` needs `FILE:LINE:COL`".to_string(),
+                    started,
+                );
+            };
+            query_complete(at, overlays, started)
+        }
         other => failure(other, format!("unknown query `{other}`"), started),
     }
 }
@@ -174,6 +185,177 @@ fn empty(kind: &str, started: Instant) -> QueryOutcome {
         error: None,
         exit: 0,
     }
+}
+
+// ---------------------------------------------------------------- completion
+
+/// A placeholder that starts a value name; it cannot collide with a name a program is
+/// likely to write.
+const VALUE_PLACEHOLDER: &str = "ingot_completion_value";
+/// The same for a type name (the first character is what the lexical class needs).
+const TYPE_PLACEHOLDER: &str = "IngotCompletionType";
+
+fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutcome {
+    let (file, line, col) = match parse_at(at) {
+        Ok(value) => value,
+        Err(message) => return failure("complete", message, started),
+    };
+    let files = Files::new(overlays.clone());
+    if !files.exists(&file) {
+        return failure(
+            "complete",
+            format!("{} does not exist", file.display()),
+            started,
+        );
+    }
+    let options = crate::pipeline::Options {
+        load: crate::loader::LoadOptions {
+            overlays: overlays.clone(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut analysis = match pipeline::analyze_path_with(&file, &options) {
+        Ok(analysis) => analysis,
+        Err(error) => return failure("complete", error.to_string(), started),
+    };
+    let Some(mut file_index) = source_index(&analysis, &file) else {
+        return failure(
+            "complete",
+            format!("{} is not part of the checked package", file.display()),
+            started,
+        );
+    };
+    let text = analysis.sources.get(file_index).text.clone();
+    let offset = match position_offset(&text, line, col) {
+        Ok(offset) => offset,
+        Err(message) => {
+            return failure(
+                "complete",
+                format!("{}:{}:{}: {message}", file.display(), line, col),
+                started,
+            );
+        }
+    };
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let (partial_start, partial) = partial_name(&text, offset);
+    // The first try uses the text as written. A file with an E01xx/E02xx error declares
+    // nothing, so a cursor after a dot needs a placeholder identifier to make it parse.
+    let member_start = partial_start;
+    let member_end;
+    if !file_parsed(&analysis, file_index) {
+        let placeholder = if partial.starts_with(|c: char| c.is_ascii_uppercase()) {
+            TYPE_PLACEHOLDER
+        } else {
+            VALUE_PLACEHOLDER
+        };
+        let inserted = format!("{}{}{}", &text[..offset], placeholder, &text[offset..]);
+        let mut retry = match analyze_text(&file, overlays, inserted) {
+            Ok(analysis) => analysis,
+            Err(error) => return failure("complete", error.to_string(), started),
+        };
+        let Some(retry_index) = source_index(&retry, &file) else {
+            return empty("complete", started);
+        };
+        file_index = retry_index;
+        if !file_parsed(&retry, retry_index) {
+            // The line may still be missing its `;` (a cursor at the end of
+            // `let x = t.`). Close the expression the way the completed line would.
+            let inserted = format!("{}{};{}", &text[..offset], placeholder, &text[offset..]);
+            retry = match analyze_text(&file, overlays, inserted) {
+                Ok(analysis) => analysis,
+                Err(error) => return failure("complete", error.to_string(), started),
+            };
+            let Some(retry_index) = source_index(&retry, &file) else {
+                return empty("complete", started);
+            };
+            file_index = retry_index;
+            if !file_parsed(&retry, retry_index) {
+                return empty("complete", started);
+            }
+        }
+        // The retry text has the same bytes before the cursor.
+        member_end = offset + placeholder.len();
+        analysis = retry;
+    } else {
+        // The file parsed: the partial name (or an empty span at the cursor) is the
+        // member or name the position names.
+        member_end = offset;
+    }
+    finish_completion(
+        analysis,
+        file_index,
+        offset,
+        member_start,
+        member_end,
+        &partial,
+        started,
+    )
+}
+
+fn finish_completion(
+    mut analysis: Analysis,
+    file_index: usize,
+    cursor: usize,
+    member_start: usize,
+    member_end: usize,
+    partial: &str,
+    started: Instant,
+) -> QueryOutcome {
+    let lines = {
+        let Some(front_end) = analysis.front_end.as_mut() else {
+            return empty("complete", started);
+        };
+        let mut context = Context::new(&analysis.sources, front_end);
+        context.complete(file_index, cursor, member_start, member_end, partial)
+    };
+    let mut lines: Vec<String> = lines.into_iter().map(|line| line.json.to_text()).collect();
+    let human = lines.join("\n");
+    lines.push(summary("complete", true, started));
+    QueryOutcome {
+        lines,
+        human,
+        error: None,
+        exit: 0,
+    }
+}
+
+fn analyze_text(file: &Path, overlays: &Overlays, text: String) -> std::io::Result<Analysis> {
+    let mut overlays = overlays.clone();
+    overlays.insert(file, text);
+    let options = crate::pipeline::Options {
+        load: crate::loader::LoadOptions {
+            overlays,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    pipeline::analyze_path_with(file, &options)
+}
+
+/// The cursor's file has a module that parsed: phase 5 declared its items.
+fn file_parsed(analysis: &Analysis, source_index: usize) -> bool {
+    analysis.front_end.as_ref().is_some_and(|front_end| {
+        front_end
+            .resolved
+            .sema
+            .modules
+            .iter()
+            .any(|module| module.file == Some(source_index) && !module.poisoned)
+    })
+}
+
+/// The identifier that ends at `offset` (the cursor's byte offset), and its start.
+fn partial_name(text: &str, offset: usize) -> (usize, String) {
+    let bytes = text.as_bytes();
+    let mut start = offset.min(bytes.len());
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    (start, text.get(start..offset).unwrap_or("").to_string())
 }
 
 fn query_symbols(
@@ -871,10 +1053,20 @@ impl<'a> Context<'a> {
 fn cut_signature(text: &str, span: Span, brace_after: Option<usize>) -> Option<String> {
     let slice = text.get(span.start..span.end)?;
     let mut end = slice.len();
-    if let Some(from) = brace_after
-        && let Some(index) = slice.get(from..).and_then(|rest| rest.find('{'))
-    {
-        end = from + index;
+    if let Some(from) = brace_after {
+        // A body's `{`, or the `;` of a function that has none (an interface or
+        // `extern` function).
+        let brace = slice
+            .get(from..)
+            .and_then(|rest| rest.find('{'))
+            .map(|i| from + i);
+        let semi = slice
+            .get(from..)
+            .and_then(|rest| rest.find(';'))
+            .map(|i| from + i);
+        if let Some(cut) = [brace, semi].into_iter().flatten().min() {
+            end = cut;
+        }
     }
     let mut out = slice[..end].trim_end().to_string();
     while out.ends_with(';') || out.ends_with(',') {
@@ -1954,5 +2146,986 @@ impl Context<'_> {
             return Some(self.sema.def(def).module);
         }
         None
+    }
+}
+
+// ------------------------------------------------------------ completion logic
+
+/// One completion line: its sort keys and the JSON line.
+struct CompletionLine {
+    name: String,
+    path: String,
+    json: Json,
+}
+
+/// What the name before the cursor's dot is.
+enum Member {
+    /// A value: its fields, methods and built-in members.
+    Value(ExprId),
+    /// A type: variants, inherent functions, interface methods.
+    Type(DefId),
+    /// A module: the items of it the current module may name.
+    Module(ModuleId),
+}
+
+impl Context<'_> {
+    /// The completion lines at the cursor. `member_start..member_end` is the partial
+    /// name (or the placeholder) after a dot; `cursor` is the cursor in the same text.
+    fn complete(
+        &mut self,
+        source_index: usize,
+        cursor: usize,
+        member_start: usize,
+        member_end: usize,
+        partial: &str,
+    ) -> Vec<CompletionLine> {
+        let Some(module) = self.module_of_file(source_index) else {
+            return Vec::new();
+        };
+        match self.member(module, member_start, member_end) {
+            Some(Member::Value(base)) => self.value_members(base, module, partial),
+            Some(Member::Type(def)) => self.type_members(def, partial),
+            Some(Member::Module(target)) => self.module_members(module, target, partial),
+            None => self.other_names(module, source_index, cursor, partial),
+        }
+    }
+
+    fn module_of_file(&self, file: usize) -> Option<ModuleId> {
+        self.sema
+            .modules
+            .iter()
+            .find(|module| module.file == Some(file))
+            .map(|module| module.id)
+    }
+
+    /// The expression whose name is exactly the partial name or placeholder, and what
+    /// stands before its dot.
+    fn member(&self, module: ModuleId, start: usize, end: usize) -> Option<Member> {
+        let pkg = self.checked_package();
+        for expr in &pkg.exprs {
+            if let hir::ExprKind::Field {
+                base, name_span, ..
+            } = &expr.kind
+                && name_span.start == start
+                && name_span.end >= end
+            {
+                return Some(self.classify_base(module, *base));
+            }
+        }
+        for expr in &pkg.exprs {
+            let hir::ExprKind::Path(path) = &expr.kind else {
+                continue;
+            };
+            if path.segments.len() < 2 {
+                continue;
+            }
+            let Some((_, last)) = path.segments.last() else {
+                continue;
+            };
+            if last.start != start || last.end < end {
+                continue;
+            }
+            let prefix = &path.segments[..path.segments.len() - 1];
+            if let Some(target) = self.module_prefix(module, prefix) {
+                return Some(Member::Module(target));
+            }
+        }
+        None
+    }
+
+    fn classify_base(&self, _module: ModuleId, base: ExprId) -> Member {
+        if let hir::ExprKind::Path(path) = &self.checked_package().expr(base).kind
+            && let Res::Def(def) = path.res
+        {
+            match self.sema.def(def).kind {
+                DefKind::Module => return Member::Module(self.sema.def(def).module),
+                DefKind::Struct
+                | DefKind::Enum
+                | DefKind::Interface
+                | DefKind::TypeAlias
+                | DefKind::SelfTy => {
+                    if let Some(target) = self.type_def(def) {
+                        return Member::Type(target);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Member::Value(base)
+    }
+
+    /// The type a `Type.` path names: `Self` resolves to its interface or impl target,
+    /// and an alias to the type it names.
+    fn type_def(&self, def: DefId) -> Option<DefId> {
+        let def = if matches!(self.sema.def(def).kind, DefKind::SelfTy) {
+            self.self_target(def)?
+        } else {
+            def
+        };
+        if let Some(ItemSig::Alias(alias)) = self.declarations.items.get(&def)
+            && let Some(ty) = alias.ty
+            && let TyKind::Adt(target, _) = self.declarations.types.kind(ty)
+        {
+            return Some(*target);
+        }
+        Some(def)
+    }
+
+    /// Walk a path prefix from `module` through imported modules.
+    fn module_prefix(
+        &self,
+        module: ModuleId,
+        segments: &[(String, ingot_diag::source::Span)],
+    ) -> Option<ModuleId> {
+        let mut current = module;
+        for (name, _) in segments {
+            current = self.module_target(current, name)?;
+        }
+        Some(current)
+    }
+
+    fn value_members(
+        &mut self,
+        base: ExprId,
+        module: ModuleId,
+        partial: &str,
+    ) -> Vec<CompletionLine> {
+        let Some(ty) = self.expr_type(base) else {
+            return Vec::new();
+        };
+        let mut ty = ty;
+        while let TyKind::Ref(_, inner) = self.declarations.types.kind(ty) {
+            ty = *inner;
+        }
+        if matches!(self.declarations.types.kind(ty), TyKind::Poison) {
+            return Vec::new();
+        }
+        let mut lines = BTreeMap::new();
+        match self.declarations.types.kind(ty).clone() {
+            TyKind::Adt(def, _) => {
+                let fields: Vec<DefId> = self
+                    .declarations
+                    .struct_sig(def)
+                    .map(|sig| {
+                        sig.fields
+                            .iter()
+                            .filter(|field| field.public || self.sema.def(def).module == module)
+                            .map(|field| field.def)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for field in fields {
+                    self.add_line(&mut lines, field);
+                }
+            }
+            TyKind::Array(..) => insert_builtin_member(&mut lines, "len"),
+            TyKind::Slice(..) => {
+                insert_builtin_member(&mut lines, "len");
+                insert_builtin_member(&mut lines, "ptr");
+            }
+            _ => {}
+        }
+        let methods: Vec<DefId> = self
+            .declarations
+            .methods_of(ty)
+            .into_iter()
+            .filter(|method| {
+                self.declarations
+                    .fn_sig(*method)
+                    .is_some_and(|sig| sig.is_method())
+            })
+            .collect();
+        // An interface method that an impl of this type supplies is offered once, as the
+        // impl's: the interface's declaration of it would be a second `name` in the list.
+        // A method the impl leaves to the interface's default is still offered.
+        let supplied: BTreeSet<&str> = methods
+            .iter()
+            .filter(|method| self.parent_kind(**method) == Some(DefKind::Impl))
+            .map(|method| self.sema.def(*method).name.as_str())
+            .collect();
+        let offered: Vec<DefId> = methods
+            .iter()
+            .copied()
+            .filter(|method| {
+                self.parent_kind(*method) != Some(DefKind::Interface)
+                    || !supplied.contains(self.sema.def(*method).name.as_str())
+            })
+            .collect();
+        for method in offered {
+            self.add_line(&mut lines, method);
+        }
+        finish_lines(lines, partial)
+    }
+
+    fn parent_kind(&self, def: DefId) -> Option<DefKind> {
+        self.sema
+            .def(def)
+            .parent
+            .map(|parent| self.sema.def(parent).kind)
+    }
+
+    fn type_members(&mut self, def: DefId, partial: &str) -> Vec<CompletionLine> {
+        let def = self.type_def(def).unwrap_or(def);
+        let mut lines = BTreeMap::new();
+        match self.sema.def(def).kind {
+            DefKind::Enum => {
+                let variants: Vec<DefId> = self
+                    .declarations
+                    .enum_sig(def)
+                    .map(|sig| sig.variants.iter().map(|variant| variant.def).collect())
+                    .unwrap_or_default();
+                for variant in variants {
+                    self.add_line(&mut lines, variant);
+                }
+            }
+            DefKind::Interface => {
+                let methods: Vec<DefId> = self
+                    .declarations
+                    .interface_sig(def)
+                    .map(|sig| sig.methods.clone())
+                    .unwrap_or_default();
+                for method in methods {
+                    self.add_line(&mut lines, method);
+                }
+            }
+            _ => {}
+        }
+        let impls: Vec<DefId> = self
+            .declarations
+            .impls
+            .inherent
+            .get(&Head::Adt(def))
+            .cloned()
+            .unwrap_or_default();
+        for imp in impls {
+            let methods: Vec<DefId> = self
+                .declarations
+                .impl_sig(imp)
+                .map(|sig| sig.methods.values().copied().collect())
+                .unwrap_or_default();
+            for method in methods {
+                self.add_line(&mut lines, method);
+            }
+        }
+        finish_lines(lines, partial)
+    }
+
+    fn module_members(
+        &self,
+        from: ModuleId,
+        target: ModuleId,
+        partial: &str,
+    ) -> Vec<CompletionLine> {
+        let data = self.sema.module(target);
+        let mut items = Vec::new();
+        for (name, def) in &data.values {
+            items.push((name.clone(), ingot_sema::defs::Ns::Value, *def));
+        }
+        for (name, def) in &data.types {
+            items.push((name.clone(), ingot_sema::defs::Ns::Type, *def));
+        }
+        let mut lines = BTreeMap::new();
+        for (name, ns, def) in items {
+            if self.sema.may_name_item(target, from, ns, &name).is_none() {
+                continue;
+            }
+            self.add_line(&mut lines, def);
+        }
+        finish_lines(lines, partial)
+    }
+
+    fn other_names(
+        &mut self,
+        module: ModuleId,
+        source_index: usize,
+        cursor: usize,
+        partial: &str,
+    ) -> Vec<CompletionLine> {
+        let mut chosen: BTreeMap<String, CompletionLine> = BTreeMap::new();
+        for generic in self.enclosing_generics(source_index, cursor) {
+            let line = generic_line(generic);
+            chosen.insert(line.name.clone(), line);
+        }
+        for (name, local) in self.locals_at(source_index, cursor) {
+            chosen.insert(name, self.local_line(local));
+        }
+        let data = self.sema.module(module);
+        let mut items = Vec::new();
+        for (name, def) in &data.values {
+            items.push((name.clone(), ingot_sema::defs::Ns::Value, *def));
+        }
+        for (name, def) in &data.types {
+            items.push((name.clone(), ingot_sema::defs::Ns::Type, *def));
+        }
+        for (name, _ns, def) in items {
+            if chosen.contains_key(&name) {
+                continue;
+            }
+            if let Some(line) = self.completion_def(def) {
+                chosen.insert(name, line);
+            }
+        }
+        let builtins: Vec<String> = self
+            .sema
+            .module(ingot_sema::defs::BUILTIN_MODULE)
+            .types
+            .keys()
+            .cloned()
+            .collect();
+        for name in builtins {
+            chosen
+                .entry(name.clone())
+                .or_insert_with(|| builtin_line(&name));
+        }
+        let mut lines: Vec<CompletionLine> = chosen
+            .into_values()
+            .filter(|line| line.name.starts_with(partial))
+            .collect();
+        lines.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+        lines
+    }
+
+    fn add_line(&self, lines: &mut BTreeMap<(String, String), CompletionLine>, def: DefId) {
+        if let Some(line) = self.completion_def(def) {
+            lines
+                .entry((line.name.clone(), line.path.clone()))
+                .or_insert(line);
+        }
+    }
+
+    /// A completion line for a declared name, or for a built-in name (`item` is
+    /// `builtin`, and it has no path, signature or doc).
+    fn completion_def(&self, def: DefId) -> Option<CompletionLine> {
+        let data = self.sema.def(def);
+        if matches!(data.kind, DefKind::Package | DefKind::Poison) {
+            return None;
+        }
+        if matches!(data.kind, DefKind::Builtin(_)) || self.is_hidden(def) {
+            return Some(builtin_line(&data.name));
+        }
+        let definition = self.definition_of(def)?;
+        let path = definition.get("path")?.as_str()?.to_string();
+        let item = definition.get("item")?.as_str()?.to_string();
+        let mut members = vec![
+            ("type".to_string(), Json::String("completion".to_string())),
+            ("name".to_string(), Json::String(data.name.clone())),
+            ("item".to_string(), Json::String(item)),
+            ("path".to_string(), Json::String(path.clone())),
+        ];
+        if let Some(signature) = definition.get("signature").and_then(Json::as_str) {
+            members.push(("signature".to_string(), Json::String(signature.to_string())));
+        }
+        if let Some(doc) = definition.get("doc").and_then(Json::as_str) {
+            members.push(("doc".to_string(), Json::String(doc.to_string())));
+        }
+        Some(CompletionLine {
+            name: data.name.clone(),
+            path,
+            json: Json::Object(members.into_iter().collect()),
+        })
+    }
+
+    fn local_line(&self, local: LocalId) -> CompletionLine {
+        let data = self.checked_package().local(local);
+        let item = match data.kind {
+            hir::LocalKind::Param => "param",
+            _ => "local",
+        };
+        let mut members = vec![
+            ("type".to_string(), Json::String("completion".to_string())),
+            ("name".to_string(), Json::String(data.name.clone())),
+            ("item".to_string(), Json::String(item.to_string())),
+        ];
+        if let Some(ty) = self.local_type(local)
+            && !matches!(self.declarations.types.kind(ty), TyKind::Poison)
+        {
+            members.push((
+                "of".to_string(),
+                Json::String(self.declarations.types.display(self.sema, ty)),
+            ));
+        }
+        CompletionLine {
+            name: data.name.clone(),
+            path: String::new(),
+            json: Json::Object(members.into_iter().collect()),
+        }
+    }
+
+    /// The type of an expression, from a typed body. A failed body is read here: the
+    /// entry of an expression it typed and did not poison is final (see `typed.rs`).
+    fn expr_type(&self, expr: ExprId) -> Option<TypeId> {
+        for body in self.bodies.bodies.values() {
+            if let Some(info) = body.expr(expr) {
+                return Some(info.ty);
+            }
+        }
+        None
+    }
+
+    fn local_type(&self, local: LocalId) -> Option<TypeId> {
+        for body in self.bodies.bodies.values() {
+            if let Some(info) = body.local(local) {
+                return Some(info.ty);
+            }
+        }
+        None
+    }
+
+    /// The generic parameters of every item that contains the cursor, outermost first.
+    fn enclosing_generics(&self, source_index: usize, cursor: usize) -> Vec<&hir::GenericParam> {
+        let pkg = self.checked_package();
+        let mut found: Vec<(usize, &[hir::GenericParam])> = Vec::new();
+        for item in pkg.items.values() {
+            if self.sema.def(item_def(item)).file != Some(source_index) {
+                continue;
+            }
+            let span = item_span(item);
+            if !span_contains(span, cursor) {
+                continue;
+            }
+            let generics: &[hir::GenericParam] = match item {
+                hir::Item::Fn(item) => &item.generics,
+                hir::Item::Struct(item) => &item.generics,
+                hir::Item::Enum(item) => &item.generics,
+                hir::Item::Interface(item) => &item.generics,
+                hir::Item::Impl(item) => &item.generics,
+                hir::Item::Alias(item) => &item.generics,
+                _ => &[],
+            };
+            if !generics.is_empty() {
+                found.push((span.end - span.start, generics));
+            }
+        }
+        found.sort_by_key(|item| std::cmp::Reverse(item.0));
+        let mut chosen: BTreeMap<String, &hir::GenericParam> = BTreeMap::new();
+        for (_, generics) in found {
+            for generic in generics {
+                chosen.insert(generic.name.clone(), generic);
+            }
+        }
+        chosen.into_values().collect()
+    }
+
+    /// The locals and parameters in scope at the cursor, innermost binding per name.
+    fn locals_at(&self, source_index: usize, cursor: usize) -> BTreeMap<String, LocalId> {
+        let pkg = self.checked_package();
+        let mut scopes = Scopes {
+            pkg,
+            cursor,
+            out: BTreeMap::new(),
+        };
+        for item in pkg.items.values() {
+            if self.sema.def(item_def(item)).file != Some(source_index) {
+                continue;
+            }
+            match item {
+                hir::Item::Fn(f) => {
+                    let Some(body) = f.body else { continue };
+                    if !span_contains(pkg.block(body).span, cursor) {
+                        continue;
+                    }
+                    for param in &f.params {
+                        scopes.bind(param.local);
+                    }
+                    scopes.block(body);
+                    break;
+                }
+                hir::Item::Test(t) if span_contains(pkg.block(t.body).span, cursor) => {
+                    scopes.block(t.body);
+                    break;
+                }
+                hir::Item::Const(c) if span_contains(pkg.expr(c.value).span, cursor) => {
+                    scopes.expr(c.value);
+                    break;
+                }
+                hir::Item::Static(s) if span_contains(pkg.expr(s.value).span, cursor) => {
+                    scopes.expr(s.value);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        scopes.out
+    }
+}
+
+fn insert_builtin_member(lines: &mut BTreeMap<(String, String), CompletionLine>, name: &str) {
+    let line = builtin_member_line(name);
+    lines
+        .entry((line.name.clone(), line.path.clone()))
+        .or_insert(line);
+}
+
+fn builtin_member_line(name: &str) -> CompletionLine {
+    CompletionLine {
+        name: name.to_string(),
+        path: String::new(),
+        json: object(vec![
+            ("type", Json::String("completion".to_string())),
+            ("name", Json::String(name.to_string())),
+            ("item", Json::String("fn".to_string())),
+        ]),
+    }
+}
+
+fn builtin_line(name: &str) -> CompletionLine {
+    CompletionLine {
+        name: name.to_string(),
+        path: String::new(),
+        json: object(vec![
+            ("type", Json::String("completion".to_string())),
+            ("name", Json::String(name.to_string())),
+            ("item", Json::String("builtin".to_string())),
+        ]),
+    }
+}
+
+fn generic_line(generic: &hir::GenericParam) -> CompletionLine {
+    CompletionLine {
+        name: generic.name.clone(),
+        path: generic.name.clone(),
+        json: object(vec![
+            ("type", Json::String("completion".to_string())),
+            ("name", Json::String(generic.name.clone())),
+            ("item", Json::String("generic".to_string())),
+            ("path", Json::String(generic.name.clone())),
+        ]),
+    }
+}
+
+fn finish_lines(
+    lines: BTreeMap<(String, String), CompletionLine>,
+    partial: &str,
+) -> Vec<CompletionLine> {
+    let mut lines: Vec<CompletionLine> = lines
+        .into_values()
+        .filter(|line| line.name.starts_with(partial))
+        .collect();
+    lines.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+    lines
+}
+
+fn span_contains(span: Span, offset: usize) -> bool {
+    span.start <= offset && offset < span.end
+}
+
+fn item_def(item: &hir::Item) -> DefId {
+    match item {
+        hir::Item::Fn(item) => item.def,
+        hir::Item::Struct(item) => item.def,
+        hir::Item::Enum(item) => item.def,
+        hir::Item::Interface(item) => item.def,
+        hir::Item::Impl(item) => item.def,
+        hir::Item::Const(item) => item.def,
+        hir::Item::Static(item) => item.def,
+        hir::Item::Alias(item) => item.def,
+        hir::Item::Test(item) => item.def,
+    }
+}
+
+fn item_span(item: &hir::Item) -> Span {
+    match item {
+        hir::Item::Fn(item) => item.span,
+        hir::Item::Struct(item) => item.span,
+        hir::Item::Enum(item) => item.span,
+        hir::Item::Interface(item) => item.span,
+        hir::Item::Impl(item) => item.span,
+        hir::Item::Const(item) => item.span,
+        hir::Item::Static(item) => item.span,
+        hir::Item::Alias(item) => item.span,
+        hir::Item::Test(item) => item.span,
+    }
+}
+
+/// The bindings in scope at one cursor, walked from the body that contains it.
+struct Scopes<'a> {
+    pkg: &'a hir::Package,
+    cursor: usize,
+    out: BTreeMap<String, LocalId>,
+}
+
+impl Scopes<'_> {
+    fn bind(&mut self, local: LocalId) {
+        let pkg = self.pkg;
+        let data = pkg.local(local);
+        self.out.insert(data.name.clone(), local);
+    }
+
+    fn bind_pat(&mut self, id: PatId) {
+        let pkg = self.pkg;
+        match &pkg.pat(id).kind {
+            hir::PatKind::Bind { local } => self.bind(*local),
+            hir::PatKind::Variant { payload, .. } => {
+                if let Some(payload) = payload {
+                    self.bind_pat(*payload);
+                }
+            }
+            hir::PatKind::Tuple(patterns) => {
+                for pattern in patterns {
+                    self.bind_pat(*pattern);
+                }
+            }
+            hir::PatKind::Struct { fields, .. } => {
+                for field in fields {
+                    self.bind_pat(field.pattern);
+                }
+            }
+            hir::PatKind::Range { lo, hi, .. } => {
+                self.bind_pat(*lo);
+                self.bind_pat(*hi);
+            }
+            hir::PatKind::Wild | hir::PatKind::Literal(_) | hir::PatKind::Poison => {}
+        }
+    }
+
+    fn block(&mut self, id: hir::BlockId) {
+        let pkg = self.pkg;
+        let block = pkg.block(id);
+        if !span_contains(block.span, self.cursor) {
+            return;
+        }
+        for stmt_id in &block.stmts {
+            let stmt = pkg.stmt(*stmt_id);
+            if stmt.span.end <= self.cursor {
+                if let hir::StmtKind::Let { pattern, .. } = &stmt.kind {
+                    self.bind_pat(*pattern);
+                }
+            } else if span_contains(stmt.span, self.cursor) {
+                self.stmt(*stmt_id);
+                break;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn stmt(&mut self, id: hir::StmtId) {
+        let pkg = self.pkg;
+        match &pkg.stmt(id).kind {
+            hir::StmtKind::Let { init, .. } => self.expr(*init),
+            hir::StmtKind::Assign { place, value, .. } => {
+                self.expr(*place);
+                self.expr(*value);
+            }
+            hir::StmtKind::Discard(expr)
+            | hir::StmtKind::Expr(expr)
+            | hir::StmtKind::Fail(expr) => self.expr(*expr),
+            hir::StmtKind::Return(Some(expr)) => self.expr(*expr),
+            hir::StmtKind::Return(None)
+            | hir::StmtKind::Break { .. }
+            | hir::StmtKind::Continue { .. }
+            | hir::StmtKind::Poison => {}
+            hir::StmtKind::Defer { body, .. } => self.block(*body),
+            hir::StmtKind::Block(block) => self.block(*block),
+            hir::StmtKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                if span_contains(cond.span, self.cursor) {
+                    self.expr(cond.expr);
+                } else if span_contains(pkg.block(*then).span, self.cursor) {
+                    if let Some(pattern) = cond.let_pattern {
+                        self.bind_pat(pattern);
+                    }
+                    self.block(*then);
+                } else if let Some(otherwise) = otherwise
+                    && span_contains(pkg.stmt(*otherwise).span, self.cursor)
+                {
+                    self.stmt(*otherwise);
+                }
+            }
+            hir::StmtKind::While { cond, body, .. } => {
+                if span_contains(cond.span, self.cursor) {
+                    self.expr(cond.expr);
+                } else if span_contains(pkg.block(*body).span, self.cursor) {
+                    if let Some(pattern) = cond.let_pattern {
+                        self.bind_pat(pattern);
+                    }
+                    self.block(*body);
+                }
+            }
+            hir::StmtKind::Loop { body, .. } => self.block(*body),
+            hir::StmtKind::For {
+                grain,
+                vars,
+                index,
+                iter,
+                range_end,
+                step,
+                body,
+                ..
+            } => {
+                let in_outer = grain
+                    .is_some_and(|expr| span_contains(pkg.expr(expr).span, self.cursor))
+                    || span_contains(pkg.expr(*iter).span, self.cursor)
+                    || range_end
+                        .is_some_and(|(_, expr)| span_contains(pkg.expr(expr).span, self.cursor))
+                    || step.is_some_and(|expr| span_contains(pkg.expr(expr).span, self.cursor));
+                if in_outer {
+                    if let Some(grain) = grain {
+                        self.expr(*grain);
+                    }
+                    self.expr(*iter);
+                    if let Some((_, end)) = range_end {
+                        self.expr(*end);
+                    }
+                    if let Some(step) = step {
+                        self.expr(*step);
+                    }
+                } else if span_contains(pkg.block(*body).span, self.cursor) {
+                    for var in vars.iter().chain(index.iter()) {
+                        if let Some(local) = var.local {
+                            self.bind(local);
+                        }
+                    }
+                    self.block(*body);
+                }
+            }
+            hir::StmtKind::Match { scrutinee, arms } => {
+                if span_contains(pkg.expr(*scrutinee).span, self.cursor) {
+                    self.expr(*scrutinee);
+                } else {
+                    self.arms(arms);
+                }
+            }
+            hir::StmtKind::Scope { local, body, .. } => {
+                if span_contains(pkg.block(*body).span, self.cursor) {
+                    self.bind(*local);
+                    self.block(*body);
+                }
+            }
+            hir::StmtKind::Spawn { call, scope } => {
+                self.expr(*call);
+                self.expr(*scope);
+            }
+            hir::StmtKind::Dispatch {
+                call,
+                domain,
+                executor,
+            } => {
+                self.expr(*call);
+                self.expr(*domain);
+                self.expr(*executor);
+            }
+            hir::StmtKind::Select { arms } => {
+                for arm in arms {
+                    if !span_contains(arm.span, self.cursor) {
+                        continue;
+                    }
+                    if let Some(call) = arm.call
+                        && span_contains(pkg.expr(call).span, self.cursor)
+                    {
+                        self.expr(call);
+                    } else if span_contains(pkg.block(arm.body).span, self.cursor) {
+                        self.bind_pat(arm.pattern);
+                        self.block(arm.body);
+                    }
+                    break;
+                }
+            }
+            hir::StmtKind::Unsafe { body, .. } => self.block(*body),
+        }
+    }
+
+    fn arms(&mut self, arms: &[hir::Arm]) {
+        for arm in arms {
+            if !span_contains(arm.span, self.cursor) {
+                continue;
+            }
+            self.arm(arm);
+            break;
+        }
+    }
+
+    fn arm(&mut self, arm: &hir::Arm) {
+        let pkg = self.pkg;
+        if let Some(guard) = arm.guard
+            && span_contains(pkg.expr(guard).span, self.cursor)
+        {
+            for pattern in &arm.patterns {
+                self.bind_pat(*pattern);
+            }
+            self.expr(guard);
+            return;
+        }
+        match &arm.body {
+            hir::ArmBody::Block(block) if span_contains(pkg.block(*block).span, self.cursor) => {
+                for pattern in &arm.patterns {
+                    self.bind_pat(*pattern);
+                }
+                self.block(*block);
+            }
+            hir::ArmBody::Expr(expr) if span_contains(pkg.expr(*expr).span, self.cursor) => {
+                for pattern in &arm.patterns {
+                    self.bind_pat(*pattern);
+                }
+                self.expr(*expr);
+            }
+            _ => {}
+        }
+    }
+
+    fn expr(&mut self, id: ExprId) {
+        let pkg = self.pkg;
+        let expr = pkg.expr(id);
+        if !span_contains(expr.span, self.cursor) {
+            return;
+        }
+        match &expr.kind {
+            hir::ExprKind::Block(block) => self.block(*block),
+            hir::ExprKind::Closure(closure) => {
+                for capture in &closure.captures {
+                    self.out.insert(capture.name.clone(), capture.local);
+                }
+                for param in &closure.params {
+                    self.bind(param.local);
+                }
+                self.block(closure.body);
+            }
+            hir::ExprKind::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                if span_contains(cond.span, self.cursor) {
+                    self.expr(cond.expr);
+                } else if span_contains(pkg.expr(*then).span, self.cursor) {
+                    if let Some(pattern) = cond.let_pattern {
+                        self.bind_pat(pattern);
+                    }
+                    self.expr(*then);
+                } else if span_contains(pkg.expr(*otherwise).span, self.cursor) {
+                    self.expr(*otherwise);
+                }
+            }
+            hir::ExprKind::Match { scrutinee, arms } => {
+                if span_contains(pkg.expr(*scrutinee).span, self.cursor) {
+                    self.expr(*scrutinee);
+                } else {
+                    self.arms(arms);
+                }
+            }
+            hir::ExprKind::Catch {
+                value,
+                binding,
+                handler,
+                ..
+            } => {
+                if span_contains(pkg.expr(*value).span, self.cursor) {
+                    self.expr(*value);
+                } else {
+                    if let Some(binding) = binding {
+                        self.bind(*binding);
+                    }
+                    self.handler(handler);
+                }
+            }
+            hir::ExprKind::Orelse { value, handler, .. } => {
+                if span_contains(pkg.expr(*value).span, self.cursor) {
+                    self.expr(*value);
+                } else {
+                    self.handler(handler);
+                }
+            }
+            hir::ExprKind::Builtin { args, .. } => {
+                for arg in args {
+                    self.expr(*arg);
+                }
+            }
+            hir::ExprKind::Unary { expr, .. } | hir::ExprKind::Deref { base: expr, .. } => {
+                self.expr(*expr);
+            }
+            hir::ExprKind::Binary { lhs, rhs, .. } => {
+                self.expr(*lhs);
+                self.expr(*rhs);
+            }
+            hir::ExprKind::Call { callee, args, .. } => {
+                self.expr(*callee);
+                for arg in args {
+                    self.expr(*arg);
+                }
+            }
+            hir::ExprKind::Index { base, index, .. } => {
+                self.expr(*base);
+                self.expr(*index);
+            }
+            hir::ExprKind::Slice { base, lo, hi, .. } => {
+                self.expr(*base);
+                if let Some(lo) = lo {
+                    self.expr(*lo);
+                }
+                if let Some(hi) = hi {
+                    self.expr(*hi);
+                }
+            }
+            hir::ExprKind::Field { base, .. } | hir::ExprKind::TupleField { base, .. } => {
+                self.expr(*base);
+            }
+            hir::ExprKind::TypeApply { base, args } => {
+                self.expr(*base);
+                for arg in args {
+                    if let hir::GenericArg::Const(expr) = arg {
+                        self.expr(*expr);
+                    }
+                }
+            }
+            hir::ExprKind::Cast { expr: inner, .. } => self.expr(*inner),
+            hir::ExprKind::StructLit { fields, .. }
+            | hir::ExprKind::StructShorthand { fields, .. } => {
+                for field in fields {
+                    self.expr(field.value);
+                }
+            }
+            hir::ExprKind::EnumLit { payload, .. } => {
+                if let Some(payload) = payload {
+                    self.expr(*payload);
+                }
+            }
+            hir::ExprKind::ArrayLit { len, elems, .. } => {
+                self.expr(*len);
+                for elem in elems {
+                    self.expr(*elem);
+                }
+            }
+            hir::ExprKind::Range { lo, hi, .. } => {
+                self.expr(*lo);
+                self.expr(*hi);
+            }
+            hir::ExprKind::Tuple(items) => {
+                for item in items {
+                    self.expr(*item);
+                }
+            }
+            hir::ExprKind::Paren(inner) => self.expr(*inner),
+            hir::ExprKind::Spawn { call, scope } => {
+                self.expr(*call);
+                self.expr(*scope);
+            }
+            hir::ExprKind::Dispatch {
+                call,
+                domain,
+                executor,
+            } => {
+                self.expr(*call);
+                self.expr(*domain);
+                self.expr(*executor);
+            }
+            hir::ExprKind::Unsafe { body, .. } => self.expr(*body),
+            hir::ExprKind::Int { .. }
+            | hir::ExprKind::Float(_)
+            | hir::ExprKind::Str(_)
+            | hir::ExprKind::CStr(_)
+            | hir::ExprKind::Bool(_)
+            | hir::ExprKind::Path(_)
+            | hir::ExprKind::Poison => {}
+        }
+    }
+
+    fn handler(&mut self, handler: &hir::Handler) {
+        match handler {
+            hir::Handler::Expr(expr) => self.expr(*expr),
+            hir::Handler::Block(block) => self.block(*block),
+        }
     }
 }

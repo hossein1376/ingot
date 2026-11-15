@@ -151,6 +151,7 @@ impl Server {
                 "textDocument/hover" => self.hover(id, &params),
                 "textDocument/documentSymbol" => self.document_symbol(id, &params),
                 "workspace/symbol" => self.workspace_symbol(id, &params),
+                "textDocument/completion" => self.completion(id, &params),
                 _ => {}
             }
         }
@@ -185,7 +186,8 @@ impl Server {
             | "textDocument/definition"
             | "textDocument/hover"
             | "textDocument/documentSymbol"
-            | "workspace/symbol" => deferred.push((method.to_string(), id, params.clone())),
+            | "workspace/symbol"
+            | "textDocument/completion" => deferred.push((method.to_string(), id, params.clone())),
             other => self.error(id, -32601, &format!("unknown request `{other}`")),
         }
     }
@@ -234,6 +236,10 @@ impl Server {
             ("hoverProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
             ("workspaceSymbolProvider", Json::Bool(true)),
+            (
+                "completionProvider",
+                object(vec![("triggerCharacters", Json::Array(vec![string(".")]))]),
+            ),
         ]);
         self.result(
             id,
@@ -902,6 +908,87 @@ impl Server {
         self.result(id, Json::Array(symbols));
     }
 
+    fn completion(&mut self, id: Json, params: &Json) {
+        let mut raw = Vec::new();
+        let mut text = String::new();
+        let mut offset = 0usize;
+        if let Some((_uri, path, document)) = self.document(params)
+            && let Some(position) = params.get("position")
+        {
+            let line = position
+                .get("line")
+                .and_then(Json::as_i64)
+                .unwrap_or(0)
+                .max(0) as u32;
+            let character = position
+                .get("character")
+                .and_then(Json::as_i64)
+                .unwrap_or(0)
+                .max(0) as u32;
+            offset = position::position_to_offset(&document, line, character, self.encoding);
+            let (query_line, byte) =
+                position::offset_to_position(&document, offset, Encoding::Utf8);
+            let at = format!("{}:{}:{}", path.display(), query_line + 1, byte + 1);
+            raw = self.query_request("complete", vec![("at".to_string(), string(&at))]);
+            text = document;
+        }
+        let value_member = completion_dot_base(&text, offset).is_some_and(|base| {
+            if base.starts_with(|c: char| c.is_ascii_uppercase()) {
+                return false;
+            }
+            // A module's items are all `<module path>.<name>`: if every path in
+            // the list ends with the base name, the dot is on a module, not a value.
+            let paths: Vec<&str> = raw
+                .iter()
+                .filter(|line| line.get("type").and_then(Json::as_str) == Some("completion"))
+                .filter_map(|line| line.get("path").and_then(Json::as_str))
+                .collect();
+            if paths.is_empty() {
+                return true;
+            }
+            !paths.iter().all(|path| {
+                path.rsplit_once('.').is_some_and(|(prefix, _)| {
+                    prefix == base || prefix.ends_with(&format!(".{base}"))
+                })
+            })
+        });
+        let mut items = Vec::new();
+        for line in &raw {
+            if line.get("type").and_then(Json::as_str) != Some("completion") {
+                continue;
+            }
+            let Some(label) = line.get("name").and_then(Json::as_str) else {
+                continue;
+            };
+            let item = line.get("item").and_then(Json::as_str).unwrap_or("local");
+            let mut members = vec![
+                ("label", string(label)),
+                ("kind", number(completion_kind(item, value_member))),
+            ];
+            let detail = line
+                .get("signature")
+                .and_then(Json::as_str)
+                .or_else(|| line.get("of").and_then(Json::as_str));
+            if let Some(detail) = detail {
+                members.push(("detail", string(detail)));
+            }
+            if let Some(doc) = line.get("doc").and_then(Json::as_str) {
+                members.push((
+                    "documentation",
+                    object(vec![("kind", string("markdown")), ("value", string(doc))]),
+                ));
+            }
+            items.push(object(members));
+        }
+        self.result(
+            id,
+            object(vec![
+                ("isIncomplete", Json::Bool(false)),
+                ("items", Json::Array(items)),
+            ]),
+        );
+    }
+
     fn symbols_from_lines(&mut self, lines: &[Json], target: &CheckTarget) -> Vec<Json> {
         let mut out = Vec::new();
         for line in lines {
@@ -1020,6 +1107,54 @@ fn same_query_span(a: Option<&Json>, b: Option<&Json>) -> bool {
         return false;
     };
     a.get("file") == b.get("file") && offsets(a) == offsets(b)
+}
+
+/// LSP.md's completion kinds. A function after a dot on a value is a method.
+fn completion_kind(item: &str, value_member: bool) -> i64 {
+    match item {
+        "fn" if value_member => 2,
+        "fn" => 3,
+        "field" => 5,
+        "variant" => 20,
+        "struct" => 22,
+        "enum" => 13,
+        "interface" => 8,
+        "type" | "generic" => 25,
+        "const" => 21,
+        "static" => 6,
+        "local" | "param" => 6,
+        "module" => 9,
+        "builtin" => 7,
+        _ => 1,
+    }
+}
+
+/// The last identifier before the dot the cursor is after, if there is one.
+fn completion_dot_base(text: &str, offset: usize) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = offset.min(bytes.len());
+    while index > 0 && completion_ident(bytes[index - 1]) {
+        index -= 1;
+    }
+    while index > 0 && bytes[index - 1].is_ascii_whitespace() {
+        index -= 1;
+    }
+    if index == 0 || bytes[index - 1] != b'.' {
+        return None;
+    }
+    index -= 1;
+    while index > 0 && bytes[index - 1].is_ascii_whitespace() {
+        index -= 1;
+    }
+    let end = index;
+    while index > 0 && completion_ident(bytes[index - 1]) {
+        index -= 1;
+    }
+    Some(text[index..end].to_string())
+}
+
+fn completion_ident(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn symbol_kind(item: &str, path: &str) -> i64 {
