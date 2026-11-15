@@ -1,0 +1,19 @@
+//! expect: reject
+//! section: 10, 11
+
+linear struct Token { id: i32 }
+
+impl Token {
+    fn make(id: i32) -> Token { return Token.{ id: id }; }
+    fn release(self: Token) { let Token.{ id: _ } = self; }
+}
+
+enum Three { a: Token, b: Token, c: Token }
+
+fn f(e: Three) {
+    match e {
+        .a(t) => { t.release(); }
+        .b(t) => { @assert(t.id >= 0); } //~ E1003
+        .c(t) => { @assert(t.id >= 0); } //~ E1003
+    }
+}

@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 11
+
+struct Buf { len: i64 }
+
+struct S { a: Buf, b: i64 }
+
+fn take(s: S) -> i64 {
+    return s.b;
+}
+
+fn f() -> i64 {
+    var s = S.{ a: Buf.{ len: 1 }, b: 2 };
+    let b = s.a;
+    let n = b.len;
+    s.a = Buf.{ len: 3 };
+    return n + take(s);
+}

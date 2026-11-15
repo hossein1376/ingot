@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 10, 11
+
+import partial_move_inside_module.lib;
+
+fn f() -> i64 {
+    return lib.dismantle(lib.make());
+}

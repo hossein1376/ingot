@@ -1,0 +1,17 @@
+//! expect: reject
+//! section: 11
+
+struct Buf { len: i64 }
+
+fn sum(a: [2]Buf) -> i64 {
+    return a[0].len + a[1].len;
+}
+
+fn f() -> i64 {
+    let a = [2]Buf.{ Buf.{ len: 1 }, Buf.{ len: 2 } };
+    var total: i64 = 0;
+    for x in a {
+        total += x.len;
+    }
+    return total + sum(a); //~ E1001
+}

@@ -1,0 +1,30 @@
+//! expect: accept
+//! section: 6.3, 10
+
+linear struct Token { id: i32 }
+
+impl Token {
+    fn make(id: i32) -> Token { return Token.{ id: id }; }
+    fn release(self: Token) { let Token.{ id: _ } = self; }
+}
+
+enum E { no }
+
+fn make(ok: bool) -> Token ! E {
+    if !ok { fail .no; }
+    return Token.make(1);
+}
+
+fn maybe(ok: bool) -> ?Token {
+    if ok { return .some(Token.make(2)); }
+    return .none;
+}
+
+fn f(ok: bool) -> void ! E {
+    let a = try make(ok);
+    a.release();
+    let b = make(ok) catch _ => Token.make(3);
+    b.release();
+    let c = maybe(ok) orelse Token.make(4);
+    c.release();
+}
