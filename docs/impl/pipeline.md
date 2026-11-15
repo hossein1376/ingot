@@ -303,9 +303,10 @@ Lowering must do the following, because the checker's rules are stated on the re
   with a guard binds by shared borrow, tests the guard, and only then moves or copies
   the bindings, so an arm that is not chosen moves nothing. Where a tag test on a place
   `π` has chosen variant `v` (an arm of `match`, `if let` or `while let`, the arms of
-  `try`, `catch` and `orelse`), the chosen block starts with the statement
-  `π is v`. It records which variant `π` holds. It is a no-op for every phase but 9,
-  which uses it for linear enums (checker.md §3).
+  `try`, `catch` and `orelse`), the chosen block starts with the statement `π is v`,
+  and the block for a failed test starts with `π is not v`. These record which
+  variants `π` may hold. They are no-ops for every phase but 9, which uses them for
+  linear enums (checker.md §3).
 * **`for`** over a range, array or slice becomes a counted loop with no check on the
   element access. Over an `Iter` it becomes a loop of `next` calls. A `for` over
   `[]mut T` reborrows the iterand once for the whole loop; each item holds that loan and

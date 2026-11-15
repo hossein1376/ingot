@@ -71,6 +71,7 @@ Transfer:
 | storage start of `x` | `x` is *moved* (it holds nothing yet) |
 | `π = ...` | `π` and everything under it become *init*. If the value is a variant aggregate of variant `v`, `π` may hold only `v`; otherwise it may hold every variant |
 | the variant record `π is v` (pipeline.md §5) | `π` may hold only `v` |
+| the variant record `π is not v` | `π` may no longer hold `v` |
 | a use of `π` marked **move** | `π` becomes *moved*. Everything under it too |
 | a use marked **copy**, or a borrow | no change |
 
@@ -78,7 +79,8 @@ Transfer:
 ignore `π.w` when `π` may not hold `w`, and an enum path stands for its payloads: an
 enum value whose payloads are moved, absent or not linear holds nothing linear. So
 `match o { .some(t) => t.release(), .none => {} }` consumes a linear `o: ?Token` on both
-arms. `o` stays usable in the `.none` arm. `let o: ?Token = .none;` needs no consuming,
+arms, and so does `if let .some(t) = o { t.release(); }`, whose other path holds `none`.
+`o` stays usable in the `.none` arm. `let o: ?Token = .none;` needs no consuming,
 and a `?Token` returned by a call may hold either variant, so it must be consumed.
 
 Checks:
