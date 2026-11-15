@@ -213,7 +213,10 @@ initializers. Phase 7 needs the condition of an `@static_assert` in a body.
   same answer:
   - at most 2^24 steps, where a step is one CFG statement or terminator executed,
     counted over the whole constant expression;
-  - calls nested at most 1024 deep;
+  - calls nested at most 1024 deep. A constant evaluated while a pulled-forward body
+    is typed (an `@static_assert` or an array length in it) is its own constant
+    expression for the other two limits, but its calls count toward the depth of the
+    evaluation that pulled the body, so a chain of such evaluations is bounded too;
   - at most 2^24 bytes of values live at once.
 * **Generic functions** are interpreted uninstantiated, and the call's type and
   constant arguments are substituted while the CFG runs. `@sizeof(T)` and a call
