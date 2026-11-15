@@ -64,10 +64,10 @@ fn build(text: &str) -> B {
     let inputs = vec![add("std", &STD, &mut sources), app_pkg];
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, 1);
+    let decls = check_declarations(&sources, &out, &target, 1, None);
     // Keep a copy of the phase 6 result for its diagnostics.
     let phase6: Vec<_> = decls.diagnostics.clone();
-    let bodies = check_bodies(&sources, &out, decls, &target, 1);
+    let bodies = check_bodies(&sources, &out, decls, &target, 1, None);
     let mut decls = Declarations::new();
     decls.diagnostics = phase6;
     B {

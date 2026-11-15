@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 9
+
+fn f(x: i64) {
+    @static_assert(x > 0, "parameter"); //~ E0807
+}

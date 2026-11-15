@@ -31,7 +31,7 @@ pub(crate) enum Pt {
     Ctor(Ctor, Vec<Pt>),
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     // ------------------------------------------------------------ pattern -> Pt
 
     fn int_literal_value(&self, e: ExprId) -> Option<i128> {

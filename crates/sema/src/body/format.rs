@@ -28,7 +28,7 @@ struct Placeholder {
     conv: Option<Conv>,
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// Check a format string and its arguments. `fmt` is the string literal argument,
     /// `args` the values, and `what` the builtin's name for messages. Returns whether
     /// the literal and the argument count were usable.

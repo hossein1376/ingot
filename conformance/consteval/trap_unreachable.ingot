@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 9, 27
+
+fn dead() -> i64 {
+    @unreachable(); //~ E0806
+}
+
+fn f() {
+    @static_assert(dead() == 0, "unreachable");
+}

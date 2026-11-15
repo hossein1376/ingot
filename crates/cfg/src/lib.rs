@@ -13,11 +13,12 @@
 //! body's CFG is dropped.
 
 pub mod dump;
+pub mod eval;
 mod lower;
 pub mod model;
 pub mod validate;
 
-pub use lower::{Lowered, lower_package};
+pub use lower::{Lowered, lower_for_eval, lower_package};
 pub use model::*;
 
 /// What is left after phase 8 for a body that passed phases 7 and 8: phases 9 and 10

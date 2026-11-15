@@ -72,6 +72,34 @@ pub fn lower_package(
     }
 }
 
+/// Lower one body (a function, test, `const` or `static` initializer) on demand for
+/// constant evaluation (S5b). The CFGs of the closures and `par for` bodies it
+/// contains come with it. They are not part of [`lower_package`]'s result.
+pub fn lower_for_eval(
+    sources: &ingot_diag::source::Sources,
+    sema: &Sema,
+    packages: &[hir::Package],
+    decls: &mut Declarations,
+    body: &TypedBody,
+) -> Result<Cfgs, String> {
+    let mut cx = LowerCx {
+        sources,
+        sema,
+        packages,
+        decls,
+        out: Cfgs::default(),
+        ni: Vec::new(),
+        ni_seen: BTreeSet::new(),
+        keys: BTreeMap::new(),
+    };
+    let key = CfgKey {
+        owner: body.owner,
+        body: BodyKey::Item,
+    };
+    cx.lower_body(key, body, None)?;
+    Ok(cx.out)
+}
+
 struct LowerCx<'a> {
     sources: &'a ingot_diag::source::Sources,
     sema: &'a Sema,
@@ -344,10 +372,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     fn run_item(&mut self) -> Result<(), String> {
         let root = match self.body.root {
             BodyRoot::Block(b) => b,
-            BodyRoot::Expr(_) => {
-                self.fail("a function body that is an expression");
-                return Err("a function body that is an expression".to_string());
-            }
+            BodyRoot::Expr(e) => return self.run_initializer(e),
         };
         let span = self.pkg.block(root).span;
         self.cur = self.new_block();
@@ -371,6 +396,37 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 },
             );
         }
+        Ok(())
+    }
+
+    /// A `const` or `static` initializer, or a constant expression of a signature:
+    /// the body's value is its result.
+    fn run_initializer(&mut self, e: ExprId) -> Result<(), String> {
+        let span = self.span(e);
+        self.cur = self.new_block();
+        self.cfg.entry = self.cur;
+        self.push_frame(span);
+        self.stmt_span = span;
+        let ty = self.body.ret;
+        let op = match self.lower_expr(e) {
+            Some(op) => op,
+            None => {
+                let what = self
+                    .failed
+                    .clone()
+                    .unwrap_or_else(|| "an initializer that the lowering dropped".to_string());
+                return Err(what);
+            }
+        };
+        let op = self.snapshot(op, ty, span);
+        self.stmt_span = span;
+        self.exit(
+            0,
+            ExitKind::Return {
+                value: Some(op),
+                is_error: false,
+            },
+        );
         Ok(())
     }
 
@@ -928,6 +984,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: Some(ty),
             ty_name: None,
+            op: Some(op.symbol().to_string()),
             span,
         });
     }
@@ -942,6 +999,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         }
     }
@@ -956,6 +1014,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         }
     }
@@ -977,6 +1036,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         }
     }
@@ -1226,6 +1286,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 self.lower_select(arms, stmt.span, mark);
             }
             HirStmt::Unsafe { body, .. } => {
+                self.emit(StmtKind::EnterUnsafe);
                 self.lower_block(*body);
             }
             HirStmt::Poison => {
@@ -1623,7 +1684,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         match kind {
             ExprKind::Paren(inner) => self.lower_expr(inner),
             ExprKind::TypeApply { base, .. } => self.lower_expr(base),
-            ExprKind::Unsafe { body, .. } => self.lower_expr(body),
+            ExprKind::Unsafe { body, .. } => {
+                self.emit_at(StmtKind::EnterUnsafe, self.span(e));
+                self.lower_expr(body)
+            }
             ExprKind::Int {
                 value, negative, ..
             } => {
@@ -2155,6 +2219,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                         places: Vec::new(),
                         ty: Some(ty),
                         ty_name: None,
+                        op: Some("-".to_string()),
                         span,
                     });
                 }
@@ -4085,6 +4150,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places,
             ty: None,
             ty_name: None,
+            op: None,
             span,
         });
         let kernel = info.kernel;
@@ -4254,6 +4320,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         });
         Some(self.materialize(
@@ -4291,6 +4358,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         });
         self.emit_check(Check {
@@ -4302,6 +4370,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             places: Vec::new(),
             ty: None,
             ty_name: None,
+            op: None,
             span,
         });
         Some(self.materialize(
@@ -4419,10 +4488,16 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     let mop = self.lower_expr(*msg)?;
                     operands.push(self.snapshot(mop, mt, self.span(*msg)));
                 }
-                self.term(Terminator::Trap {
-                    code: Trap::T08,
-                    operands,
-                });
+                let cond_span = self.span(cond);
+                let text = self.cx.sources.get(self.cfg.file).text_of(cond_span);
+                self.term_at(
+                    Terminator::Trap {
+                        code: Trap::T08,
+                        operands,
+                        source: Some(text.to_string()),
+                    },
+                    span,
+                );
                 self.kill();
                 self.cur = ok;
                 self.reachable = true;
@@ -4433,18 +4508,26 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 let mt = self.ty(msg);
                 let mop = self.lower_expr(msg)?;
                 let mop = self.snapshot(mop, mt, self.span(msg));
-                self.term(Terminator::Trap {
-                    code: Trap::T09,
-                    operands: vec![mop],
-                });
+                self.term_at(
+                    Terminator::Trap {
+                        code: Trap::T09,
+                        operands: vec![mop],
+                        source: None,
+                    },
+                    span,
+                );
                 self.kill();
                 None
             }
             "unreachable" => {
-                self.term(Terminator::Trap {
-                    code: Trap::T10,
-                    operands: Vec::new(),
-                });
+                self.term_at(
+                    Terminator::Trap {
+                        code: Trap::T10,
+                        operands: Vec::new(),
+                        source: None,
+                    },
+                    span,
+                );
                 self.kill();
                 None
             }
@@ -4595,6 +4678,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     places: Vec::new(),
                     ty: Some(ty),
                     ty_name: None,
+                    op: None,
                     span,
                 });
                 Some(self.materialize(

@@ -16,6 +16,7 @@ mod checks;
 pub mod consteval;
 pub mod defs;
 pub mod hir;
+pub mod interp;
 mod kernel;
 mod layout;
 mod lower;
@@ -27,6 +28,7 @@ pub mod target;
 mod traits;
 pub mod ty;
 pub mod typed;
+pub mod value;
 mod when;
 
 pub use layout::{LayoutError, align_up, valid_align};
@@ -178,8 +180,16 @@ pub fn check_declarations(
     resolved: &Output,
     target: &Target,
     checked: usize,
+    interpreter: Option<&dyn interp::InterpreterFactory>,
 ) -> Declarations {
-    let mut cx = lowering::Cx::new(&resolved.sema, &resolved.packages, sources, target, checked);
+    let mut cx = lowering::Cx::new(
+        &resolved.sema,
+        &resolved.packages,
+        sources,
+        target,
+        checked,
+        interpreter,
+    );
     cx.check_all();
     let mut d = cx.d;
     d.diagnostics = scrub_builtin(std::mem::take(&mut d.diagnostics), &mut d.not_implemented);
@@ -206,6 +216,7 @@ pub fn check_bodies(
     mut declarations: Declarations,
     target: &Target,
     checked: usize,
+    interpreter: Option<&dyn interp::InterpreterFactory>,
 ) -> BodyOutput {
     let phase6_diagnostics = std::mem::take(&mut declarations.diagnostics);
     let phase6_not_implemented = std::mem::take(&mut declarations.not_implemented);
@@ -216,6 +227,7 @@ pub fn check_bodies(
         sources,
         target,
         checked,
+        interpreter,
     );
     let mut bodies = cx.check_bodies();
     cx.check_kernel_bodies(&mut bodies);

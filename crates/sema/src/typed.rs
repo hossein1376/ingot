@@ -253,7 +253,7 @@ pub struct DispatchInfo {
 }
 
 /// A reference to a function that is known at compile time.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnRef {
     /// The function definition: the impl's own, or the interface's when the impl
     /// inherits a default body.
@@ -264,7 +264,7 @@ pub struct FnRef {
 }
 
 /// Where a function reference came from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FnSource {
     /// A free function, an `extern` function, or a function of the package's modules.
     Free,
@@ -284,7 +284,7 @@ pub enum FnSource {
 }
 
 /// How a call through an interface is resolved.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InterfaceVia {
     /// `impl I for T { .. }` written in the program, with its generic arguments.
     Impl {

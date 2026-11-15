@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 9
+
+const n: i64 = g().len; //~ E0812
+
+fn g() -> [n]u8 {
+    return [n]u8.{};
+}
+
+fn f() {
+    @static_assert(n == 1, "n");
+}

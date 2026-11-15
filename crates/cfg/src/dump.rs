@@ -366,6 +366,7 @@ impl<'a> Dumper<'a> {
             StmtKind::Assign { place, value } => {
                 format!("{} = {}", self.place(place), self.rvalue(value))
             }
+            StmtKind::EnterUnsafe => "enter_unsafe".to_string(),
             StmtKind::Cancel(l) => format!("cancel {}", self.local_ref(*l)),
             StmtKind::Abandon(l) => format!("abandon {}", self.local_ref(*l)),
             StmtKind::Check(check) => self.check(check),
@@ -498,7 +499,7 @@ impl<'a> Dumper<'a> {
                 s.push_str(&format!(" then {next}"));
                 s
             }
-            Terminator::Trap { code, operands } => {
+            Terminator::Trap { code, operands, .. } => {
                 format!(
                     "trap {} ({}) [{}]",
                     code.code(),

@@ -38,7 +38,7 @@ fn assign_binop(op: AssignOp) -> Option<BinOp> {
     })
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// Check a block. Returns whether control can reach its end.
     pub(crate) fn block(&mut self, b: BlockId) -> bool {
         let hir = self.hir;
@@ -785,7 +785,8 @@ impl Checker<'_, '_> {
             Err(crate::consteval::Fail::Reported) => {
                 self.errors += 1;
             }
-            Err(crate::consteval::Fail::NotImplemented(m)) => {
+            Err(crate::consteval::Fail::NotImplemented(m))
+            | Err(crate::consteval::Fail::Interpret(m)) => {
                 self.ni(m);
             }
             Err(crate::consteval::Fail::Generic) => {

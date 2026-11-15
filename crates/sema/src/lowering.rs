@@ -30,7 +30,7 @@ pub struct Cur {
 
 /// The checker of phase 6: shared references to the resolved program and the
 /// `Declarations` it is filling.
-pub struct Cx<'a> {
+pub struct Cx<'a, 'i> {
     pub sema: &'a Sema,
     pub pkgs: &'a [hir::Package],
     pub sources: &'a Sources,
@@ -43,6 +43,27 @@ pub struct Cx<'a> {
     pub(crate) quiet: u32,
     busy: BTreeSet<DefId>,
     generics_busy: BTreeSet<DefId>,
+    /// The factory of the indirect constant-evaluation path. `None` in sema's own
+    /// unit tests; the direct path then records `constant evaluation of ...`.
+    pub(crate) interp: Option<&'i dyn crate::interp::InterpreterFactory>,
+    /// The bodies currently being typed, so a constant that calls one is E0812.
+    pub(crate) typing: BTreeSet<DefId>,
+    /// The call depth of the nested evaluation in progress and its outermost call.
+    pub(crate) eval_depth: usize,
+    pub(crate) eval_outer: Option<(usize, Span)>,
+    /// The signatures being built, innermost last (a signature constant belongs to the
+    /// innermost).
+    pub(crate) sig_stack: Vec<DefId>,
+    /// The body being type-checked, for a constant expression written in it.
+    pub(crate) body_owner: Option<DefId>,
+    /// The constants whose initializers the interpreter is evaluating, outermost
+    /// first. A signature asked for while it is in progress is E0812 at the first.
+    pub(crate) const_stack: Vec<DefId>,
+    /// The impl tables are complete.
+    pub(crate) impl_tables_ready: bool,
+    /// The impl tables are being built: a constant they need must stay on the direct
+    /// path (E0812 otherwise, pipeline section 4.6).
+    pub(crate) impl_tables_building: bool,
 }
 
 /// A generic parameter as the lowering of arguments needs it.
@@ -52,14 +73,15 @@ struct Desc {
     is_const: bool,
 }
 
-impl<'a> Cx<'a> {
+impl<'a, 'i> Cx<'a, 'i> {
     pub fn new(
         sema: &'a Sema,
         pkgs: &'a [hir::Package],
         sources: &'a Sources,
         target: &'a Target,
         reported_pkg: usize,
-    ) -> Cx<'a> {
+        interp: Option<&'i dyn crate::interp::InterpreterFactory>,
+    ) -> Cx<'a, 'i> {
         Cx {
             sema,
             pkgs,
@@ -75,6 +97,15 @@ impl<'a> Cx<'a> {
             quiet: 0,
             busy: BTreeSet::new(),
             generics_busy: BTreeSet::new(),
+            interp,
+            typing: BTreeSet::new(),
+            eval_depth: 0,
+            eval_outer: None,
+            sig_stack: Vec::new(),
+            body_owner: None,
+            const_stack: Vec::new(),
+            impl_tables_ready: false,
+            impl_tables_building: false,
         }
     }
 
@@ -87,9 +118,12 @@ impl<'a> Cx<'a> {
         sources: &'a Sources,
         target: &'a Target,
         reported_pkg: usize,
-    ) -> Cx<'a> {
-        let mut cx = Cx::new(sema, pkgs, sources, target, reported_pkg);
+        interp: Option<&'i dyn crate::interp::InterpreterFactory>,
+    ) -> Cx<'a, 'i> {
+        let mut cx = Cx::new(sema, pkgs, sources, target, reported_pkg, interp);
         cx.d = d;
+        // Phase 6 built the impl tables; phase 7 must not build them again.
+        cx.impl_tables_ready = true;
         cx
     }
 
@@ -272,7 +306,21 @@ impl<'a> Cx<'a> {
 
     /// Build the signature of `def` if it has none yet.
     pub fn ensure_sig(&mut self, def: DefId) {
-        if self.d.items.contains_key(&def) || self.busy.contains(&def) {
+        if self.d.items.contains_key(&def) {
+            return;
+        }
+        if self.busy.contains(&def) {
+            // A signature that is asked for while it is being built, from inside a
+            // constant evaluation, is a constant that depends on the signature that
+            // asked for it (pipeline section 4.6, E0812).
+            if let Some(&root) = self.const_stack.first()
+                && !matches!(
+                    self.d.values.get(&root),
+                    Some(crate::consteval::ValueState::Done(_))
+                )
+            {
+                let _ = self.cycle(root);
+            }
             return;
         }
         let Some(item) = self.hir_item(def) else {
@@ -291,6 +339,7 @@ impl<'a> Cx<'a> {
         }
         self.ensure_generics(def);
         self.busy.insert(def);
+        self.sig_stack.push(def);
         let prev = self.enter(def);
         let sig = match item {
             hir::Item::Fn(f) => Some(ItemSig::Fn(self.build_fn(f))),
@@ -309,6 +358,7 @@ impl<'a> Cx<'a> {
             hir::Item::Test(_) => None,
         };
         self.cur = prev;
+        self.sig_stack.pop();
         self.busy.remove(&def);
         if let Some(sig) = sig {
             self.d.items.insert(def, sig);

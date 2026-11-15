@@ -42,7 +42,7 @@ pub(crate) struct CallResult {
     pub subst: Subst,
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     // ------------------------------------------------------------------- entry
 
     pub(crate) fn call(
@@ -802,6 +802,11 @@ impl Checker<'_, '_> {
             }),
             ValueCall::FnPtr => None,
         };
+        // Calling an `FnMut` value borrows it exclusively, which makes a `var` one
+        // mutated (E0312); phase 9 checks the exclusive use itself.
+        if mode == Some(CallMode::Exclusive) {
+            self.mark_exclusive_use(callee, 0);
+        }
         (
             ty,
             ExprRes::Call(Box::new(CallInfo {

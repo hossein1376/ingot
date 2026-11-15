@@ -45,7 +45,7 @@ rebuilt here from the specification.
 | `ingot-diag` | — | spans, sources, the diagnostic type and JSON, the code catalog |
 | `ingot-syntax` | 2, 3 | tokens, lexer, AST, parser (kept from the MVP) |
 | `ingot-sema` | 4–7 | `when`, name resolution, signatures, type properties, body type-checking, constant evaluation |
-| `ingot-cfg` | 8–10 | lowering to a CFG, the ownership checker, check removal and cost items |
+| `ingot-cfg` | 8–10 | lowering to a CFG, constant evaluation by interpreting CFGs, the ownership checker, check removal and cost items |
 | `ingot-codegen` | 11–14 | instantiation, LLVM IR text, linking with `clang` |
 | `ingot-driver` | 1 | loading, the pipeline, `ingot` CLI, fix engine, conformance runner |
 
@@ -106,10 +106,39 @@ signature and captures of each closure. A body in which phase 7 reported an erro
 marked `failed` and phases 8 to 10 skip it. Phase 8 reads the HIR and this, nothing else.
 
 **Constant evaluation** (spec §9, pipeline §4.6) has two paths. A direct evaluator in
-phase 6 handles literal arithmetic. Everything else is evaluated by interpreting CFGs,
-with the bodies it reaches pulled through phases 7 and 8 on demand and within fixed
-limits. Both paths share one arithmetic module with check folding, so a constant and a
-run-time value of the same expression never differ.
+`consteval.rs` handles literal arithmetic, comparisons, `as` between integers,
+`@sizeof`/`@alignof`/`@lanes`, `@target`, and references to other such constants.
+Everything else is evaluated by interpreting CFGs, with the bodies it reaches pulled
+through phases 7 and 8 on demand and within fixed limits. Both paths share one
+arithmetic module with check folding, so a constant and a run-time value of the same
+expression never differ.
+
+Sema cannot call lowering (`ingot-cfg` depends on it), so the boundary is two traits in
+`crates/sema/src/interp.rs`: `Interpreter`, implemented by `ingot_cfg::eval::Evaluator`,
+and `Host`, implemented by phase 6's (and phase 7's) `Cx`. `check_declarations` and
+`check_bodies` take `Option<&dyn InterpreterFactory>`; the driver passes an
+`EvaluatorFactory`, which makes a fresh `Evaluator` per constant expression, and sema's
+own unit tests pass `None`, which leaves `constant evaluation of ...` entries and never
+guesses a value. The factory owns the lowering cache, so a body pulled forward is
+lowered once (pipeline §4.6: phase 8 at most once). A fresh evaluator per expression
+makes evaluation re-entrant: a body pulled forward can evaluate its own constants while
+the evaluator that reached it is suspended, and the nested one has its own step and byte
+counters. Its calls, however, count toward the 1024-call limit of the evaluation that
+pulled its body; the nested evaluator inherits the caller's depth and outermost call, so
+a chain of such evaluations stops with one E0808 at the outermost call.
+`pipeline::analyze_with` runs on its own thread with a 256 MiB stack
+(`PIPELINE_STACK`), so every caller (the binary, the conformance runner, the language
+server) has it: 1024 nested levels (typing, lowering, evaluation each use host stack)
+need between 16 and 32 MiB in a debug build, and a thread stack is virtual memory. Through `Host` the interpreter asks for the typed body of a
+definition, types a signature constant or an `@static_assert` condition on demand
+(`Declarations::bodies` and `Declarations::expr_bodies`, reused by phase 7 so no body is
+typed or reported twice), reads and writes the value of a constant, and reports
+diagnostics. The value of every evaluated `const` and `static` is stored per `DefId` in
+`Declarations::values` as `consteval::ValueState`; the scalar ones are mirrored in
+`Declarations::consts` for the direct path. The impl tables are built before the first
+interpretation; a signature constant that needs the interpreter while they are being
+built is E0812. A signature asked for while it is still being built reports E0812 at the
+constant whose evaluation asked for it.
 
 **The standard library** is Ingot source in `std/`, checked by this compiler like any
 package. It is written only as far as conformance tests and programs need it, and only
@@ -141,17 +170,20 @@ Index(Operand) | Deref | Payload { variant }] }`. The index operand is kept for 
 removal and code generation; the ownership checker ignores it. A place rooted at a
 `Static` takes no loans.
 
-**Statements.** `StorageStart/End`, `Assign { place, value }`, `Cancel(s)`,
-`Abandon(dest)`, `Check(Check)` and `Use(operand)` (a no-op read for liveness).
+**Statements.** `StorageStart/End`, `Assign { place, value }`, `EnterUnsafe`,
+`Cancel(s)`, `Abandon(dest)`, `Check(Check)` and `Use(operand)` (a no-op read for
+liveness). `EnterUnsafe` marks the entry of every `unsafe` block or expression: it is a
+no-op for phases 9 and 10, and the interpreter's E0807 test.
 `Abandon` is the one addition to pipeline section 5's list: it says an unchosen
 `select` arm's result storage holds no value, so the checker does not report the linear
 result as leaked.
 
-**Checks.** `Check { kind, place, lo, hi, operands, places, ty, span }` with kinds
+**Checks.** `Check { kind, place, lo, hi, operands, places, ty, ty_name, op, span }` with kinds
 `Bounds(Index | Slice | Vector { width, tail })`, `Overflow`, `Division`, `Shift`,
 `Narrow`, `Gather`, `ScatterDistinct` and `DispatchCover`. `place` is the container
 whose `len` matters, `lo`/`hi` the index or range, `width` the lane count of a vector
-access, and the trap code follows the catalog (`check_trap`).
+access, `op` the operator text of an overflow check (for E0806), and the trap code
+follows the catalog (`check_trap`).
 
 **Rvalues.** a copy or move of a place, a constant, unary and binary operations, a
 borrow or the implicit two-phase reborrow of a `&mut`/`[]mut` place, an aggregate
@@ -170,7 +202,8 @@ place), `ParFor` (body CFG, captures as shared borrows whose record the body rec
 as a tuple of borrows by value, iterand or range, grain) and
 `Dispatch` (kernel, executor, range, inputs and outputs with their borrow kind).
 `Unreachable` ends a block no path reaches. `Return` also names the temporary whose
-storage it ends (`end`), so a checker ends it after reading the value.
+storage it ends (`end`), so a checker ends it after reading the value. `Trap` carries
+`source`, the assertion's condition text for T08's trap message.
 
 **Dump and validator.** `dump::dump` prints every CFG as the deterministic text its
 module documents: named locals, spans, trap codes, `(error)` returns, and
@@ -178,6 +211,34 @@ module documents: named locals, spans, trap codes, `(error)` returns, and
 checks block targets, declared locals, and that the storage start and end of every local
 are paired on every path and every local a statement or terminator uses is inside its
 storage; the golden runner and the two conformance sweeps run it.
+
+**Constant evaluation by interpretation** (S5b, `crates/cfg/src/eval.rs`). The
+evaluator lowers a constant expression or a body on demand (its own `Cfgs`, never part
+of `Analysis.cfgs`) and runs it with an explicit frame stack: calls push a frame, never
+a host call, so deep Ingot recursion cannot overflow the compiler's stack. The value
+tree (`sema::value::Value`) is scalars, aggregates, variants, string literals, function
+values, borrows (allocation and path), slices (source, `lo`, `len`) and static
+addresses. A whole array of scalars is a `Value::Pack`: the element type, a length, and
+the elements' raw bits only once one is written (`@zero` of a 16 MB array uses no host
+memory per element); `moved` records elements that were moved out. Reads and writes walk
+the path by reference, so one element access costs the path, not the array. A body that
+is being typed cannot be typed again: a call that reaches it is E0812, as is a signature
+asked for while it is in progress. Each frame's locals and parameters are allocations; a move empties a place,
+a read of storage with no value stops evaluation with a `not implemented` entry (phase
+9 will report it), and session limits are one counter for the whole constant
+expression. Every check runs; a failing check or a `Trap` terminator is E0806 with the
+catalog's text and values, the primary span is the operation, and a `call` label marks
+the call in the constant expression that led there. Reading a `static`'s value, a local
+of an enclosing function, `EnterUnsafe`, an `extern` call and the concurrency
+terminators are E0807. Steps (2^24), call depth (1024) and live bytes (2^24) are E0808; parameters count like
+locals, and a popped frame releases what it still holds. A closure's size is the sum of
+its capture fields (the type table has no closure layout, and asking for one would record
+an entry).
+Generic functions run uninstantiated with the call's type and constant arguments
+substituted (`@sizeof(T)` interns the substituted type), floats are rounded at each
+operation to `f32`/`f64`, and a `static` may take another's address. A body phase 7
+rejected reports nothing more; a failure the interpreter cannot handle is
+`constant evaluation of <what>`, never a guess.
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;

@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 9
+
+fn a() -> i64 {
+    @static_assert(a() == 1, "self"); //~ E0812
+    return 1;
+}

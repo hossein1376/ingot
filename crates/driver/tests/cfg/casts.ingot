@@ -1,0 +1,10 @@
+// integer widening and float widening; the result type is the destination's
+
+fn widen(x: i32) -> i64 {
+    return (x as i64) * 4294967296;
+}
+
+fn fwiden() -> f64 {
+    let x: f32 = 0.5;
+    return x as f64;
+}

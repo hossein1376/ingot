@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 9
+
+fn four() -> i64 {
+    return 4;
+}
+
+struct Held { xs: [four()]u8 }
+
+const held: Held = Held.{ xs: [4]u8.{ 1, 2, 3, 4 } };

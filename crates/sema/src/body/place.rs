@@ -40,7 +40,7 @@ pub(crate) enum Use {
     BorrowMut,
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// The place `e` denotes, or `None` if it is not a place (a value).
     pub(crate) fn place(&self, e: ExprId) -> Option<PlaceInfo> {
         let e = self.unparen(e);
@@ -142,6 +142,17 @@ impl Checker<'_, '_> {
     }
 
     /// The place a method receiver denotes after looking through `derefs` borrows.
+    /// A mutable place used exclusively (an `FnMut` call): mark a `var` as mutated so
+    /// E0312 does not say it never was. An immutable place is left to phase 9.
+    pub(crate) fn mark_exclusive_use(&mut self, e: ExprId, derefs: u32) {
+        if let Some(info) = self.receiver_place(e, derefs)
+            && matches!(info.access, Access::Mutable)
+            && let Some(root) = info.root
+        {
+            self.mutated.insert(root);
+        }
+    }
+
     fn receiver_place(&self, recv: ExprId, derefs: u32) -> Option<PlaceInfo> {
         let mut info = self.place(recv);
         let mut t = self.ty_of(recv);

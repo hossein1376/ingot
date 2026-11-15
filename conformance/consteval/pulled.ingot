@@ -1,0 +1,23 @@
+//! expect: reject
+//! section: 9
+
+fn four() -> i64 {
+    return 4;
+}
+
+fn g() -> i64 {
+    let a = @zero([four()]u8);
+    return a.len as i64;
+}
+
+fn h() -> i64 {
+    @static_assert(four() == 5, "inner assert"); //~ E0810
+    return 1;
+}
+
+const n: i64 = g();
+const m: i64 = h();
+
+fn f() {
+    @static_assert(n == 4, "n");
+}

@@ -1,0 +1,15 @@
+//! expect: reject
+//! section: 9
+
+fn keep(x: [10000000]u8) -> i64 {
+    return x[0] as i64;
+}
+
+fn big() -> i64 {
+    let x = @zero([10000000]u8);
+    return keep(x);
+}
+
+fn f() {
+    @static_assert(big() == 0, "arguments"); //~ E0808
+}

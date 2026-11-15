@@ -99,8 +99,28 @@ fn parse_package(
     }
 }
 
-/// Lex, parse, apply `when` and resolve every file of a loaded package.
+/// The stack the pipeline runs on. Constant evaluation nests (a body it pulls forward
+/// can evaluate its own constants), up to the 1024-deep call limit of pipeline section
+/// 4.6, and each level uses host stack for typing, lowering and evaluation. A thread
+/// stack is virtual memory: only the pages reached are resident.
+pub const PIPELINE_STACK: usize = 256 * 1024 * 1024;
+
+/// Lex, parse, apply `when` and resolve every file of a loaded package. Runs on its own
+/// thread with [`PIPELINE_STACK`], so every caller (the binary, the conformance runner,
+/// the language server) gets the stack the evaluation limits assume.
 pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
+    std::thread::scope(|s| {
+        let worker = std::thread::Builder::new()
+            .name("ingot-pipeline".to_string())
+            .stack_size(PIPELINE_STACK)
+            .spawn_scoped(s, || analyze_here(package, options))?;
+        worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
     let target = Target::by_name(&options.target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown target"))?;
     let mut diagnostics = package.diagnostics.clone();
@@ -146,9 +166,18 @@ pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Ana
         let output = ingot_sema::resolve(&mut all, inputs, &target);
         // Phase 6 finishes for every item of every package (std included) before
         // anything later; nothing in a body is looked at.
-        let declarations = ingot_sema::check_declarations(&all, &output, &target, std_count);
+        let evaluator = ingot_cfg::eval::EvaluatorFactory::default();
+        let declarations =
+            ingot_sema::check_declarations(&all, &output, &target, std_count, Some(&evaluator));
         // Phase 7 checks the bodies of the package against those signatures.
-        let mut bodies = ingot_sema::check_bodies(&all, &output, declarations, &target, std_count);
+        let mut bodies = ingot_sema::check_bodies(
+            &all,
+            &output,
+            declarations,
+            &target,
+            std_count,
+            Some(&evaluator),
+        );
         // Phase 8 lowers every body phase 7 accepted.
         let lowered = ingot_cfg::lower_package(
             &all,

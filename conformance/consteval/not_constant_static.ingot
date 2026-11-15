@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 9
+
+static limit: i64 = 5;
+
+fn reads_static() -> i64 {
+    return limit; //~ E0807
+}
+
+fn f() {
+    @static_assert(reads_static() == 5, "static");
+}

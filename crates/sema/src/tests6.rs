@@ -83,7 +83,7 @@ fn build(with_std: bool, text: &str) -> D {
     inputs.push(app_pkg);
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, app);
+    let decls = check_declarations(&sources, &out, &target, app, None);
     D {
         out,
         decls,

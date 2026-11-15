@@ -182,19 +182,17 @@ fn a_declaration_error_is_a_rejection() {
 }
 
 #[test]
-fn a_constant_outside_the_evaluated_subset_is_not_accepted() {
+fn a_struct_constant_is_evaluated() {
+    // A struct value is outside the direct evaluator's subset; the interpreter
+    // evaluates it, so the package has nothing left unchecked.
     let dir = package(
-        "const-subset",
+        "const-eval",
         "name = \"app\"\n",
         "struct P { x: i64 }\nconst origin: P = P.{ x: 0 };\n",
     );
-    let o = ingot(&["check"], &dir);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("not implemented: constant evaluation of a value of type `P`"),
-        "{}",
-        stderr(&o)
-    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("\"ok\":true"), "{}", stdout(&o));
 }
 
 #[test]

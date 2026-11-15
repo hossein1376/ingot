@@ -137,6 +137,9 @@ pub enum StmtKind {
         place: Place,
         value: Rvalue,
     },
+    /// The entry of an `unsafe` block or expression. A no-op for phases 9 and 10;
+    /// constant evaluation reports E0807 when it executes one (pipeline section 4.6).
+    EnterUnsafe,
     /// Sets the cancel flag of `s` (a `scope` local): a use of `s`.
     Cancel(Local),
     /// A local started for a `select` arm's operation that was not chosen: its
@@ -407,6 +410,9 @@ pub struct Check {
     pub ty: Option<TypeId>,
     /// That type as text, for the dump.
     pub ty_name: Option<String>,
+    /// The operator of an `overflow` check (`+`, `-`, `*` or `-` unary), for the trap
+    /// text of E0806.
+    pub op: Option<String>,
     /// The source span the check is reported at.
     pub span: Span,
 }
@@ -526,6 +532,8 @@ pub enum Terminator {
     Trap {
         code: Trap,
         operands: Vec<Operand>,
+        /// The source text of an assertion's condition, for T08's trap text.
+        source: Option<String>,
     },
     Spawn {
         target: CallTarget,
@@ -717,6 +725,11 @@ impl Cfgs {
 
     pub fn len(&self) -> usize {
         self.entries.iter().filter(|e| e.is_some()).count()
+    }
+
+    /// Every CFG, in id order (the interpreter's own lowering result).
+    pub fn into_vec(self) -> Vec<Cfg> {
+        self.entries.into_iter().flatten().collect()
     }
 }
 

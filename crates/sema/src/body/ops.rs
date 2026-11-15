@@ -76,7 +76,7 @@ impl Poss {
     }
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     // ----------------------------------------------------------- classification
 
     /// The scalars `t` may be.

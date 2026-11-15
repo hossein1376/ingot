@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 9
+
+const n: i64 = four(); //~ E0812
+
+fn four() -> i64 {
+    return 4;
+}
+
+interface Marker {}
+
+impl Marker for [n]u8 {}
+
+fn f() {
+    @static_assert(n == 4, "n");
+}

@@ -29,7 +29,7 @@ enum Zero {
     Unknown,
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     pub(crate) fn builtin(
         &mut self,
         e: ExprId,
@@ -338,6 +338,37 @@ impl Checker<'_, '_> {
                     // A condition over a type or constant generic parameter is checked
                     // for each instance in phase 11 (section 9).
                     Err(crate::consteval::Fail::Generic) => {}
+                    Err(crate::consteval::Fail::Interpret(_reason)) => {
+                        let ty = self.cx.d.types.bool_;
+                        let body = self.out.clone();
+                        match self.cx.eval_in_body(&body, condition, ty) {
+                            Ok(crate::value::Value::Bool(true)) => {}
+                            Ok(crate::value::Value::Bool(false)) => {
+                                let msg = match &self.hir.expr(self.unparen(args[1])).kind {
+                                    ExprKind::Str(bytes) => {
+                                        String::from_utf8_lossy(bytes).into_owned()
+                                    }
+                                    _ => String::new(),
+                                };
+                                let message = if msg.is_empty() {
+                                    "`@static_assert` condition is false".to_string()
+                                } else {
+                                    format!("`@static_assert` failed: {msg}")
+                                };
+                                self.err("E0810", message, span);
+                            }
+                            Ok(_) => {}
+                            Err(crate::consteval::Fail::Reported) => self.errors += 1,
+                            Err(crate::consteval::Fail::OutOfRange(sp)) => {
+                                self.err("E0405", "the condition does not fit its type", sp);
+                            }
+                            Err(crate::consteval::Fail::Generic) => {}
+                            Err(crate::consteval::Fail::NotImplemented(m))
+                            | Err(crate::consteval::Fail::Interpret(m)) => {
+                                self.ni(format!("{m} (S5b)"));
+                            }
+                        }
+                    }
                     Err(crate::consteval::Fail::NotImplemented(reason)) => {
                         self.ni(format!("{reason} (S5b)"));
                     }
@@ -1453,6 +1484,7 @@ impl Checker<'_, '_> {
                             return (poison, None);
                         }
                         Err(crate::consteval::Fail::NotImplemented(_))
+                        | Err(crate::consteval::Fail::Interpret(_))
                         | Err(crate::consteval::Fail::Generic) => {
                             bad = true;
                             break;

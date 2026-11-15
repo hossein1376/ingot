@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 9, 18
+
+fn par() -> i64 {
+    par for i in 0..2 { //~ E0807
+        _ = i;
+    }
+    return 0;
+}
+
+fn f() {
+    @static_assert(par() == 0, "par for");
+}

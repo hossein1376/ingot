@@ -328,7 +328,7 @@ impl Declarations {
     }
 }
 
-impl Cx<'_> {
+impl Cx<'_, '_> {
     /// The layout of `ty`, after making sure every struct and enum it is made of has a
     /// signature. A part of it the specification does not define is recorded.
     pub(crate) fn layout_of_checked(&mut self, ty: TypeId) -> Option<Layout> {
