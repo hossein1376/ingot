@@ -68,7 +68,7 @@ Transfer:
 
 | Statement | Effect |
 |---|---|
-| storage start of `x` | `x` is *moved* (it holds nothing yet) |
+| storage start of `x` | `x` is *moved* (it holds nothing yet). A parameter and a `scope` local arrive holding their value: *init* |
 | `π = ...` | `π` and everything under it become *init*. If the value is a variant aggregate of variant `v`, `π` may hold only `v`; otherwise it may hold every variant |
 | the variant record `π is v` (pipeline.md §5) | `π` may hold only `v` |
 | the variant record `π is not v` | `π` may no longer hold `v` |
@@ -77,7 +77,11 @@ Transfer:
 
 **The payload of a variant that a path cannot hold is no value.** The checks below
 ignore `π.w` when `π` may not hold `w`, and an enum path stands for its payloads: an
-enum value whose payloads are moved, absent or not linear holds nothing linear. So
+enum value whose payloads are moved, absent or not linear holds nothing linear. The
+exception is `T ! E`, which is linear in itself (§10 of the specification): each of its
+two variants is an obligation, whatever `T` and `E` are, until its payload is moved.
+That is why lowering moves the payload of the chosen variant of a `T ! E` (pipeline.md
+§5). So
 `match o { .some(t) => t.release(), .none => {} }` consumes a linear `o: ?Token` on both
 arms, and so does `if let .some(t) = o { t.release(); }`, whose other path holds `none`.
 `o` stays usable in the `.none` arm. `let o: ?Token = .none;` needs no consuming,

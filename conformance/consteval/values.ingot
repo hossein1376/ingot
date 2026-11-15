@@ -143,11 +143,11 @@ fn fwiden() -> f64 {
     return x as f64;
 }
 
-fn inner[U](x: U) -> i64 {
+fn inner[U: Discard](x: U) -> i64 {
     return @sizeof(U);
 }
 
-fn outer[T](x: T) -> i64 {
+fn outer[T: Discard](x: T) -> i64 {
     return inner(x);
 }
 
@@ -156,7 +156,7 @@ fn generic_size() -> i64 {
     return outer(x);
 }
 
-fn closure_generic[T](x: T) -> i64 {
+fn closure_generic[T: Discard](x: T) -> i64 {
     let k = fn [](y: i64) -> i64 { return y + @sizeof(T); };
     return k(1);
 }
