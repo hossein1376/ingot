@@ -1,0 +1,17 @@
+//! expect: accept
+//! section: 13.1
+
+struct Parser { src: []u8, pos: i64 }
+
+impl Parser {
+    fn rest(self: &Parser) -> []u8 from self.* {
+        return self.src[self.pos..self.src.len];
+    }
+}
+
+fn f(text: []u8) -> i64 {
+    var p = Parser.{ src: text, pos: 0 };
+    let r = p.rest();
+    p = Parser.{ src: text, pos: 1 };
+    return r.len;
+}

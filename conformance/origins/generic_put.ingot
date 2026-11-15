@@ -1,0 +1,16 @@
+//! expect: accept
+//! section: 13.3
+
+struct Box1[T: Discard] { item: T }
+
+impl[T: Discard] Box1[T] {
+    fn put(self: &mut Box1[T], item: T) {
+        self.item = item;
+    }
+}
+
+fn f(a: []u8) -> i64 {
+    var b = Box1[[]u8].{ item: a };
+    b.put(a[0..1]);
+    return b.item.len;
+}

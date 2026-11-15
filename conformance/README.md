@@ -78,8 +78,8 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-448 test files: 105 `accept` (38 of them `.fixed.ingot` tests; 39 fix results in
-all), 320 `reject`, 13 `run`, 6 `trap`, 4 `cost`.
+468 test files: 116 `accept` (42 of them `.fixed.ingot` tests; 43 fix results in
+all), 329 `reject`, 13 `run`, 6 `trap`, 4 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|
@@ -93,7 +93,7 @@ all), 320 `reject`, 13 `run`, 6 `trap`, 4 `cost`.
 | E08xx | 12 of 13 | E0809 |
 | E10xx | 6 of 6 | |
 | E11xx | 4 of 5 | E1104 |
-| E12xx | 5 of 7 | E1205, E1207 |
+| E12xx | 6 of 7 | E1207 |
 | E13xx | 5 of 5 | |
 | E14xx | 8 of 10 | E1402, E1406 |
 | E15xx | 12 of 14 | E1514, E1518 |
@@ -104,7 +104,7 @@ all), 320 `reject`, 13 `run`, 6 `trap`, 4 `cost`.
 Retired codes are not counted: the catalog marks E0512 and E0513 as retired, so they
 appear in no row and in no total below.
 
-161 of 199 catalog codes have a test.
+162 of 199 catalog codes have a test.
 
 E1701 for a *missing* `ingot.toml` has no conformance test, because the harness supplies
 a manifest by convention; `crates/driver/tests/cli.rs` covers it. The other cases of

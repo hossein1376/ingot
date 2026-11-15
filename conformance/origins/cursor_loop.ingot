@@ -1,0 +1,16 @@
+//! expect: accept
+//! section: 12, 13.1
+
+struct Node { value: i64, next: ?&mut Node }
+
+fn get_mut(n: &mut Node) -> &mut Node from n {
+    return n;
+}
+
+fn last(head: &mut Node) -> i64 {
+    var cur: &mut Node = head;
+    while let .some(next) = &mut cur.next {
+        cur = get_mut(next.*);
+    }
+    return cur.value;
+}

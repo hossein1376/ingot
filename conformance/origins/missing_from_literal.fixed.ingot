@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 13.1
+
+fn greeting() -> []u8 from static {
+    return "hello";
+}

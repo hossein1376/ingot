@@ -1,0 +1,7 @@
+//! expect: accept
+//! section: 13.1
+
+fn id(p: &i64) -> &i64 from p {
+    let r = p;
+    return r;
+}
