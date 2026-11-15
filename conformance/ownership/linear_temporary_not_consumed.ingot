@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 10, 11
+
+linear struct Token { id: i32 }
+
+fn f() {
+    _ = Token.{ id: 1 }.id; //~ E1003
+}

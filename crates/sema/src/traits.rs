@@ -590,7 +590,13 @@ impl Declarations {
                     }
                 }
             }
-            Bound::Fn(..) | Bound::Poison => {}
+            // Spec §8: only a non-linear type satisfies `Fn` or `FnMut` (a closure
+            // that owns a non-`Copy` capture is only `FnOnce`), so each implies
+            // `Discard`. `FnOnce` does not.
+            Bound::Fn(FnKind::Fn | FnKind::FnMut, _) => {
+                out.insert(PropBound::Discard);
+            }
+            Bound::Fn(FnKind::FnOnce, _) | Bound::Poison => {}
         }
     }
 
@@ -858,6 +864,70 @@ impl Declarations {
                     source: MethodSource::Builtin { interface: iface },
                 });
             }
+        }
+        out
+    }
+
+    /// Every method a value of `ty` can name, for completion: the same tables and
+    /// order as [`Declarations::method_candidates`], without a name to select one.
+    pub fn methods_of(&mut self, ty: TypeId) -> Vec<DefId> {
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        let add = |methods: &[DefId], out: &mut Vec<DefId>, seen: &mut BTreeSet<DefId>| {
+            for method in methods {
+                if seen.insert(*method) {
+                    out.push(*method);
+                }
+            }
+        };
+        for m in self.inherent_impls(ty) {
+            let methods: Vec<DefId> = self
+                .impl_sig(m.impl_def)
+                .map(|sig| sig.methods.values().copied().collect())
+                .unwrap_or_default();
+            add(&methods, &mut out, &mut seen);
+        }
+        if let TyKind::Param(p) = self.types.kind(ty).clone() {
+            let mut interfaces = BTreeSet::new();
+            let mut found = Vec::new();
+            for b in self.param_bounds.get(&p).cloned().unwrap_or_default() {
+                self.bound_interfaces(&b, &mut interfaces, &mut found);
+            }
+            for (iface, _) in found {
+                let methods: Vec<DefId> = self
+                    .interface_sig(iface)
+                    .map(|sig| sig.methods.clone())
+                    .unwrap_or_default();
+                add(&methods, &mut out, &mut seen);
+            }
+            return out;
+        }
+        if let TyKind::Dyn(_, iface, _) = self.types.kind(ty).clone() {
+            let methods: Vec<DefId> = self
+                .interface_sig(iface)
+                .map(|sig| sig.methods.clone())
+                .unwrap_or_default();
+            add(&methods, &mut out, &mut seen);
+            return out;
+        }
+        for (iface, _args, m) in self.interface_impls(ty) {
+            let own: Vec<DefId> = self
+                .impl_sig(m.impl_def)
+                .map(|sig| sig.methods.values().copied().collect())
+                .unwrap_or_default();
+            add(&own, &mut out, &mut seen);
+            let methods: Vec<DefId> = self
+                .interface_sig(iface)
+                .map(|sig| sig.methods.clone())
+                .unwrap_or_default();
+            add(&methods, &mut out, &mut seen);
+        }
+        for iface in self.builtin_interface_impls(ty) {
+            let methods: Vec<DefId> = self
+                .interface_sig(iface)
+                .map(|sig| sig.methods.clone())
+                .unwrap_or_default();
+            add(&methods, &mut out, &mut seen);
         }
         out
     }

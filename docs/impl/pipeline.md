@@ -52,7 +52,8 @@ of phase 11 as is needed to find them. It needs no `main` and no linker.
   for every function independently and in any order. Kernels and kernel helpers are no
   exception: each body is checked alone against §27.1. The one check that spans bodies
   is a cycle among kernel helpers (E1511), found from their call edges once phase 7 has
-  typed them all.
+  typed them all. Constant evaluation is the one exception: a body that a constant
+  expression calls goes through phases 7 and 8 when the constant is evaluated (§4.6).
 * **Generic bodies go through phases 7 to 10 once, uninstantiated**, with type
   parameters as opaque types that have exactly the properties their bounds grant.
   Phase 11 must not be able to produce any diagnostic except E0806 (a constant
@@ -164,6 +165,74 @@ A type parameter has a property only if a bound grants it. That makes an unbound
 "maybe linear, maybe a view, not `Copy`, not `Send`", which is the most restrictive
 reading and is what makes one check of a generic body valid for every instance.
 
+### 4.6 Constant evaluation
+
+Constant expressions (spec §9) are evaluated where they are needed. Phase 6 needs array
+lengths, enum tags, `align(...)`, constant generic arguments, and `const` and `static`
+initializers. Phase 7 needs the condition of an `@static_assert` in a body.
+
+* **Two paths.** Some expressions are made only of literals, arithmetic, comparisons,
+  `&& || !`, `as` between integers, `@sizeof`, `@alignof`, `@target` and other such
+  constants. Phase 6 evaluates those directly. Every other constant expression is
+  evaluated by interpreting a CFG: a call, a struct, tuple, array or enum value, a
+  float, a `match`, and so on. The expression's own initializer is typed (phase 7) and
+  lowered (phase 8) like a body, and so is every function the evaluation reaches. Both
+  paths use one arithmetic module, which check folding (§6) uses too, so a constant and
+  a run-time value of the same expression never differ.
+* **Bodies are pulled forward.** A body that an evaluation reaches goes through phases 7
+  and 8 at that moment, at most once, and the later phases reuse the result. The
+  signatures it needs are computed on demand, as phase 6 always does. The impl tables
+  are built before any interpretation starts. A constant that an impl header needs is
+  evaluated only on the direct path.
+* **E0812.** A constant depends on itself, and is E0812, when its evaluation needs:
+  - the signature or body that asked for it;
+  - its own value, through any chain of constants, signatures and bodies;
+  - the impl tables, when it is a constant in an impl header that the direct path
+    cannot evaluate.
+* **Errors in a pulled-forward body.** They are reported once, as phase 7 would report
+  them. The constant then has no value and nothing more is said about it.
+* **The interpreter runs the program's semantics.** Every check of §5 runs, so a check
+  that phase 10 would remove changes nothing. A failing check or a trap terminator is
+  E0806, with the trap's code and text. Phases 9 and 10 have not run on a
+  pulled-forward body. A read of storage that holds no value (moved, never initialized,
+  or ended) means phase 9 will reject the body. The constant then gets no value and no
+  diagnostic of its own: phase 9 reports the body.
+* **E0807.** The following operations are not constant:
+  - reading a local or parameter of the enclosing function, which only an
+    `@static_assert` in a body can do;
+  - reading a `static`'s value;
+  - executing an `unsafe` block or expression;
+  - calling an `extern` function;
+  - executing `spawn`, `par for`, `select` or `dispatch`.
+
+  Taking the address of a static is constant: the value is that address.
+* **Where E0806 and E0807 point.** The primary span is the operation. When that
+  operation is inside a called function, a `call` label marks the call in the constant
+  expression that led there.
+* **E0808: the limits.** They are part of the language, so every compiler gives the
+  same answer:
+  - at most 2^24 steps, where a step is one CFG statement or terminator executed,
+    counted over the whole constant expression;
+  - calls nested at most 1024 deep. A constant evaluated while a pulled-forward body
+    is typed (an `@static_assert` or an array length in it) is its own constant
+    expression for the other two limits, but its calls count toward the depth of the
+    evaluation that pulled the body, so a chain of such evaluations is bounded too;
+  - at most 2^24 bytes of values live at once.
+* **Generic functions** are interpreted uninstantiated, and the call's type and
+  constant arguments are substituted while the CFG runs. `@sizeof(T)` and a call
+  through a bound use the concrete argument.
+* **Floats** are IEEE 754 binary32 and binary64, and each operation is rounded to its
+  type with round-to-nearest-even.
+* **The value of a constant** is a tree of the following:
+  - scalars: integers, `bool` and floats;
+  - aggregates: a struct, tuple or array, or an enum variant with its payload;
+  - string literals;
+  - function values;
+  - the addresses of statics and literals.
+
+  A borrow of anything else cannot reach a constant's value, because phase 9 rules out
+  returning a borrow of a local.
+
 ## 5. The CFG
 
 Phase 8 lowers each function body to a control-flow graph that phases 9 and 10 share.
@@ -232,7 +301,14 @@ Lowering must do the following, because the checker's rules are stated on the re
 * **`match`** becomes switches on tags and comparisons. Bindings are moves, copies or
   borrows of the payload place according to the scrutinee (`v`, `&v`, `&mut v`). An arm
   with a guard binds by shared borrow, tests the guard, and only then moves or copies
-  the bindings, so an arm that is not chosen moves nothing.
+  the bindings, so an arm that is not chosen moves nothing. Where a tag test on a place
+  `π` has chosen variant `v` (an arm of `match`, `if let` or `while let`, the arms of
+  `try`, `catch` and `orelse`), the chosen block starts with the statement `π is v`,
+  and the block for a failed test starts with `π is not v`. These record which
+  variants `π` may hold. They are no-ops for every phase but 9, which uses them for
+  linear enums (checker.md §3). In a by-value tag test of a `T ! E`, the chosen block
+  moves the variant's payload even when it is `Copy` or matched by `_`, since that move
+  is what consumes the result.
 * **`for`** over a range, array or slice becomes a counted loop with no check on the
   element access. Over an `Iter` it becomes a loop of `next` calls. A `for` over
   `[]mut T` reborrows the iterand once for the whole loop; each item holds that loan and
@@ -276,7 +352,7 @@ else can change it (invariant I2). Facts come from:
 
 | §31 rule | Remove the check when |
 |---|---|
-| 1 | it guards the element access generated for `for x in xs` |
+| 1 | it guards the element access generated for `for x in xs`. Lowering (section 5) emits no such check, so this rule holds by construction |
 | 2, 3 | it is a bounds check on index `e` against `len(p)` and the facts give `0 <= e` and `e < len(p)`. For a slice range or vector access of width `k`: `0 <= e` and `e + k <= len(p)` |
 | 4 | it is an overflow check on `a op b` and the facts bound the exact result inside the type's range |
 | 5 | both operands are constants. The operation is folded; an overflow is E0806 |

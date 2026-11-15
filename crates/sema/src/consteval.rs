@@ -15,7 +15,7 @@
 use crate::defs::{DefId, DefKind, Sema};
 use crate::hir::{self, ExprId, ExprKind, Res};
 use crate::lowering::{Cur, Cx};
-use crate::sigs::ItemSig;
+use crate::sigs::{FnSig, ItemSig};
 use crate::ty::{ConstArg, ConstValue, IntTy, TyKind};
 use ingot_diag::source::Span;
 use ingot_syntax::ast::{BinOp, UnOp};
@@ -25,6 +25,10 @@ use ingot_syntax::ast::{BinOp, UnOp};
 pub enum Fail {
     /// An error was reported already; nothing more is said about this constant.
     Reported,
+    /// The expression is outside the direct evaluator's subset: the interpreter must
+    /// evaluate it (pipeline section 4.6). The string describes it, for the case where
+    /// no interpreter is available.
+    Interpret(String),
     /// The step that evaluates this does not exist yet.
     NotImplemented(String),
     /// The value depends on a type or constant generic parameter, so it is known only
@@ -39,6 +43,13 @@ pub enum Fail {
 pub enum ConstState {
     InProgress,
     Done(Result<ConstValue, Fail>),
+}
+
+/// The state of the richer value tree of a `const` or `static` (pipeline section 4.6).
+#[derive(Clone, Debug)]
+pub enum ValueState {
+    InProgress,
+    Done(Result<crate::value::Value, Fail>),
 }
 
 /// The type of a constant expression in the evaluated subset.
@@ -190,7 +201,7 @@ pub fn lossless(from: IntTy, to: IntTy) -> bool {
 
 // ------------------------------------------------------------------- evaluator
 
-impl Cx<'_> {
+impl Cx<'_, '_> {
     /// A short description of an expression outside the evaluated subset.
     fn describe(&self, pkg: usize, e: ExprId) -> String {
         let p = &self.pkgs[pkg];
@@ -234,7 +245,7 @@ impl Cx<'_> {
     }
 
     fn not_in_subset<T>(&self, pkg: usize, e: ExprId) -> Result<T, Fail> {
-        Err(Fail::NotImplemented(format!(
+        Err(Fail::Interpret(format!(
             "constant evaluation of {}",
             self.describe(pkg, e)
         )))
@@ -278,7 +289,7 @@ impl Cx<'_> {
                 match self.d.types.kind(t) {
                     TyKind::Int(i) => Ok(Some(ValTy::Int(*i))),
                     TyKind::Poison => Err(Fail::Reported),
-                    _ => Err(Fail::NotImplemented(
+                    _ => Err(Fail::Interpret(
                         "constant evaluation of a conversion to a type that is not an integer"
                             .to_string(),
                     )),
@@ -329,7 +340,7 @@ impl Cx<'_> {
         };
         match path.res {
             Res::Def(d) => match self.sema.def(d).kind {
-                DefKind::Static => Err(Fail::NotImplemented(
+                DefKind::Static => Err(Fail::Interpret(
                     "constant evaluation of a reference to a static".to_string(),
                 )),
                 DefKind::GenericParam { .. } => Err(Fail::Generic),
@@ -398,7 +409,7 @@ impl Cx<'_> {
             TyKind::Poison => Err(Fail::Reported),
             _ => {
                 let name = self.d.types.display(self.sema, ty);
-                Err(Fail::NotImplemented(format!(
+                Err(Fail::Interpret(format!(
                     "constant evaluation of a value of type `{name}`"
                 )))
             }
@@ -458,7 +469,9 @@ impl Cx<'_> {
             ExprKind::Paren(inner) => self.eval_inner(pkg, file, *inner, hint),
             ExprKind::Path(path) => match path.res {
                 Res::Poison => Err(Fail::Reported),
-                Res::Def(d) if self.sema.def(d).kind == DefKind::Const => self.const_value(d),
+                Res::Def(d) if self.sema.def(d).kind == DefKind::Const => {
+                    self.const_value_direct(d)
+                }
                 _ => {
                     self.path_value_type(pkg, e)?;
                     self.not_in_subset(pkg, e)
@@ -754,25 +767,33 @@ impl Cx<'_> {
         }
     }
 
-    /// The value of the `const` item `d`, evaluated once.
-    pub(crate) fn const_value(&mut self, d: DefId) -> Result<ConstValue, Fail> {
+    /// The value of the `const` item `d` on the direct path, evaluated once. A value
+    /// the interpreter produced is converted when it is a scalar.
+    pub(crate) fn const_value_direct(&mut self, d: DefId) -> Result<ConstValue, Fail> {
+        if let Some(state) = self.d.values.get(&d) {
+            match state {
+                ValueState::InProgress => return self.cycle(d),
+                ValueState::Done(Ok(v)) => {
+                    return match scalar_of(self, v) {
+                        Some(c) => Ok(c),
+                        None => {
+                            let name = self
+                                .const_ty(d)
+                                .map(|t| self.ty_name(t))
+                                .unwrap_or_else(|| "the constant".to_string());
+                            Err(Fail::Interpret(format!(
+                                "constant evaluation of a value of type `{name}`"
+                            )))
+                        }
+                    };
+                }
+                ValueState::Done(Err(f)) => return Err(f.clone()),
+            }
+        }
         match self.d.consts.get(&d) {
             Some(ConstState::Done(r)) => return r.clone(),
             Some(ConstState::InProgress) => {
-                // E0812, at the constant the evaluation came back to.
-                let name = self.sema.def(d).name.clone();
-                let (file, span) = (self.file_of(d), self.sema.def(d).span);
-                self.error(
-                    "E0812",
-                    format!("the value of the constant `{name}` depends on itself"),
-                    file,
-                    span,
-                );
-                // Everything on the cycle is poisoned.
-                self.d
-                    .consts
-                    .insert(d, ConstState::Done(Err(Fail::Reported)));
-                return Err(Fail::Reported);
+                return self.cycle(d);
             }
             None => {}
         }
@@ -795,9 +816,57 @@ impl Cx<'_> {
         self.cur = saved;
         // A cycle already stored its verdict.
         if !matches!(self.d.consts.get(&d), Some(ConstState::Done(_))) {
-            self.d.consts.insert(d, ConstState::Done(result.clone()));
+            match &result {
+                // The interpreter continues from here; leave the constant unstarted so
+                // that reading it again from another constant does not look like a cycle.
+                Err(Fail::Interpret(_)) => {
+                    self.d.consts.remove(&d);
+                }
+                _ => {
+                    self.d.consts.insert(d, ConstState::Done(result.clone()));
+                }
+            }
         }
         result
+    }
+
+    /// E0812, at the constant the evaluation came back to. Its value is poison.
+    pub(crate) fn cycle(&mut self, d: DefId) -> Result<ConstValue, Fail> {
+        let name = self.sema.def(d).name.clone();
+        let (file, span) = (self.file_of(d), self.sema.def(d).span);
+        self.error(
+            "E0812",
+            format!("the value of the constant `{name}` depends on itself"),
+            file,
+            span,
+        );
+        self.d
+            .consts
+            .insert(d, ConstState::Done(Err(Fail::Reported)));
+        self.d
+            .values
+            .insert(d, ValueState::Done(Err(Fail::Reported)));
+        Err(Fail::Reported)
+    }
+
+    /// E0812 for a constant of an impl header that the direct path cannot evaluate
+    /// (pipeline section 4.6: it would need the impl tables that are being built).
+    fn cycle_in_impl(&mut self, d: DefId) -> Result<ConstValue, Fail> {
+        let name = self.sema.def(d).name.clone();
+        let (file, span) = (self.file_of(d), self.sema.def(d).span);
+        self.error(
+            "E0812",
+            format!("the value of the constant `{name}` depends on the impl tables"),
+            file,
+            span,
+        );
+        self.d
+            .consts
+            .insert(d, ConstState::Done(Err(Fail::Reported)));
+        self.d
+            .values
+            .insert(d, ValueState::Done(Err(Fail::Reported)));
+        Err(Fail::Reported)
     }
 
     /// An integer constant expression of a signature (array length, tag value,
@@ -809,14 +878,46 @@ impl Cx<'_> {
         hint: ValTy,
     ) -> Result<ConstValue, Fail> {
         let (pkg, file) = (self.cur.pkg, self.cur.file);
-        self.eval_expr(pkg, file, e, Some(hint))
+        match self.eval_expr(pkg, file, e, Some(hint)) {
+            Err(Fail::Interpret(reason)) => {
+                // An impl header stays on the direct path: a constant it needs that
+                // would need the impl tables is E0812 (pipeline section 4.6).
+                let in_impl_header = !self.impl_tables_ready
+                    && self
+                        .sig_stack
+                        .last()
+                        .is_some_and(|d| matches!(self.hir_item(*d), Some(hir::Item::Impl(_))));
+                if self.impl_tables_building || in_impl_header {
+                    if let Some(d) = const_path(self, pkg, e) {
+                        let _ = self.cycle(d);
+                        return Err(Fail::Reported);
+                    }
+                    let span = self.pkgs[pkg].expr(e).span;
+                    self.error(
+                        "E0812",
+                        "the value of this constant expression depends on the impl tables",
+                        file,
+                        span,
+                    );
+                    return Err(Fail::Reported);
+                }
+                let Some(owner) = self.sig_stack.last().copied().or(self.body_owner) else {
+                    return Err(Fail::Interpret(reason));
+                };
+                if self.interp.is_none() {
+                    return Err(Fail::Interpret(reason));
+                }
+                self.eval_signature_expr(pkg, file, e, hint, owner)
+            }
+            other => other,
+        }
     }
 
     /// Record a failure that is not for the caller to turn into a diagnostic.
     pub(crate) fn note_failure(&mut self, f: &Fail) {
         match f {
             Fail::Reported => {}
-            Fail::NotImplemented(m) => self.ni(m.clone()),
+            Fail::Interpret(m) | Fail::NotImplemented(m) => self.ni(m.clone()),
             Fail::Generic => self.ni(
                 "constant evaluation of an expression over a generic parameter (computed per \
                  instance)",
@@ -1089,4 +1190,403 @@ fn collect_runtime_reads_stmt(
         hir::StmtKind::Unsafe { body, .. } => collect_runtime_reads_block(pkg, sema, *body, out),
         hir::StmtKind::Poison => {}
     }
+}
+
+/// The definition of a constant when `e` is a path to one (through parentheses).
+fn const_path(cx: &Cx<'_, '_>, pkg: usize, e: ExprId) -> Option<DefId> {
+    let p = &cx.pkgs[pkg];
+    let mut e = e;
+    while let ExprKind::Paren(inner) = &p.expr(e).kind {
+        e = *inner;
+    }
+    match &p.expr(e).kind {
+        ExprKind::Path(path) => match path.res {
+            Res::Def(d) if cx.sema.def(d).kind == DefKind::Const => Some(d),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The span of `expr` in package `pkg`.
+fn expr_span_in(cx: &Cx<'_, '_>, pkg: usize, expr: ExprId) -> Span {
+    cx.pkgs[pkg].expr(expr).span
+}
+
+// ------------------------------------------------------- the interpreter path
+
+/// The scalar value of a value tree, when it is one (the direct path's type).
+fn scalar_of(cx: &Cx<'_, '_>, v: &crate::value::Value) -> Option<ConstValue> {
+    match v {
+        crate::value::Value::Int { ty, value } => match cx.d.types.kind(*ty) {
+            crate::ty::TyKind::Int(i) => Some(ConstValue::Int {
+                ty: *i,
+                value: *value,
+            }),
+            _ => None,
+        },
+        crate::value::Value::Bool(b) => Some(ConstValue::Bool(*b)),
+        _ => None,
+    }
+}
+
+impl Cx<'_, '_> {
+    /// The declared type of a `const` or `static`.
+    fn const_ty(&self, d: DefId) -> Option<crate::ty::TypeId> {
+        match self.d.items.get(&d) {
+            Some(ItemSig::Const(c)) => Some(c.ty),
+            Some(ItemSig::Static(s)) => Some(s.ty),
+            _ => None,
+        }
+    }
+
+    fn type_of_val_ty(&mut self, v: ValTy) -> crate::ty::TypeId {
+        match v {
+            ValTy::Int(i) => self.d.types.int(i),
+            ValTy::Bool => self.d.types.bool_,
+        }
+    }
+
+    /// Give a constant the direct path evaluated its value tree too (code generation
+    /// reads the tree for every `const` and `static`).
+    pub(crate) fn store_direct_value(&mut self, d: DefId) {
+        if matches!(self.d.values.get(&d), Some(ValueState::Done(_))) {
+            return;
+        }
+        let Some(ConstState::Done(Ok(v))) = self.d.consts.get(&d).cloned() else {
+            return;
+        };
+        let value = match v {
+            ConstValue::Int { ty, value } => crate::value::Value::Int {
+                ty: self.d.types.int(ty),
+                value,
+            },
+            ConstValue::Bool(b) => crate::value::Value::Bool(b),
+        };
+        self.d.values.insert(d, ValueState::Done(Ok(value)));
+    }
+
+    /// Evaluate the initializer of a `const` by the direct path or (when the direct
+    /// path says the expression is outside its subset) by the interpreter.
+    pub(crate) fn eval_const_item(&mut self, d: DefId) -> Result<(), Fail> {
+        match self.const_value_direct(d) {
+            Ok(_) => Ok(()),
+            Err(Fail::Interpret(_)) if self.impl_tables_building => {
+                self.cycle_in_impl(d).map(|_| ())
+            }
+            Err(Fail::Interpret(reason)) => self.eval_tree(d, reason).map(|_| ()),
+            Err(f) => Err(f),
+        }
+    }
+
+    /// Evaluate the initializer of `d` with the interpreter, if there is one.
+    pub(crate) fn eval_tree(
+        &mut self,
+        d: DefId,
+        reason: String,
+    ) -> Result<crate::value::Value, Fail> {
+        self.ensure_impl_tables();
+        let Some(factory) = self.interp else {
+            return Err(Fail::Interpret(reason));
+        };
+        let file = self.file_of(d);
+        let span = self.sema.def(d).span;
+        self.const_stack.push(d);
+        let saved = (self.eval_depth, self.eval_outer);
+        let r = factory
+            .make(saved.0, saved.1)
+            .eval_initializer(self, d, file, span);
+        (self.eval_depth, self.eval_outer) = saved;
+        self.const_stack.pop();
+        if !matches!(self.d.values.get(&d), Some(ValueState::Done(_))) {
+            crate::interp::Host::set_const_value(self, d, r.clone());
+        }
+        r
+    }
+
+    /// Evaluate `expr` (of type `ty`) in `body`, with the interpreter: an
+    /// `@static_assert` condition of the body being checked.
+    pub(crate) fn eval_in_body(
+        &mut self,
+        body: &crate::typed::TypedBody,
+        expr: ExprId,
+        ty: crate::ty::TypeId,
+    ) -> Result<crate::value::Value, Fail> {
+        self.ensure_impl_tables();
+        let Some(factory) = self.interp else {
+            return Err(Fail::Interpret(
+                "constant evaluation of an `@static_assert` condition".to_string(),
+            ));
+        };
+        let file = self.file_of(body.owner);
+        let span = expr_span_in(self, body.package, expr);
+        let saved = (self.eval_depth, self.eval_outer);
+        let r = factory
+            .make(saved.0, saved.1)
+            .eval_expr(self, body, expr, ty, file, span);
+        (self.eval_depth, self.eval_outer) = saved;
+        r
+    }
+
+    /// Evaluate `e` of type `hint` with the interpreter (a signature constant).
+    fn eval_signature_expr(
+        &mut self,
+        pkg: usize,
+        file: usize,
+        e: ExprId,
+        hint: ValTy,
+        owner: DefId,
+    ) -> Result<ConstValue, Fail> {
+        let ty = self.type_of_val_ty(hint);
+        self.ensure_impl_tables();
+        let Some(factory) = self.interp else {
+            return Err(Fail::Interpret(
+                "constant evaluation of a constant expression of a signature".to_string(),
+            ));
+        };
+        let saved = (self.eval_depth, self.eval_outer);
+        let mut interp = factory.make(saved.0, saved.1);
+        let r = (|| {
+            let body = crate::interp::Host::typed_expr(self, owner, e, ty).ok_or(Fail::Reported)?;
+            let span = self.pkgs[pkg].expr(e).span;
+            interp.eval_expr(self, &body, e, ty, file, span)
+        })();
+        (self.eval_depth, self.eval_outer) = saved;
+        match r {
+            Ok(v) => match scalar_of(self, &v) {
+                Some(c) => Ok(c),
+                None => Err(Fail::Reported),
+            },
+            Err(f) => Err(f),
+        }
+    }
+}
+
+impl<'a, 'i> crate::interp::Host for Cx<'a, 'i> {
+    fn lowering(&mut self) -> crate::interp::LoweringParts<'_> {
+        crate::interp::LoweringParts {
+            sources: self.sources,
+            sema: self.sema,
+            packages: self.pkgs,
+            declarations: &mut self.d,
+        }
+    }
+
+    fn typed_body(&mut self, def: DefId) -> Option<crate::typed::TypedBody> {
+        if let Some(b) = self.d.bodies.get(&def) {
+            return Some(b.clone());
+        }
+        // A body that is being typed cannot be typed again (E0812 at the caller).
+        if self.typing.contains(&def) {
+            return None;
+        }
+        let item: &'a crate::hir::Item = self.hir_item(def)?;
+        // Typing a body changes `cur`; the caller is in the middle of a signature or
+        // a statement and must keep its own file and package.
+        let saved = self.cur;
+        self.typing.insert(def);
+        let body = match item {
+            hir::Item::Fn(f) => f.body.and_then(|b| self.check_fn_body(def, f, b)),
+            hir::Item::Const(c) => self.check_const_body(def, c),
+            hir::Item::Static(s) => self.check_static_body(def, s),
+            _ => None,
+        };
+        self.typing.remove(&def);
+        self.cur = saved;
+        let body = body?;
+        self.d.bodies.insert(def, body.clone());
+        Some(body)
+    }
+
+    fn typed_expr(
+        &mut self,
+        owner: DefId,
+        expr: ExprId,
+        ty: crate::ty::TypeId,
+    ) -> Option<crate::typed::TypedBody> {
+        if let Some(b) = self.d.expr_bodies.get(&(owner, expr)) {
+            return Some(b.clone());
+        }
+        let saved = self.cur;
+        let saved_body = self.body_owner;
+        self.body_owner = Some(owner);
+        let mut c = crate::body::Checker::new(
+            self,
+            owner,
+            crate::typed::BodyKind::Const,
+            crate::typed::BodyRoot::Expr(expr),
+            ty,
+            None,
+        );
+        if !c.is_poison(ty) {
+            c.expect(expr, ty);
+        }
+        let body = c.finish();
+        self.body_owner = saved_body;
+        self.cur = saved;
+        self.d.expr_bodies.insert((owner, expr), body.clone());
+        Some(body)
+    }
+
+    fn fn_sig(&mut self, def: DefId) -> Option<FnSig> {
+        self.ensure_sig(def);
+        self.d.fn_sig(def).cloned()
+    }
+
+    fn sig_in_progress(&self, def: DefId) -> bool {
+        self.is_busy(def)
+    }
+
+    fn body_in_progress(&self, def: DefId) -> bool {
+        self.typing.contains(&def)
+    }
+
+    fn set_eval_context(&mut self, depth: usize, outer: Option<(usize, Span)>) {
+        self.eval_depth = depth;
+        self.eval_outer = outer;
+    }
+
+    fn const_lookup(&mut self, def: DefId) -> crate::interp::ConstLookup {
+        if let Some(state) = self.d.values.get(&def) {
+            match state {
+                ValueState::InProgress => {
+                    let _ = self.cycle(def);
+                    return crate::interp::ConstLookup::Failed(Fail::Reported);
+                }
+                ValueState::Done(Ok(v)) => {
+                    return crate::interp::ConstLookup::Value(v.clone());
+                }
+                ValueState::Done(Err(f)) => {
+                    return crate::interp::ConstLookup::Failed(f.clone());
+                }
+            }
+        }
+        match self.const_value_direct(def) {
+            Ok(v) => crate::interp::ConstLookup::Scalar(v),
+            Err(Fail::Interpret(_)) => crate::interp::ConstLookup::NeedInitializer,
+            Err(f) => crate::interp::ConstLookup::Failed(f),
+        }
+    }
+
+    fn mark_const_in_progress(&mut self, def: DefId) {
+        self.d.values.insert(def, ValueState::InProgress);
+        self.d.consts.remove(&def);
+    }
+
+    fn enter_const(&mut self, def: DefId) {
+        self.const_stack.push(def);
+    }
+
+    fn leave_const(&mut self) {
+        self.const_stack.pop();
+    }
+
+    fn set_const_value(&mut self, def: DefId, result: Result<crate::value::Value, Fail>) {
+        match &result {
+            Ok(v) => {
+                if let Some(c) = scalar_of(self, v) {
+                    self.d.consts.insert(def, ConstState::Done(Ok(c)));
+                }
+            }
+            Err(f) => {
+                self.d.consts.insert(def, ConstState::Done(Err(f.clone())));
+            }
+        }
+        self.d.values.insert(def, ValueState::Done(result));
+    }
+
+    fn report(
+        &mut self,
+        code: &'static str,
+        message: String,
+        file: usize,
+        span: Span,
+        label: Option<(usize, Span)>,
+    ) {
+        let mut diag =
+            ingot_diag::diagnostic::Diagnostic::new(code, message, self.sources.get(file), span);
+        if let Some((lfile, lspan)) = label {
+            let path = self.sources.get(lfile).path.clone();
+            diag.relate_in("call", &path, lspan);
+        }
+        self.d.diagnostics.push(diag);
+    }
+
+    fn report_cycle(&mut self, def: DefId) {
+        let _ = self.cycle(def);
+    }
+
+    fn not_implemented(&mut self, what: String) {
+        self.ni(what);
+    }
+
+    fn layout(&mut self, ty: crate::ty::TypeId) -> Option<crate::Layout> {
+        self.layout_of_checked(ty)
+    }
+
+    fn declarations(&self) -> &crate::sigs::Declarations {
+        &self.d
+    }
+
+    fn declarations_mut(&mut self) -> &mut crate::sigs::Declarations {
+        &mut self.d
+    }
+
+    fn type_name(&self, ty: crate::ty::TypeId) -> String {
+        self.ty_name(ty)
+    }
+
+    fn def_kind(&self, def: DefId) -> crate::defs::DefKind {
+        self.sema.def(def).kind
+    }
+
+    fn def_name(&self, def: DefId) -> String {
+        self.sema.def(def).name.clone()
+    }
+}
+
+// ------------------------------------------------------------------- floats
+
+/// One arithmetic, comparison or bit operation on floats (specification section 5.3).
+/// Both operands have the type `ty`; an `f32` result is rounded to `f32` by doing the
+/// operation there. `a` and `b` are the values as the host's `f64` can carry them.
+pub fn float_binary(op: BinOp, ty: crate::ty::FloatTy, a: f64, b: f64) -> f64 {
+    use crate::ty::FloatTy;
+    match ty {
+        FloatTy::F32 => {
+            let (a, b) = (a as f32, b as f32);
+            let r = match op {
+                BinOp::Add => a + b,
+                BinOp::Sub => a - b,
+                BinOp::Mul => a * b,
+                BinOp::Div => a / b,
+                BinOp::Rem => a % b,
+                BinOp::Eq => return f64::from(u8::from(a == b)),
+                BinOp::Ne => return f64::from(u8::from(a != b)),
+                BinOp::Lt => return f64::from(u8::from(a < b)),
+                BinOp::Le => return f64::from(u8::from(a <= b)),
+                BinOp::Gt => return f64::from(u8::from(a > b)),
+                BinOp::Ge => return f64::from(u8::from(a >= b)),
+                _ => a,
+            };
+            f64::from(r)
+        }
+        FloatTy::F64 => match op {
+            BinOp::Add => a + b,
+            BinOp::Sub => a - b,
+            BinOp::Mul => a * b,
+            BinOp::Div => a / b,
+            BinOp::Rem => a % b,
+            _ => a,
+        },
+    }
+}
+
+/// The bits of an `f32` in the low 32 bits of a `u64`.
+pub fn f32_bits(v: f32) -> u64 {
+    u64::from(v.to_bits())
+}
+
+pub fn f32_from_bits(bits: u64) -> f32 {
+    f32::from_bits(bits as u32)
 }

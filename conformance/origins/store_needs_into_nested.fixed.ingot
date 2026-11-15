@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 13.2
+
+struct Inner { s: []u8 }
+
+struct Holder { inner: Inner }
+
+fn keep(h: &mut Holder, s: []u8 into h) {
+    h.inner.s = s;
+}

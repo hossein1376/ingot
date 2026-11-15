@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 13.1
+
+struct View { s: []u8 }
+
+fn f() -> View from static {
+    let a: [4]u8 = @zero;
+    return View.{ s: &a[0..2] }; //~ E1203
+}

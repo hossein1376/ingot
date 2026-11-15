@@ -1,0 +1,20 @@
+//! expect: reject
+//! section: 10
+
+linear struct Pair { n: i64 }
+
+impl Pair {
+    fn left(self: Pair) -> i64 {
+        let Pair.{ n } = self;
+        return n;
+    }
+    fn right(self: Pair) -> i64 {
+        let Pair.{ n } = self;
+        return n + 1;
+    }
+}
+
+fn f() {
+    let p = Pair.{ n: 1 }; //~ E1003
+    @assert(p.n == 1);
+}

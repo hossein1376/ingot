@@ -12,7 +12,7 @@ use crate::typed::*;
 use ingot_diag::source::Span;
 use ingot_syntax::ast::UnOp;
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// Type `e`. `hint` is the type the context expects; only an untyped literal, a
     /// shorthand and `@zero` use it, and the caller compares the result with it.
     pub(crate) fn expr(&mut self, e: ExprId, hint: Option<TypeId>) -> TypeId {
@@ -1001,7 +1001,8 @@ impl Checker<'_, '_> {
                 self.err("E1502", out_of_range(), span);
                 false
             }
-            Err(crate::consteval::Fail::NotImplemented(reason)) => {
+            Err(crate::consteval::Fail::NotImplemented(reason))
+            | Err(crate::consteval::Fail::Interpret(reason)) => {
                 self.ni(format!("{reason} (lane index)"));
                 false
             }

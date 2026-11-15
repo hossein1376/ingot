@@ -1,0 +1,9 @@
+//! expect: accept
+//! section: 12
+
+fn f() -> i64 {
+    let x: i64 = 1;
+    let a = &x;
+    let b = &x;
+    return a.* + b.*;
+}

@@ -1,0 +1,38 @@
+// try with identity and from conversions, catch with a binding and with a block,
+// and orelse with an expression and with a block
+
+enum E { bad, other: i64 }
+enum F { wrap: from E }
+
+fn g(x: i64) -> i64 ! E {
+    if x < 0 { fail .bad; }
+    if x == 0 { fail .other(1); }
+    return x;
+}
+
+fn identity(x: i64) -> i64 ! E {
+    let v = try g(x);
+    return v;
+}
+
+fn converted(x: i64) -> i64 ! F {
+    let v = try g(x);
+    return v;
+}
+
+fn handled(x: i64) -> i64 {
+    let a = g(x) catch _ => 0;
+    let b = g(x) catch e => { _ = e; return -1; };
+    return a + b;
+}
+
+fn options(o: ?i64) -> i64 {
+    let a = o orelse 0;
+    let b = o orelse { return 1; };
+    return a + b;
+}
+
+fn dead_ends(n: i64) -> i64 ! E {
+    let x: never = if n < 0 { return 0; } else { fail .bad; };
+    _ = x;
+}

@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 12
+
+struct Vec1 { data: [4]i64, n: i64 }
+
+impl Vec1 {
+    fn len(self: &Vec1) -> i64 { return self.n; }
+    fn push(self: &mut Vec1, v: i64) {
+        self.data[self.n] = v;
+        self.n += 1;
+    }
+}
+
+fn f() -> i64 {
+    var v = Vec1.{ data: @zero, n: 0 };
+    v.push(v.len());
+    return v.len();
+}

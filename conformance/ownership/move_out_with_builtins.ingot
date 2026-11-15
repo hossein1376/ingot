@@ -1,0 +1,28 @@
+//! expect: accept
+//! section: 11
+
+linear struct Token { id: i32 }
+
+impl Token {
+    fn make(id: i32) -> Token { return Token.{ id: id }; }
+    fn release(self: Token) { let Token.{ id: _ } = self; }
+}
+
+fn f(slot: &mut ?Token) {
+    var t = Token.make(1);
+    let old = @replace(&mut t, Token.make(2));
+    old.release();
+    t.release();
+
+    var a = Token.make(3);
+    var b = Token.make(4);
+    @swap(&mut a, &mut b);
+    a.release();
+    b.release();
+
+    let taken = slot.take();
+    match taken {
+        .some(v) => { v.release(); }
+        .none => {}
+    }
+}

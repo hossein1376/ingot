@@ -2,9 +2,11 @@
 //! tables, type properties and layouts. Phase 7 reads these and nothing else about
 //! declarations; no function body is looked at to produce them.
 
-use crate::consteval::ConstState;
+use crate::consteval::{ConstState, ValueState};
 use crate::defs::{Builtin, DefId};
+use crate::hir::ExprId;
 use crate::ty::{FnKind, FnPtrSig, GenericArg, IntTy, Subst, TypeId, TypeTable};
+use crate::typed::TypedBody;
 use ingot_diag::diagnostic::Diagnostic;
 use ingot_diag::source::Span;
 use ingot_syntax::ast::{FnMods, StructKind};
@@ -512,6 +514,15 @@ pub struct Declarations {
     pub impls: ImplTables,
     /// The state of every constant whose value was asked for.
     pub consts: BTreeMap<DefId, ConstState>,
+    /// The richer value tree of every `const` and `static` that the interpreter
+    /// evaluated (pipeline section 4.6).
+    pub values: BTreeMap<DefId, ValueState>,
+    /// The bodies phase 7 typed early, because a constant that phase 6 evaluated
+    /// reached them. Phase 7 reuses them instead of typing them twice.
+    pub bodies: BTreeMap<DefId, TypedBody>,
+    /// Constant expressions of signatures (array lengths, tag values, alignments)
+    /// typed on demand, keyed by the item and the expression.
+    pub expr_bodies: BTreeMap<(DefId, ExprId), TypedBody>,
     pub props: BTreeMap<TypeId, Props>,
     pub layouts: BTreeMap<TypeId, Layout>,
     pub obligations: Vec<Obligation>,
@@ -538,6 +549,9 @@ impl Declarations {
             param_const_ty: BTreeMap::new(),
             impls: ImplTables::default(),
             consts: BTreeMap::new(),
+            values: BTreeMap::new(),
+            bodies: BTreeMap::new(),
+            expr_bodies: BTreeMap::new(),
             props: BTreeMap::new(),
             layouts: BTreeMap::new(),
             obligations: Vec::new(),

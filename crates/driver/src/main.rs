@@ -1,95 +1,72 @@
-use ingot_diag::diagnostic::{Diagnostic, json_string};
-use ingot_diag::source::{Sources, Span};
+use ingot_driver::commands;
 use ingot_driver::conformance;
+use ingot_driver::files::Overlays;
 use ingot_driver::fix;
-use ingot_driver::pipeline;
-use ingot_sema::Target;
+use ingot_driver::query;
+use ingot_driver::serve;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match run(args) {
+    let json = has_flag(&args, "--json");
+    let started = Instant::now();
+    let code = match run(&args) {
         Ok(code) => code,
         Err(message) => {
-            eprintln!("ingot: {message}");
+            // tools.md §1 "Failures": with --json a named failure writes an `error` line
+            // and its summary, with the command word as given (none: the empty string).
+            if json {
+                for line in commands::failure_lines(&command_word(&args), &message, started) {
+                    println!("{line}");
+                }
+            } else {
+                eprintln!("ingot: {message}");
+            }
             2
         }
     };
     ExitCode::from(code)
 }
 
-fn run(args: Vec<String>) -> Result<u8, String> {
+fn run(args: &[String]) -> Result<u8, String> {
     let Some(command) = args.first().map(String::as_str) else {
-        return Err("usage: ingot <check|fix|conformance> [options] [path]".to_string());
+        return Err(
+            "usage: ingot <check|fix|query|serve|conformance> [options] [path]".to_string(),
+        );
     };
-    let json = has_flag(&args, "--json");
+    let json = has_flag(args, "--json");
     match command {
         "check" => {
-            if has_flag(&args, "--all-targets") {
+            if has_flag(args, "--all-targets") {
                 return Err("not implemented: `check --all-targets`".to_string());
             }
-            let path = path_arg(&args, &["--target"])?;
-            let started = Instant::now();
-            let mut options = pipeline::Options::default();
-            if let Some(name) = flag_value(&args, "--target")? {
-                if Target::by_name(&name).is_none() {
-                    return Ok(unknown_target(&name, json, started));
-                }
-                options.target = name;
-            }
-            let analysis =
-                pipeline::analyze_path_with(&path, &options).map_err(|e| e.to_string())?;
-            let ok = analysis.accepted();
-            let target = analysis.target.as_str();
+            let path = positional(args, &["--target"]).unwrap_or_else(|| PathBuf::from("."));
+            let target = flag_value(args, "--target")?;
+            let output = commands::check(&path, target.as_deref(), &Overlays::default());
             if json {
-                for d in &analysis.diagnostics {
-                    println!("{}", d.to_json_for(&analysis.sources, target));
+                for line in &output.lines {
+                    println!("{line}");
                 }
-                let not_implemented = if analysis.not_implemented.is_empty() {
-                    String::new()
-                } else {
-                    let mut list = String::new();
-                    for (i, what) in analysis.not_implemented.iter().enumerate() {
-                        if i > 0 {
-                            list.push(',');
-                        }
-                        json_string(&mut list, what);
-                    }
-                    format!(",\"not_implemented\":[{list}]")
-                };
-                println!(
-                    "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":{ok},\"protocol\":1,\"errors\":{},\"files\":{},\"targets\":[\"{target}\"],\"ms\":{}{not_implemented}}}",
-                    analysis.diagnostics.len(),
-                    analysis.files,
-                    started.elapsed().as_millis()
-                );
             } else {
-                for d in &analysis.diagnostics {
-                    print!("{}", d.to_human(&analysis.sources));
+                print!("{}", output.human);
+                if let Some(message) = &output.error {
+                    eprintln!("ingot: {message}");
                 }
-                if ok {
+                if output.exit == 0 {
                     eprintln!("ok: no diagnostics");
                 }
             }
-            for what in &analysis.not_implemented {
+            for what in &output.not_implemented {
                 eprintln!("ingot: not implemented: {what}");
             }
-            // 0: accepted. 1: diagnostics (a rejection stands whatever is unchecked).
-            // 2: nothing found, but part of the check does not exist yet, so the
-            // compiler cannot claim the package is correct.
-            Ok(if !analysis.diagnostics.is_empty() {
-                1
-            } else if ok {
-                0
-            } else {
-                2
-            })
+            Ok(output.exit)
         }
         "fix" => {
-            let path = path_arg(&args, &[])?;
-            let dry_run = has_flag(&args, "--dry-run");
+            let path = path_arg(args, &[])?;
+            let dry_run = has_flag(args, "--dry-run");
             let started = Instant::now();
             let outcome = fix::fix_path(&path).map_err(|e| e.to_string())?;
             let ok = outcome.diagnostics.is_empty();
@@ -123,6 +100,61 @@ fn run(args: Vec<String>) -> Result<u8, String> {
             }
             Ok(if ok { 0 } else { 1 })
         }
+        "query" => {
+            let kind = args.get(1).map(String::as_str).unwrap_or("");
+            let started = Instant::now();
+            let outcome = if has_flag(args, "--name") {
+                query::failure(kind, "not implemented: `query --name`".to_string(), started)
+            } else {
+                let at = positional_from(args, 2, &[]);
+                let path = positional_from(args, 2, &["--match"]);
+                let match_text = flag_value(args, "--match")?;
+                query::run(
+                    kind,
+                    at.as_deref(),
+                    path.as_deref(),
+                    match_text.as_deref(),
+                    &Overlays::default(),
+                    started,
+                )
+            };
+            if json {
+                for line in &outcome.lines {
+                    println!("{line}");
+                }
+            } else {
+                print!("{}", outcome.human);
+                if let Some(message) = &outcome.error {
+                    eprintln!("ingot: {message}");
+                }
+            }
+            Ok(outcome.exit)
+        }
+        "serve" => {
+            let stdin = std::io::stdin();
+            let mut input = stdin.lock();
+            let stdout = std::io::stdout();
+            let mut output = stdout.lock();
+            let mut server = serve::Server::new();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let read = input.read_line(&mut line).map_err(|e| e.to_string())?;
+                // End of input is a shutdown (tools.md §6): exit 0 with nothing written.
+                if read == 0 {
+                    break;
+                }
+                let request = line.trim_end_matches(['\n', '\r']);
+                for response in server.handle(request) {
+                    writeln!(output, "{response}").map_err(|e| e.to_string())?;
+                }
+                output.flush().map_err(|e| e.to_string())?;
+                if server.shutdown_requested() {
+                    break;
+                }
+            }
+            Ok(0)
+        }
         "run" | "test" | "cost" => Err(format!("`{command}` is not implemented yet")),
         "conformance" => {
             let root = args
@@ -145,33 +177,12 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     }
 }
 
-/// E1702 for a `--target` that is not one of the three. The name has no file, so the
-/// diagnostic points into the command line.
-fn unknown_target(name: &str, json: bool, started: Instant) -> u8 {
-    let text = format!("--target {name}");
-    let source = pipeline::command_line_source(&text);
-    let span = Span::new("--target ".len(), text.len());
-    let d = Diagnostic::new(
-        "E1702",
-        format!(
-            "`{name}` is not a target; the targets are {}",
-            ingot_sema::target::TARGETS.join(", ")
-        ),
-        &source,
-        span,
-    );
-    let mut sources = Sources::default();
-    sources.add(source);
-    if json {
-        println!("{}", d.to_json(&sources));
-        println!(
-            "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":false,\"protocol\":1,\"errors\":1,\"files\":0,\"targets\":[],\"ms\":{}}}",
-            started.elapsed().as_millis()
-        );
-    } else {
-        print!("{}", d.to_human(&sources));
+/// The command word as the user gave it: the first argument when it is not a flag.
+fn command_word(args: &[String]) -> String {
+    match args.first() {
+        Some(word) if !word.starts_with('-') => word.clone(),
+        _ => String::new(),
     }
-    1
 }
 
 /// The value of `--flag VALUE`, if the flag is given.
@@ -216,6 +227,23 @@ fn positional(args: &[String], value_flags: &[&str]) -> Option<PathBuf> {
             continue;
         }
         return Some(PathBuf::from(arg));
+    }
+    None
+}
+
+fn positional_from(args: &[String], start: usize, value_flags: &[&str]) -> Option<String> {
+    let mut i = start;
+    while i < args.len() {
+        let arg = &args[i];
+        if value_flags.contains(&arg.as_str()) {
+            i += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return Some(arg.clone());
     }
     None
 }

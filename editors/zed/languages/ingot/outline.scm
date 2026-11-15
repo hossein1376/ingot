@@ -1,0 +1,9 @@
+(fn_decl name: (identifier) @name) @item
+(struct_decl name: (type_identifier) @name) @item
+(enum_decl name: (type_identifier) @name) @item
+(interface_decl name: (type_identifier) @name) @item
+(test_decl name: (string) @name) @item
+(bench_decl name: (string) @name) @item
+(const_decl name: (identifier) @name) @item
+(static_decl name: (identifier) @name) @item
+(type_decl name: (type_identifier) @name) @item

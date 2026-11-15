@@ -1,0 +1,18 @@
+[package]
+name = "ingot-lsp"
+version = "0.1.0"
+edition = "2024"
+description = "The Ingot language server: an LSP adapter over `ingot serve`"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_lsp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ingot-lsp"
+path = "src/main.rs"
+
+[dependencies]
+ingot-diag = { path = "../diag" }
+ingot-driver = { path = "../driver" }

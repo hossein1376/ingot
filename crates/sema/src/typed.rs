@@ -24,7 +24,10 @@
 //!
 //! A body in which phase 7 reported an error (or met poison) has [`TypedBody::failed`]
 //! set; phases 8 to 10 skip it (pipeline section 3, "Phase gates"). The information of a
-//! failed body is partial and must not be read.
+//! failed body is partial and must not be read. An entry of a failed body whose type is
+//! not poison is final once the expression that owns it has been typed (a coercion may
+//! rewrite the entry of the expression being coerced while it is typed, and nothing
+//! changes it later), and may be read by tools, not by phases 8 to 10.
 //!
 //! Types in a generic body mention the generic parameters (`TyKind::Param`): the body is
 //! checked once, never instantiated here (pipeline section 1).
@@ -253,7 +256,7 @@ pub struct DispatchInfo {
 }
 
 /// A reference to a function that is known at compile time.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnRef {
     /// The function definition: the impl's own, or the interface's when the impl
     /// inherits a default body.
@@ -264,7 +267,7 @@ pub struct FnRef {
 }
 
 /// Where a function reference came from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FnSource {
     /// A free function, an `extern` function, or a function of the package's modules.
     Free,
@@ -284,7 +287,7 @@ pub enum FnSource {
 }
 
 /// How a call through an interface is resolved.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InterfaceVia {
     /// `impl I for T { .. }` written in the program, with its generic arguments.
     Impl {

@@ -887,7 +887,7 @@ impl<'a> Resolver<'a> {
         };
         match found {
             Some(d) => {
-                if self.sema.def(d).vis == Vis::Pub || target == from {
+                if self.sema.may_name_item(target, from, ns, name) == Some(d) {
                     ItemLookup::Found(d)
                 } else {
                     ItemLookup::Private(d)

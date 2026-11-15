@@ -38,7 +38,7 @@ fn assign_binop(op: AssignOp) -> Option<BinOp> {
     })
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// Check a block. Returns whether control can reach its end.
     pub(crate) fn block(&mut self, b: BlockId) -> bool {
         let hir = self.hir;
@@ -624,12 +624,6 @@ impl Checker<'_, '_> {
         step: Option<ExprId>,
         body: BlockId,
     ) {
-        if par && !self.kernel {
-            self.ni(
-                "E1401 not_send, E1402 capture_not_sync and E1407 par_for_outer_mutation \
-                 (phase 9, S6 to S9)",
-            );
-        }
         if let Some(g) = grain {
             let i64_ = self.i64_();
             self.expect(g, i64_);
@@ -785,7 +779,8 @@ impl Checker<'_, '_> {
             Err(crate::consteval::Fail::Reported) => {
                 self.errors += 1;
             }
-            Err(crate::consteval::Fail::NotImplemented(m)) => {
+            Err(crate::consteval::Fail::NotImplemented(m))
+            | Err(crate::consteval::Fail::Interpret(m)) => {
                 self.ni(m);
             }
             Err(crate::consteval::Fail::Generic) => {

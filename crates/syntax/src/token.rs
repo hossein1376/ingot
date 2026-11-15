@@ -59,6 +59,64 @@ pub enum Kw {
 }
 
 impl Kw {
+    /// Every keyword, in declaration order (completion offers them). The test
+    /// `all_lists_every_keyword` stops compiling when a keyword is added to the enum and
+    /// not here.
+    pub const ALL: &[Kw] = &[
+        Kw::Align,
+        Kw::As,
+        Kw::Bench,
+        Kw::Break,
+        Kw::Catch,
+        Kw::Const,
+        Kw::Continue,
+        Kw::Copy,
+        Kw::Defer,
+        Kw::Dispatch,
+        Kw::Dyn,
+        Kw::Else,
+        Kw::Enum,
+        Kw::Errdefer,
+        Kw::Export,
+        Kw::Extern,
+        Kw::Fail,
+        Kw::False,
+        Kw::Fn,
+        Kw::For,
+        Kw::From,
+        Kw::If,
+        Kw::Impl,
+        Kw::Import,
+        Kw::In,
+        Kw::Inline,
+        Kw::Interface,
+        Kw::Into,
+        Kw::Kernel,
+        Kw::Let,
+        Kw::Linear,
+        Kw::Loop,
+        Kw::Match,
+        Kw::Mut,
+        Kw::Noinline,
+        Kw::Orelse,
+        Kw::Pub,
+        Kw::Return,
+        Kw::Scope,
+        Kw::Select,
+        Kw::Spawn,
+        Kw::Static,
+        Kw::Struct,
+        Kw::Test,
+        Kw::True,
+        Kw::Try,
+        Kw::Type,
+        Kw::Unsafe,
+        Kw::Var,
+        Kw::Waitable,
+        Kw::When,
+        Kw::While,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Kw::Align => "align",
@@ -465,5 +523,77 @@ pub struct Token {
 impl Token {
     pub fn new(kind: TokenKind, span: Span) -> Self {
         Token { kind, span }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Kw;
+
+    #[test]
+    fn all_lists_every_keyword() {
+        // No wildcard arm: a new keyword fails to compile here until it is given a
+        // position, and the loop below then fails until `Kw::ALL` lists it there.
+        fn position(keyword: Kw) -> usize {
+            match keyword {
+                Kw::Align => 0,
+                Kw::As => 1,
+                Kw::Bench => 2,
+                Kw::Break => 3,
+                Kw::Catch => 4,
+                Kw::Const => 5,
+                Kw::Continue => 6,
+                Kw::Copy => 7,
+                Kw::Defer => 8,
+                Kw::Dispatch => 9,
+                Kw::Dyn => 10,
+                Kw::Else => 11,
+                Kw::Enum => 12,
+                Kw::Errdefer => 13,
+                Kw::Export => 14,
+                Kw::Extern => 15,
+                Kw::Fail => 16,
+                Kw::False => 17,
+                Kw::Fn => 18,
+                Kw::For => 19,
+                Kw::From => 20,
+                Kw::If => 21,
+                Kw::Impl => 22,
+                Kw::Import => 23,
+                Kw::In => 24,
+                Kw::Inline => 25,
+                Kw::Interface => 26,
+                Kw::Into => 27,
+                Kw::Kernel => 28,
+                Kw::Let => 29,
+                Kw::Linear => 30,
+                Kw::Loop => 31,
+                Kw::Match => 32,
+                Kw::Mut => 33,
+                Kw::Noinline => 34,
+                Kw::Orelse => 35,
+                Kw::Pub => 36,
+                Kw::Return => 37,
+                Kw::Scope => 38,
+                Kw::Select => 39,
+                Kw::Spawn => 40,
+                Kw::Static => 41,
+                Kw::Struct => 42,
+                Kw::Test => 43,
+                Kw::True => 44,
+                Kw::Try => 45,
+                Kw::Type => 46,
+                Kw::Unsafe => 47,
+                Kw::Var => 48,
+                Kw::Waitable => 49,
+                Kw::When => 50,
+                Kw::While => 51,
+            }
+        }
+        for (index, keyword) in Kw::ALL.iter().enumerate() {
+            assert_eq!(position(*keyword), index, "{keyword:?}");
+            assert_eq!(Kw::from_spelling(keyword.as_str()), Some(*keyword));
+        }
+        assert_eq!(Kw::ALL.len(), 52);
     }
 }

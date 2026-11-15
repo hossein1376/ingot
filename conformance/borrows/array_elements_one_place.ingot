@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 12
+
+fn f() -> i64 {
+    var a: [2]i64 = [2]i64.{ 1, 2 };
+    let x = &mut a[0];
+    let y = &mut a[1]; //~ E1102
+    x.* = 10;
+    y.* = 20;
+    return a[0] + a[1];
+}

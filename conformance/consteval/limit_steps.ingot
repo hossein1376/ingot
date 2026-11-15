@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 9
+
+fn spin() -> i64 {
+    var i: i64 = 0;
+    loop {
+        i += 1;
+    }
+}
+
+fn f() {
+    @static_assert(spin() == 0, "steps"); //~ E0808
+}

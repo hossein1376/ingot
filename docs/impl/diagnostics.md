@@ -47,6 +47,7 @@ One JSON object per line on standard output, for `check`, `build`, `test` and `f
 | `spawn` | the `spawn` that gave a borrow to a task |
 | `loop` | the loop whose next iteration reaches the error |
 | `instantiation` | where a generic was instantiated, innermost first |
+| `call` | the call in a constant expression that led to an operation inside a called function |
 | `candidate` | one of several things the author may have meant |
 
 ### Fixes
@@ -224,13 +225,13 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
 | E0805 | `not_generic` | generic arguments on something that takes none | the argument list | delete them |
-| E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`instantiation` if inside a generic) | — |
-| E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function or spawns | the operation | — |
-| E0808 | `evaluation_limit` | constant evaluation exceeds the step limit | the outermost call | — |
+| E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
+| E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function, or runs `spawn`, `par for`, `select` or `dispatch` (pipeline §4.6) | the operation (`call` as for E0806) | — |
+| E0808 | `evaluation_limit` | constant evaluation takes more than 2^24 steps, nests calls more than 1024 deep, or holds more than 2^24 bytes of values at once (pipeline §4.6) | the outermost call | — |
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
 | E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond`. A `cond` that depends on a generic parameter is checked for each instance (phase 11) | the builtin call | — |
 | E0811 | `layout_depends_on_parameter` | `@bits` or `@zero` on a type parameter with no bound that grants it | the builtin call | — |
-| E0812 | `constant_cycle` | the value of a constant depends on itself | the constant's name | — |
+| E0812 | `constant_cycle` | the value of a constant depends on itself, also through the signature or body of a function its evaluation calls, or (for a constant in an impl header that needs a call) through the impl tables (pipeline §4.6) | the constant's name | — |
 | E0813 | `wrong_generic_argument_kind` | a type is given for a constant generic parameter, or a constant for a type parameter | the argument | — |
 
 ## 10. Moves and linear values (E10xx)
@@ -255,18 +256,18 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1102 | `exclusive_borrow_conflict` | an exclusive borrow is taken while another loan that overlaps it is live | the new borrow, or the call whose receiver takes it | — |
 | E1103 | `use_while_exclusively_borrowed` | a place is read or borrowed shared while an exclusive loan that overlaps it is live | the use | — |
 | E1104 | `move_while_borrowed` | a place is moved, or consumed by `@forget`, while a loan on it is live | the move | — |
-| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live, including a temporary whose statement ends while a borrow of it is still used | the borrow expression (`scope_end`, `later_use`) | — |
+| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live | the borrow expression (`scope_end`, `later_use`) | — |
 
 ## 12. Origins (E12xx)
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E1201 | `missing_from` | a return type is written with a borrow in it and the signature has no `from` clause | the return type | append the `from` clause the body requires |
-| E1202 | `origin_not_declared` | a returned view may hold a parameter origin that the `from` clause does not cover | the returned expression (`signature`) | add the missing origin to the clause |
-| E1203 | `returns_local_borrow` | a returned view may hold a loan on a local of this function | the returned expression (`borrow`) | — |
-| E1204 | `store_needs_into` | a view from parameter `x` is stored where it reaches parameter `p`, including a `spawn` into a scope parameter, and `x` is not declared `into p` | the store or `spawn` (`signature`) | when `p` is `&mut` or `&Scope`, append ` into p` to parameter `x`; otherwise none |
+| E1201 | `missing_from` | a return type `T` or error type `E` is written with a borrow in it and the signature has no `from` clause | the return type | append the `from` clause the body requires |
+| E1202 | `origin_not_declared` | a returned or failed view may hold a parameter origin that the `from` clause does not cover | the returned expression (`signature`) | add the missing origin to the clause |
+| E1203 | `returns_local_borrow` | a returned or failed view may hold a loan on a local of this function | the returned expression (`borrow`) | — |
+| E1204 | `store_needs_into` | a view from parameter `x` is stored where it reaches parameter `p`, including a `spawn` into a scope parameter, and `x` is not declared `into p` | the store or `spawn` (`signature`) | when `p` is `&mut`, `[]mut` or `&Scope`, append ` into p` to parameter `x`; otherwise none |
 | E1205 | `local_borrow_escapes_through_parameter` | a loan on a local of this function is stored where it reaches a parameter | the store or `spawn` (`borrow`) | — |
-| E1206 | `bad_origin_clause` | `from x` or `into p` names something that is not a parameter; `p.*` on a parameter that is not a borrow; `into p` where `p` is neither `&mut` nor `&Scope`; `from` on a return type that can hold no borrow (one with no borrow written in it and no `Self`, associated type or type parameter) | the clause | for the last case, delete the clause |
+| E1206 | `bad_origin_clause` | `from x` or `into p` names something that is not a parameter; `p.*` on a parameter that is not a borrow; `into p` where `p` is neither `&mut`, `[]mut` nor `&Scope`; `from` on a return type that can hold no borrow (one with no borrow written in it and no `Self`, associated type or type parameter) | the clause | for the last case, delete the clause |
 | E1207 | `into_blocks_fn_conversion` | a function with an `into` clause is used as a `fn` value or to satisfy an `Fn` bound | the function name | — |
 
 ## 13. `unsafe` (E13xx)

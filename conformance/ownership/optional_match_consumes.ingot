@@ -1,0 +1,16 @@
+//! expect: accept
+//! section: 10, 11
+
+linear struct Token { id: i32 }
+
+impl Token {
+    fn make(id: i32) -> Token { return Token.{ id: id }; }
+    fn release(self: Token) { let Token.{ id: _ } = self; }
+}
+
+fn f(o: ?Token) {
+    match o {
+        .some(t) => { t.release(); }
+        .none => {}
+    }
+}

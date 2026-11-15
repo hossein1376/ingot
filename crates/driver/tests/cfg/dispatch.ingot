@@ -1,0 +1,23 @@
+// dispatch in both forms, a kernel with Idx members and the input slices
+
+import std.exec;
+
+kernel fn saxpy(i: Idx, a: f32, x: []f32, y: []mut f32) {
+    y[i] = a * x[i] + y[i];
+}
+
+kernel fn dot(i: Idx, x: []f32, y: []f32) -> f32 reduce(+) {
+    return x[i] * y[i];
+}
+
+kernel fn blur(i: Idx, x: []f32, out: []mut f32) {
+    let p = i.pos();
+    let j = i.offset(1);
+    out[i] = x.at_clamped(j) + x.at_or(i.offset(-1), 0.0) + x[i] + @nearest(f32, p);
+}
+
+fn f(xs: []f32, ys: []mut f32) -> f32 {
+    dispatch saxpy(2.0, xs, ys) over 0..xs.len on exec.simd;
+    let d: f32 = dispatch dot(xs, ys.shared()) over 0..xs.len on exec.par;
+    return d;
+}

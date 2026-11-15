@@ -20,6 +20,10 @@ Section 33 of the specification lists the commands. This file fixes their output
 
 * **Exit status.** 0 when `ok` is true, 1 when the command ran and found problems, 2 when
   the compiler itself failed. A consumer should trust `ok`, not the absence of lines.
+* **Failures.** A command that stops before doing its work, with status 2, for a reason
+  it can name (a path that does not exist, a command or option that is not written yet)
+  writes `{"type":"error","message":M}` and then its summary, with `ok` false. Only a
+  crash leaves the summary out.
 * **Compatibility.** `protocol` is 1. Within a protocol version, fields are added but
   never removed, renamed or given another type. Consumers must ignore unknown fields.
 * **Paths** are relative to the package root and use `/` on every system. When `PATH`
@@ -234,14 +238,54 @@ Prints assembly text. It has no JSON mode.
 These answer questions about a program that otherwise need a text search. They run the
 front end only, and they answer for a package with errors as far as the errors allow.
 
-A query takes a position (`FILE:LINE:COL`) or `--name PATH`.
+A query takes a position (`FILE:LINE:COL`) or `--name PATH`. The package is the one
+`FILE` belongs to (§1). In server mode the position is the argument `at`, as in
+`{"command":"query","args":{"kind":"def","at":"src/io.ingot:41:3"}}`; `kind` is the
+query's name. A query prints no diagnostics. Its summary is
+`{"type":"summary","command":"query","kind":K,"ok":true,"protocol":1,"ms":N}`: `ok` is
+true when the query ran, whatever it found, and a position that is not in the file, or
+a file that does not exist, is a failure (§1).
+
+The rules shared by the queries:
+
+* **What a position names.** The token it selects (§1). An identifier names what it
+  resolves to: a segment of a path in an expression, a type, a pattern or an `import`
+  (each segment names its own module or item), a field or method name after `.`, a
+  variant, a field name in a struct literal or pattern, a local or parameter, or the
+  name in a declaration (which names the declaration itself). `Self` names the
+  interface it is written in, or the target type of the impl. A name that resolved to
+  nothing (poison) names nothing, and so does a built-in name (a scalar type, `Option`,
+  a built-in interface): it has no declaration in a file.
+* **`item`** is one of `module`, `fn` (functions, methods, `extern` functions),
+  `struct`, `enum`, `variant`, `field`, `interface`, `type` (aliases and associated
+  types), `const`, `static`, `test`, `generic` (a generic parameter), `param` and
+  `local` (any other binding).
+* **`path`** is the item's full path (§1): `app.net.Parser` for an item, the item's path
+  and the member's name for a field, a variant or a method of an interface
+  (`app.net.Parser.pos`), the target type's path and the method's name for a method of
+  an `impl` (`app.net.Parser.rest`), and the module path for a module. A test's path
+  is its module's path and its name as written, without quotes. A generic parameter, a
+  parameter and a local have their bare name.
+* **`span`** is the declared name; **`extent`** is the whole declaration, from its first
+  token (after its doc comment) to its last. A parameter or local has no `extent`. A
+  module has no name in its file: its `span` is the empty span at the start of the
+  file, and it has no `extent`.
+* **`signature`** is the declaration as written, without its body: what comes before
+  the `{` of a function's or test's block or of a struct's, enum's, interface's or
+  impl's members, with the space before it removed. A `const`, `static`, alias, field
+  or variant is written whole, without a final `;` or `,`. Parameters, locals,
+  generic parameters and modules have none.
+* **`doc`** is the doc comment (specification §1): the run of lines that start,
+  after spaces, with `///`, ending on the line just before the declaration's first
+  token. Each line loses its `///` and one following space; the lines are joined with
+  `\n`. Absent when there is none.
 
 ### `ingot query def`
 
 Where the thing named at the position is declared.
 
 ```json
-{"type":"definition","path":"t.parse.Parser.rest","item":"fn","span":{...},
+{"type":"definition","path":"t.parse.Parser.rest","item":"fn","span":{...},"extent":{...},
  "signature":"fn rest(self: &Parser) -> []u8 from self.*","doc":"..."}
 ```
 
@@ -279,6 +323,13 @@ The type of the expression or binding at the position.
  "properties":{"copy":false,"linear":false,"view":true,"send":true,"sync":true}}
 ```
 
+The answer is for the innermost expression whose span contains the selected token, or
+for the binding when the token is the name a pattern, `let`, `var`, parameter or loop
+binds. `span` is that expression or name. Only the bodies of the package that phase 7
+checked are looked at; a position elsewhere (a signature, a comment, a body of another
+package), or an expression whose type is unknown because of an error, gives no line.
+`of` is written as diagnostics write types.
+
 ### `ingot query borrows FILE:LINE`
 
 The loans that are live at the start of that line, in the function that contains it.
@@ -299,8 +350,60 @@ This is the question behind most E11xx and E12xx diagnostics.
 
 ### `ingot query symbols [PATH] [--match TEXT]`
 
-One `{"type":"symbol","path":P,"item":K,"span":S,"pub":B}` per item, public or not, in
-source order. `--match` keeps items whose path contains the text.
+One `{"type":"symbol","path":P,"item":K,"span":S,"extent":E,"pub":B}` per item, public
+or not, in source order. `--match` keeps items whose path contains the text. The items
+are the declarations of the package's files: functions, `extern` functions, structs and
+their fields, enums and their variants, interfaces and their members, the members of
+impls (an impl itself is not a symbol), constants, statics, aliases and tests. Modules,
+generic parameters, parameters and locals are not symbols. In server mode `PATH` is the
+argument `path`.
+
+### `ingot query complete FILE:LINE:COL`
+
+The names that could be written at the position, for an editor's completion list. The
+position is the cursor: the byte offset it names, not a token. The **partial name** is
+the identifier that ends at the cursor, or nothing when no identifier ends there.
+
+```json
+{"type":"completion","name":"twice","item":"fn","path":"app.lib.Ticket.twice",
+ "signature":"pub fn twice(self: &Ticket) -> i64","doc":"Twice the seat."}
+{"type":"completion","name":"seat","item":"field","path":"app.lib.Ticket.seat",
+ "signature":"pub seat: i64"}
+{"type":"completion","name":"count","item":"local","of":"i64"}
+```
+
+What is offered depends on what comes before the partial name:
+
+* **`value.`**: the fields of the value's type, looking through borrows as a field
+  access does; its methods (inherent, from the impls of interfaces, and for a type
+  parameter those of its bounds); and the members the language gives the type (`len`
+  of an array or slice, `ptr` of a slice).
+* **`module.`**, where the name before the dot is a module: the items of that module
+  that the current module may name.
+* **`Type.`**: the variants of an enum, and the functions of the type's inherent impls;
+  for an interface, its methods.
+* **`@`**: the builtins of the language (spec §1: `@name`), and nothing else. `name` is
+  written without the `@`. The answer does not depend on the program.
+* **Anything else**: the locals and parameters in scope at the cursor (declared before
+  it, in a block, arm, loop or closure that contains it), the generic parameters of the
+  enclosing item, the module's items and imports, the built-in names (pipeline §4.3),
+  and the keywords. Keywords are offered wherever this context applies; no attempt is
+  made to offer only those the grammar allows at the cursor.
+
+Only names that start with the partial name are offered, case included: since types and
+values are spelled differently (spec §1), `Ti` offers types and `ti` values. Lines are in
+order of `name`, then `path`. Each has `name` and `item` (§5's list, plus `builtin` for
+a built-in name, `builtin_fn` for an `@` builtin and `keyword` for a keyword); a
+declared item also has `path`, `signature` and `doc` as `query def` gives them; a local
+or parameter has `of`, its type, when it is known. A name that appears twice in scope
+(a shadowed local) is offered once, as the innermost. A keyword is offered even where a
+declared name has the same spelling, which the language does not allow anyway.
+
+The code at the cursor is usually incomplete: `t.` with nothing after the dot is the
+common case, and the file then has a syntax error. The answer must be what the program
+completed at the cursor would have: how the compiler gets there is not specified. A
+context the compiler cannot work out (the type before the dot is unknown because of an
+error) gives no lines and `ok: true`.
 
 ### `ingot rename FILE:LINE:COL NEW [--dry-run]`
 
@@ -328,12 +431,19 @@ adapters that need unsaved text.
 → {"id":2,"command":"query","args":{"kind":"borrows","at":"src/io.ingot:41"}}
 ```
 
-* One request per line. Every response line carries the request's `id`. A request is
-  finished when its `summary` arrives.
-* `args` are the command's flags with the leading dashes removed and `-` written `_`.
+* One request per line. Every response line carries the request's `id`, as its first
+  field, written back as the request gave it. A request is finished when its `summary`
+  arrives. Every request has one, the extra requests below included.
+* `args` are the command's flags with the leading dashes removed and `-` written `_`,
+  and `path` for the positional argument. A path in a request is absolute or relative
+  to the server's working directory, as on the command line.
 * **A server is a cache, not a second implementation.** For the same file contents it
-  must print exactly what the one-shot command prints. The conformance suite is run in
-  both modes.
+  must print exactly what the one-shot command prints, except for the `id` field and,
+  in each summary, an `exit` field: the status the one-shot command would have exited
+  with. The conformance suite is run in both modes.
+* A request the server cannot read (not a JSON object, no `command`, a command or
+  argument it does not know) is answered with an `error` line and a summary with
+  `"exit":2`. Its `id` is `null` when the request has none or cannot be read.
 * The server reads files when a request needs them and compares them with what it has.
   It does not need to be told about saved changes.
 * Extra requests:
@@ -344,7 +454,14 @@ adapters that need unsaved text.
   | `cancel` with `target` | stop request `target`. Its summary has `"canceled":true` |
   | `shutdown` | finish and exit with status 0 |
 
-* Requests are answered in order. A `cancel` is acted on at once.
+* An overlay applies to every read of that file, in any package, `std` included. An
+  overlay for a file that does not exist on disk makes it exist for the server: a
+  directory listing that would contain it does.
+* Requests are answered in order. A `cancel` is acted on at once: a target that has not
+  started is answered by its summary alone, with `"canceled":true`. A running target
+  may be stopped, and is then answered the same way; one that is not stopped, or has
+  already finished, is answered in full. The `cancel` itself always succeeds.
+* The end of standard input is a `shutdown`.
 * **Incremental work.** After a change inside one function body, the server should not
   repeat pipeline phases 7 to 10 for any other function. After a change to a signature,
   only functions that name the changed item are checked again. This follows from the
@@ -369,14 +486,14 @@ An LSP server is a translation layer over `ingot serve`.
 | rename | `rename --dry-run`, returned as a workspace edit |
 | formatting | `fmt --stdin` |
 | `didOpen`, `didChange`, `didClose` | `overlay` |
+| completion | `query complete` |
 | semantic tokens | the lexer's token classes alone |
 | inlay hints | `query type` for unannotated bindings, `query borrows` for origins |
 
 * **Positions differ.** LSP lines and characters are 0-based, and characters count
   UTF-16 units unless the client agrees to `utf-8` in `positionEncodings`. The adapter
   asks for `utf-8`, and otherwise converts each line.
-* Completion is not specified for v1. Agents do not need it, and it can be added as a
-  `query complete` without changing anything else.
+* Completion is `query complete` (§5). Agents do not need it; editors do.
 
 ### Syntax trees for other tools
 

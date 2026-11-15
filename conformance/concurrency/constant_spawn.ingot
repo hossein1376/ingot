@@ -1,0 +1,20 @@
+//! expect: reject
+//! section: 9, 18
+
+fn add(x: i64) -> i64 {
+    return x + 1;
+}
+
+fn spawned() -> i64 {
+    var total: i64 = 0;
+    scope s {
+        let h = spawn add(total) in s; //~ E0807
+        @forget(h);
+    }
+    total += 1;
+    return total;
+}
+
+fn f() {
+    @static_assert(spawned() == 1, "spawn");
+}

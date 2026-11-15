@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 10, 11
+
+linear struct Token { id: i32 }
+
+fn f() {
+    let o: ?Token = .none;
+    match &o {
+        .some(_) => {}
+        .none => {}
+    }
+}

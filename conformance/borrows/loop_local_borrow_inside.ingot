@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 11, 12
+
+fn f(n: i64) -> i64 {
+    var total: i64 = 0;
+    for i in 0..n {
+        let local: i64 = i;
+        let r = &local;
+        total += r.*;
+    }
+    return total;
+}

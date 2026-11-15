@@ -1,0 +1,15 @@
+//! expect: reject
+//! section: 9, 15
+
+fn raw() -> i64 {
+    var x: i64 = 5;
+    let p = &mut x as *mut i64;
+    unsafe("p points at x, which is live and not borrowed here") { //~ E0807
+        p.* = 6;
+    }
+    return x;
+}
+
+fn f() {
+    @static_assert(raw() == 6, "unsafe");
+}

@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 10, 12
+
+struct Buf { len: i64 }
+
+fn f() -> i64 {
+    let b = Buf.{ len: 1 };
+    let r = &b;
+    @forget(b); //~ E1104
+    return r.len;
+}

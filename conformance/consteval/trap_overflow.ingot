@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 9, 5.2
+
+fn boom() -> i64 {
+    return 9223372036854775807 + 1; //~ E0806
+}
+
+fn f() {
+    @static_assert(boom() == 0, "overflow");
+}

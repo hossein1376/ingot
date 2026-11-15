@@ -44,15 +44,11 @@ fn std_resolves_without_a_diagnostic() {
     }
     assert!(analysis.diagnostics.is_empty());
     // std's bodies are type-checked too (`ingot check std`); ownership is the next
-    // phase. The executors' constants are the only values phase 6 cannot evaluate yet.
+    // phase. Its constants, including the executors' struct values, are evaluated
+    // (S5b).
     assert_eq!(
         analysis.not_implemented,
-        vec![
-            "constant evaluation of a value of type `Seq`".to_string(),
-            "constant evaluation of a value of type `Simd`".to_string(),
-            "constant evaluation of a value of type `Par`".to_string(),
-            ingot_sema::UNCHECKED_OWNERSHIP.to_string(),
-        ]
+        vec![ingot_cfg::UNCHECKED_CHECK_REMOVAL.to_string()]
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
     assert_eq!(analysis.files, 14);

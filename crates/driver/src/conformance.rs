@@ -285,7 +285,10 @@ pub fn run(root: &Path) -> Report {
 
 /// The loader conventions of the harness (see `loader.rs`).
 fn harness_load() -> LoadOptions {
-    LoadOptions { harness: true }
+    LoadOptions {
+        harness: true,
+        ..LoadOptions::default()
+    }
 }
 
 /// The analysis options of a case: the harness's loader and the default target.

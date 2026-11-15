@@ -1,0 +1,19 @@
+// unsafe blocks, raw pointer places and an unsafe builtin
+
+fn f(x: i64) -> i64 {
+    var y: i64 = x;
+    let p: *mut i64 = &mut y as *mut i64;
+    unsafe("write through a raw pointer") {
+        p.* = 3;
+    }
+    let q: *i64 = &y as *i64;
+    return unsafe("read") { q.* };
+}
+
+fn g(xs: []i64, ys: []mut i64) -> i64 {
+    unsafe("unchecked indexing") {
+        let v = @unchecked_index(xs, 0);
+        let s = @unchecked_slice(ys, 0, 1);
+        return v + s[0];
+    }
+}

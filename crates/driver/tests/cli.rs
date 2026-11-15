@@ -137,7 +137,7 @@ fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
     let o = ingot(&["check", "--json"], &dir);
     assert_eq!(o.status.code(), Some(2));
     assert!(
-        stderr(&o).contains("not implemented: ownership checking and check removal"),
+        stderr(&o).contains("not implemented: check removal and cost items"),
         "{}",
         stderr(&o)
     );
@@ -145,7 +145,7 @@ fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
     let summary = out.lines().last().unwrap();
     assert!(summary.contains("\"ok\":false"), "{summary}");
     assert!(
-        summary.contains("\"not_implemented\":[\"ownership checking and check removal"),
+        summary.contains("\"not_implemented\":[\"check removal and cost items"),
         "{summary}"
     );
     assert!(summary.contains("\"errors\":0"), "{summary}");
@@ -182,19 +182,17 @@ fn a_declaration_error_is_a_rejection() {
 }
 
 #[test]
-fn a_constant_outside_the_evaluated_subset_is_not_accepted() {
+fn a_struct_constant_is_evaluated() {
+    // A struct value is outside the direct evaluator's subset; the interpreter
+    // evaluates it, so the package has nothing left unchecked.
     let dir = package(
-        "const-subset",
+        "const-eval",
         "name = \"app\"\n",
         "struct P { x: i64 }\nconst origin: P = P.{ x: 0 };\n",
     );
-    let o = ingot(&["check"], &dir);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("not implemented: constant evaluation of a value of type `P`"),
-        "{}",
-        stderr(&o)
-    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("\"ok\":true"), "{}", stdout(&o));
 }
 
 #[test]
@@ -266,7 +264,10 @@ fn a_missing_manifest_is_e1701_on_the_command_line_but_not_in_the_harness() {
     assert!(out.contains("\"file\":\"ingot.toml\""), "{out}");
 
     let options = ingot_driver::pipeline::Options {
-        load: ingot_driver::loader::LoadOptions { harness: true },
+        load: ingot_driver::loader::LoadOptions {
+            harness: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let a = ingot_driver::pipeline::analyze_path_with(&dir, &options).unwrap();
@@ -302,6 +303,70 @@ fn a_bad_manifest_is_reported_and_the_package_is_not_resolved() {
     assert!(out.contains("\"code\":\"E1701\""), "{out}");
     // The package name is not known, so names are not resolved.
     assert!(!out.contains("E0304"), "{out}");
+}
+
+#[test]
+fn a_missing_path_with_json_writes_an_error_line_and_a_summary() {
+    let dir = scratch("missing-json");
+    let missing = dir.join("nope");
+    let o = Command::new(env!("CARGO_BIN_EXE_ingot"))
+        .args(["check", "--json"])
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines[0].starts_with("{\"type\":\"error\",\"message\":\""),
+        "{out}"
+    );
+    assert!(lines[0].contains("does not exist"), "{out}");
+    assert_eq!(
+        lines[1].rsplit_once("\"ms\":").map(|(head, _)| head),
+        Some("{\"type\":\"summary\",\"command\":\"check\",\"ok\":false,\"protocol\":1,"),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_unknown_command_with_json_writes_an_error_line_and_a_summary() {
+    let o = Command::new(env!("CARGO_BIN_EXE_ingot"))
+        .args(["bogus", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].contains("unknown command `bogus`"), "{out}");
+    assert!(
+        lines[1].starts_with(
+            "{\"type\":\"summary\",\"command\":\"bogus\",\"ok\":false,\"protocol\":1,"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn all_targets_with_json_writes_an_error_line_and_a_summary() {
+    let dir = package("all-json", "name = \"app\"\n", "// nothing\n");
+    let o = ingot(&["check", "--json", "--all-targets"], &dir);
+    assert_eq!(o.status.code(), Some(2));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines[0].contains("not implemented: `check --all-targets`"),
+        "{out}"
+    );
+    assert!(
+        lines[1].starts_with(
+            "{\"type\":\"summary\",\"command\":\"check\",\"ok\":false,\"protocol\":1,"
+        ),
+        "{out}"
+    );
 }
 
 #[test]

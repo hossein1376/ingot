@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 19, 20
+
+fn f(xs: []*mut i64) {
+    par for x in xs { //~ E1401
+        _ = x;
+    }
+}

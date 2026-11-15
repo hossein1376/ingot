@@ -16,7 +16,7 @@ use ingot_diag::source::Span;
 use ingot_syntax::ast::StructKind;
 use std::collections::{BTreeMap, BTreeSet};
 
-impl Cx<'_> {
+impl Cx<'_, '_> {
     /// Run all of phase 6.
     pub fn check_all(&mut self) {
         self.d.builtins = BuiltinNames {
@@ -30,8 +30,11 @@ impl Cx<'_> {
             idx: self.sema.builtin_def("Idx"),
         };
         self.lower_all();
+        // The impl tables are built before any interpretation starts (pipeline
+        // section 4.6). A signature constant that needs the interpreter during
+        // `lower_all` builds them first, through `ensure_impl_tables`.
+        self.ensure_impl_tables();
         self.eval_constants();
-        self.build_impl_tables();
         self.check_impls();
         self.check_member_namespaces();
         self.check_functions();
@@ -126,7 +129,7 @@ impl Cx<'_> {
                 match self.hir_item(d) {
                     Some(hir::Item::Const(_)) => {
                         if self.const_has_type(d)
-                            && let Err(f) = self.const_value(d)
+                            && let Err(f) = self.eval_const_item(d)
                         {
                             self.note_failure(&f);
                         }
@@ -134,6 +137,7 @@ impl Cx<'_> {
                     Some(hir::Item::Static(s)) => self.eval_static(d, s),
                     _ => {}
                 }
+                self.store_direct_value(d);
                 if quiet {
                     self.quiet -= 1;
                 }
@@ -159,23 +163,59 @@ impl Cx<'_> {
             TyKind::Bool => Some(ValTy::Bool),
             _ => None,
         };
-        let name = self.ty_name(ty);
-        let Some(hint) = hint else {
-            self.ni(format!(
-                "constant evaluation of the initializer of a static of type `{name}`"
-            ));
-            return;
-        };
         let prev = self.cur;
         self.cur = crate::lowering::Cur {
             pkg: self.pkg_of(d),
             file: self.file_of(d),
             impl_def: None,
         };
-        let r = self.eval_signature_const(s.value, hint);
+        let r = match hint {
+            Some(hint) => match self.eval_expr(self.cur.pkg, self.cur.file, s.value, Some(hint)) {
+                Ok(v) => Ok(v),
+                Err(crate::consteval::Fail::Interpret(reason)) => {
+                    self.eval_tree(d, reason).and_then(|v| match v {
+                        crate::value::Value::Int { ty, value } => Ok(ConstValue::Int {
+                            ty: match self.d.types.kind(ty) {
+                                TyKind::Int(i) => *i,
+                                _ => return Err(crate::consteval::Fail::Reported),
+                            },
+                            value,
+                        }),
+                        crate::value::Value::Bool(b) => Ok(ConstValue::Bool(b)),
+                        _ => Err(crate::consteval::Fail::Reported),
+                    })
+                }
+                Err(f) => Err(f),
+            },
+            None => {
+                let reason = format!(
+                    "constant evaluation of the initializer of a static of type `{}`",
+                    self.ty_name(ty)
+                );
+                match self.eval_tree(d, reason) {
+                    Ok(_) => Err(crate::consteval::Fail::Reported),
+                    Err(f) => Err(f),
+                }
+            }
+        };
         self.cur = prev;
-        if let Err(f) = r {
-            self.note_failure(&f);
+        match r {
+            Ok(v) => {
+                if !matches!(
+                    self.d.values.get(&d),
+                    Some(crate::consteval::ValueState::Done(_))
+                ) {
+                    let value = match v {
+                        ConstValue::Int { ty, value } => crate::value::Value::Int {
+                            ty: self.d.types.int(ty),
+                            value,
+                        },
+                        ConstValue::Bool(b) => crate::value::Value::Bool(b),
+                    };
+                    crate::interp::Host::set_const_value(self, d, Ok(value));
+                }
+            }
+            Err(f) => self.note_failure(&f),
         }
     }
 
@@ -189,6 +229,24 @@ impl Cx<'_> {
             }
             _ => None,
         }
+    }
+
+    pub(crate) fn ensure_impl_tables(&mut self) {
+        if self.impl_tables_ready || self.impl_tables_building {
+            return;
+        }
+        self.impl_tables_building = true;
+        let impls: Vec<DefId> = self
+            .all_items()
+            .into_iter()
+            .filter(|d| matches!(self.hir_item(*d), Some(hir::Item::Impl(_))))
+            .collect();
+        for d in impls {
+            self.ensure_sig(d);
+        }
+        self.build_impl_tables();
+        self.impl_tables_building = false;
+        self.impl_tables_ready = true;
     }
 
     fn build_impl_tables(&mut self) {
@@ -344,7 +402,7 @@ impl Cx<'_> {
     /// Whether a return type written with a borrow, a type parameter, an associated
     /// type, or a view structure may hold a borrow in some implementation (E1206).
     fn type_may_hold_borrow(&mut self, t: TypeId) -> bool {
-        fn symbolic(cx: &Cx<'_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
+        fn symbolic(cx: &Cx<'_, '_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
             if seen.contains(&t) {
                 return false;
             }
@@ -853,7 +911,7 @@ impl Cx<'_> {
 
     /// Whether `Idx` occurs anywhere in `t`.
     pub(crate) fn type_has_idx(&self, t: TypeId) -> bool {
-        fn go(cx: &Cx<'_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
+        fn go(cx: &Cx<'_, '_>, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
             if seen.contains(&t) {
                 return false;
             }
@@ -1353,12 +1411,24 @@ impl Cx<'_> {
                 );
             }
         }
-        if !f.from.is_empty() && !self.type_may_hold_borrow(f.ret) {
+        let error_may = f.error.is_some_and(|e| self.type_may_hold_borrow(e));
+        let error_written = f.error.is_some_and(|e| self.d.written_with_borrow(e));
+        if !f.from.is_empty() && !self.type_may_hold_borrow(f.ret) && !error_may {
             self.error(
                 "E1206",
                 "`from` on a return type that can hold no borrow",
                 file,
                 f.from[0].span,
+            );
+        }
+        // E1201. The fix, when the body can supply one, is attached after phase 9.
+        // The clause covers `T ! E`, so either type being written with a borrow counts.
+        if f.from.is_empty() && (self.d.written_with_borrow(f.ret) || error_written) {
+            self.error(
+                "E1201",
+                "the return type holds a borrow and needs a `from` clause",
+                file,
+                f.ret_span,
             );
         }
         // E1601, E1604: the C boundary.

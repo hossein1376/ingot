@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 11
+
+struct Buf { len: i64 }
+
+struct S { a: Buf, b: i64 }
+
+fn f(s: S) -> i64 {
+    let b = s.a;
+    return b.len + s.b;
+}

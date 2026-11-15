@@ -1,0 +1,45 @@
+// defer and errdefer copied to every exit: fall-through, break, return, fail
+
+enum E { bad }
+
+fn f(n: i64) -> i64 ! E {
+    var total: i64 = 0;
+    defer { total += 1; }
+    var i: i64 = 0;
+    while i < n {
+        defer { total += 2; }
+        i += 1;
+        if i == 2 {
+            continue;
+        }
+        if i == 3 {
+            break;
+        }
+    }
+    if n < 0 {
+        fail .bad;
+    }
+    return total;
+}
+
+fn g(n: i64) -> i64 ! E {
+    var total: i64 = 0;
+    errdefer { total -= 1; }
+    defer { total += 10; }
+    let v = try f(n);
+    return v + total;
+}
+
+fn one() -> i64 {
+    return 1;
+}
+
+fn defer_closure() {
+    defer {
+        let f = fn [](x: i64) -> i64 { return x; };
+        _ = f(1);
+    }
+    if one() == 1 {
+        return;
+    }
+}

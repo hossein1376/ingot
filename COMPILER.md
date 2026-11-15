@@ -45,9 +45,10 @@ rebuilt here from the specification.
 | `ingot-diag` | — | spans, sources, the diagnostic type and JSON, the code catalog |
 | `ingot-syntax` | 2, 3 | tokens, lexer, AST, parser (kept from the MVP) |
 | `ingot-sema` | 4–7 | `when`, name resolution, signatures, type properties, body type-checking, constant evaluation |
-| `ingot-cfg` | 8–10 | lowering to a CFG, the ownership checker, check removal and cost items |
+| `ingot-cfg` | 8–10 | lowering to a CFG, constant evaluation by interpreting CFGs, the ownership checker, check removal and cost items |
 | `ingot-codegen` | 11–14 | instantiation, LLVM IR text, linking with `clang` |
 | `ingot-driver` | 1 | loading, the pipeline, `ingot` CLI, fix engine, conformance runner |
+| `ingot-lsp` | — | the language server: LSP ↔ `ingot serve` adapter (crates/lsp) |
 
 A crate depends only on crates above it in this table.
 
@@ -105,14 +106,195 @@ a member name resolved to, the binding mode of every pattern binding, the conver
 signature and captures of each closure. A body in which phase 7 reported an error is
 marked `failed` and phases 8 to 10 skip it. Phase 8 reads the HIR and this, nothing else.
 
-**Constant evaluation** (spec §9) interprets typed bodies with a step limit, sharing one
-arithmetic module with check folding so a constant and a run-time value of the same
+**Constant evaluation** (spec §9, pipeline §4.6) has two paths. A direct evaluator in
+`consteval.rs` handles literal arithmetic, comparisons, `as` between integers,
+`@sizeof`/`@alignof`/`@lanes`, `@target`, and references to other such constants.
+Everything else is evaluated by interpreting CFGs, with the bodies it reaches pulled
+through phases 7 and 8 on demand and within fixed limits. Both paths share one
+arithmetic module with check folding, so a constant and a run-time value of the same
 expression never differ.
+
+Sema cannot call lowering (`ingot-cfg` depends on it), so the boundary is two traits in
+`crates/sema/src/interp.rs`: `Interpreter`, implemented by `ingot_cfg::eval::Evaluator`,
+and `Host`, implemented by phase 6's (and phase 7's) `Cx`. `check_declarations` and
+`check_bodies` take `Option<&dyn InterpreterFactory>`; the driver passes an
+`EvaluatorFactory`, which makes a fresh `Evaluator` per constant expression, and sema's
+own unit tests pass `None`, which leaves `constant evaluation of ...` entries and never
+guesses a value. The factory owns the lowering cache, so a body pulled forward is
+lowered once (pipeline §4.6: phase 8 at most once). A fresh evaluator per expression
+makes evaluation re-entrant: a body pulled forward can evaluate its own constants while
+the evaluator that reached it is suspended, and the nested one has its own step and byte
+counters. Its calls, however, count toward the 1024-call limit of the evaluation that
+pulled its body; the nested evaluator inherits the caller's depth and outermost call, so
+a chain of such evaluations stops with one E0808 at the outermost call.
+`pipeline::analyze_with` runs on its own thread with a 256 MiB stack
+(`PIPELINE_STACK`), so every caller (the binary, the conformance runner, the language
+server) has it: 1024 nested levels (typing, lowering, evaluation each use host stack)
+need between 16 and 32 MiB in a debug build, and a thread stack is virtual memory. Through `Host` the interpreter asks for the typed body of a
+definition, types a signature constant or an `@static_assert` condition on demand
+(`Declarations::bodies` and `Declarations::expr_bodies`, reused by phase 7 so no body is
+typed or reported twice), reads and writes the value of a constant, and reports
+diagnostics. The value of every evaluated `const` and `static` is stored per `DefId` in
+`Declarations::values` as `consteval::ValueState`; the scalar ones are mirrored in
+`Declarations::consts` for the direct path. The impl tables are built before the first
+interpretation; a signature constant that needs the interpreter while they are being
+built is E0812. A signature asked for while it is still being built reports E0812 at the
+constant whose evaluation asked for it.
 
 **The standard library** is Ingot source in `std/`, checked by this compiler like any
 package. It is written only as far as conformance tests and programs need it, and only
 with APIs that spec §35 describes. Nothing in `std` is hard-coded in the compiler except
 the entry points of pipeline §8.
+
+## Data model of `ingot-cfg`
+
+**One CFG per body.** `CfgKey { owner: DefId, body: Item | Closure(ExprId) | ParFor(StmtId) }`
+names a function or test body, a closure body, or a `par for` body. `Cfgs` holds them in
+a deterministic order (item bodies first, then the closures and `par for` bodies they
+contain, in source order). A key has exactly one CFG: a closure or `par for` inside a
+deferred block, which is copied to every exit, is lowered once and every copy names that
+CFG. A body phase 7 marked `failed` is not lowered. A construct phase 8 cannot lower yet
+is recorded as `lowering: <what>` and the body's CFG is dropped; at S5 there are none in
+the suite. An expression that reaches lowering and yields no value is such a construct,
+never a silent drop.
+
+**Locals.** `CfgLocal { kind: Param | User | Temp | Scope, name, source: Option<LocalId>,
+ty, ty_name, span }`. A user local keeps the HIR `LocalId`; a temporary has no name.
+Every local has an explicit `StorageStart` and `StorageEnd` on every path. The one
+implicit end is the temporary that holds a `return`/`fail` value: it must survive the
+cleanup, so its storage ends at the `Return` terminator itself (`Return.end`). Header
+temporaries of a loop are started in the head each iteration and ended at each
+iteration's end; a `for` iterand and a scope local live for the whole statement.
+
+**Places.** `Place { base: Local | Static, proj: [Field { index, name } | TupleField |
+Index(Operand) | Deref | Payload { variant }] }`. The index operand is kept for check
+removal and code generation; the ownership checker ignores it. A place rooted at a
+`Static` takes no loans.
+
+**Statements.** `StorageStart/End`, `Assign { place, value }`, `EnterUnsafe`,
+`Cancel(s)`, `Abandon(dest)`, `Check(Check)`, `Use(operand)` (a no-op read for
+liveness) and `Variant { place, variant, name, holds }`. A variant record is what a tag
+test decided: `π is v` at the start of the block the test chose, `π is not v` at the
+start of the block for a failed test (`holds` is that boolean). `EnterUnsafe` marks the
+entry of every `unsafe` block or expression: it is a no-op for phases 9 and 10, and the
+interpreter's E0807 test. A variant record is also a no-op for the interpreter.
+`Abandon` is the one addition to pipeline section 5's list: it says an unchosen
+`select` arm's result storage holds no value, so the checker does not report the linear
+result as leaked.
+
+**Checks.** `Check { kind, place, lo, hi, operands, places, ty, ty_name, op, span }` with kinds
+`Bounds(Index | Slice | Vector { width, tail })`, `Overflow`, `Division`, `Shift`,
+`Narrow`, `Gather`, `ScatterDistinct` and `DispatchCover`. `place` is the container
+whose `len` matters, `lo`/`hi` the index or range, `width` the lane count of a vector
+access, `op` the operator text of an overflow check (for E0806), and the trap code
+follows the catalog (`check_trap`).
+
+**Rvalues.** a copy or move of a place, a constant, unary and binary operations, a
+borrow or the implicit two-phase reborrow of a `&mut`/`[]mut` place, an aggregate
+(struct, tuple, array, enum variant, closure captures), a cast (including the `&dyn`
+coercion record), the discriminant of an enum, `.len`/`.ptr` of a slice, a slice of a
+slice or an array, one `&mut` element of a `[]mut T` loop, and one `Builtin` value with
+its name, type argument and operands. A builtin that takes a place (`@replace`,
+`@swap`, `@unchecked_index`, `@unchecked_slice`, the memory builtins) keeps it as a
+`BuiltinArg::Place`.
+
+**Terminators.** `Goto`, `Branch`, `Switch` on an enum tag, `Return { value, is_error }`
+(the error exits of `fail` and a propagating `try`), `Call` (callee, arguments,
+destination, continuation), `Trap`, and the concurrency terminators `Spawn`,
+`ScopeWait`, `Select` (one successor per arm, each with the operation's call and result
+place), `ParFor` (body CFG, captures as shared borrows whose record the body receives
+as a tuple of borrows by value, iterand or range, grain) and
+`Dispatch` (kernel, executor, range, inputs and outputs with their borrow kind).
+`Unreachable` ends a block no path reaches. `Return` also names the temporary whose
+storage it ends (`end`), so a checker ends it after reading the value. `Trap` carries
+`source`, the assertion's condition text for T08's trap message.
+
+**Dump and validator.** `dump::dump` prints every CFG as the deterministic text its
+module documents: named locals, spans, trap codes, `(error)` returns, and
+`[defer L:C exit L:C]` on each copied deferred statement. `validate::validate_all`
+checks block targets, declared locals, and that the storage start and end of every local
+are paired on every path and every local a statement or terminator uses is inside its
+storage; the golden runner and the two conformance sweeps run it.
+
+**Constant evaluation by interpretation** (S5b, `crates/cfg/src/eval.rs`). The
+evaluator lowers a constant expression or a body on demand (its own `Cfgs`, never part
+of `Analysis.cfgs`) and runs it with an explicit frame stack: calls push a frame, never
+a host call, so deep Ingot recursion cannot overflow the compiler's stack. The value
+tree (`sema::value::Value`) is scalars, aggregates, variants, string literals, function
+values, borrows (allocation and path), slices (source, `lo`, `len`) and static
+addresses. A whole array of scalars is a `Value::Pack`: the element type, a length, and
+the elements' raw bits only once one is written (`@zero` of a 16 MB array uses no host
+memory per element); `moved` records elements that were moved out. Reads and writes walk
+the path by reference, so one element access costs the path, not the array. A body that
+is being typed cannot be typed again: a call that reaches it is E0812, as is a signature
+asked for while it is in progress. Each frame's locals and parameters are allocations; a move empties a place,
+a read of storage with no value stops evaluation with a `not implemented` entry (phase
+9 will report it), and session limits are one counter for the whole constant
+expression. Every check runs; a failing check or a `Trap` terminator is E0806 with the
+catalog's text and values, the primary span is the operation, and a `call` label marks
+the call in the constant expression that led there. Reading a `static`'s value, a local
+of an enclosing function, `EnterUnsafe`, an `extern` call and the concurrency
+terminators are E0807. Steps (2^24), call depth (1024) and live bytes (2^24) are E0808; parameters count like
+locals, and a popped frame releases what it still holds. A closure's size is the sum of
+its capture fields (the type table has no closure layout, and asking for one would record
+an entry).
+Generic functions run uninstantiated with the call's type and constant arguments
+substituted (`@sizeof(T)` interns the substituted type), floats are rounded at each
+operation to `f32`/`f64`, and a `static` may take another's address. A body phase 7
+rejected reports nothing more; a failure the interpreter cannot handle is
+`constant evaluation of <what>`, never a guess.
+
+**Phase 9** (`crates/cfg/src/check/`). The driver runs `check::check_ownership` after
+phase 8, on every CFG phase 8 produced for the checked package: function and test
+bodies, and the closure and `par for` bodies they contain. Constant-evaluation CFGs are
+a separate set and are not checked. The analysis does not change the CFG. `check/mod.rs`
+is the entry point. `check/moves.rs` is Analysis A (moves and linear values, E1001–E1006).
+`check/origins.rs` is Analysis B (origin sets). It computes `O(x)` for every local whose
+type is or may be a view, and records the loan created at each borrow. Block entry states
+and `sets_before` replay a block up to any statement for Analysis C. The function
+boundary reports E1202, E1203, E1204 and E1205. Phase 6 reports E1201 from the signature
+when a borrow-written return has no `from` clause; phase 9 runs Analysis B against an
+empty clause and the driver attaches that clause to the E1201.
+A path is a local followed by projections. A field and a tuple index are distinct per
+index, every array or slice element is the one step `[_]`, a dereference is `.*` and a
+variant payload is `.v`. Two paths overlap when one is a prefix of the other. The
+move dataflow tracks init, moved and maybe, plus the variants an enum path may hold and,
+separately, which of those variants are still obligations: both variants of a `T ! E`,
+and for every other enum only a variant whose payload is linear. The join of a
+`match`, `try`, `catch` or `orelse` does not report a leak that every arm consumed.
+A consuming `for` over an array moves each element with `for_elem` and, on the normal
+exit only, `iter_consumed` of the array temporary.
+`check/loans.rs` is Analysis C (loans, E1101–E1105). It runs after B on every CFG whose
+origin analysis did not diverge. Use-liveness of locals is a backward dataflow: a use
+is a read, a move, a borrow or a storage-dependent terminator, and a whole-local
+assignment kills that local. A loan is live where it sits in `O(v)` and `v` is
+use-live, or a live loan is rooted at `v` (a borrow of a container keeps what the
+container borrows). A two-phase exclusive loan is shared until the call, `spawn`,
+`dispatch`, `select` or `par for` that uses its temporary, and exclusive from that
+terminator on. Each access is checked against every live loan that overlaps it and was
+not created by the same statement. The kill rule of §4.4 drops the loans an assignment
+removes, so those do not report E1101. The storage end of a local reports E1105 for a
+loan on that local's storage, except when every holder is kept live only by the
+`return` or `fail` that follows: that loan is E1203. It reports E1403 instead when a
+live holder is a scope: `spawn` stored the loan into that scope, and the local's
+storage ends before `scope_wait`. Each report carries `borrow` and `later_use`.
+E1105 carries `scope_end` for each exit span Analysis A would use for E1003, and
+omits the label when there is none. E1403 carries `spawn` and `declared`.
+`check/tasks.rs` checks the task rules. A `spawn` argument and the spawned call's
+result must be `Send` (E1401), and so must a `par for` item. A `par for` body that
+reads an outer local whose type is not `Sync` is E1402. A body that assigns to, moves
+or exclusively borrows an outer local is E1407, and that is the only code for that
+use. Analysis B applies a `spawn`'s argument effects and stores those origins into
+the scope, the same way as `into`. A scope parameter without `into` is E1204. Each
+`select` arm is applied on its own successor. Phase 10 is what remains: the
+`UNCHECKED_CHECK_REMOVAL` entry stays.
+
+**Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
+registration order, to every exit of their block, tagged with the defer and the exit;
+after that no `defer` exists. Assignment evaluates the target's indices, then the value,
+then the target's checks, then the store; a compound assignment reads the place after
+the value by the same rule. A `scope` lowers to storage start, body, the body's deferred
+code and storage ends, `cancel(s)` on an error exit, `scope_wait(s)`, storage end.
 
 ## Steps
 
@@ -130,9 +312,12 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S4b | relay | Kernels and `dispatch` (E1510–E1519), after the `Idx`/`Grid` members are specified | done (e88296d) |
 | S4c | relay | The spec review (`228062e`) in phases 1–7: holes H1–H5, lowercase constant generics, open slice bounds, diverging branch blocks, closure bounds, kernel helpers instead of phase 7k, and the smaller rule changes | done (0562994) |
 | S4d | relay | The rest of `228062e` in phase 7: builtin signatures (SIMD, `unsafe`), format strings (E0422), function values, `I.name(..)`, `std`'s inherent impls on built-in types | done (93f6a05) |
-| S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | dumps for every lowering rule; every accept test's bodies lower |
-| S5b | relay | Constant evaluation of function calls over the CFG (E0806–E0808) | `arith/*` constant tests |
-| S6–S9 | Sonnet | Ownership: moves and linear values; loans; origins; scopes and tasks (`docs/impl/checker.md`) | `ownership/*`, `borrows/*`, `origins/*`, `concurrency/*` reject tests |
+| S5 | relay | `ingot-cfg`: lowering (pipeline §5) with a textual CFG dump and golden tests | done (dec58aa) |
+| S5b | relay | Constant evaluation by interpreting CFGs, with bodies pulled forward (pipeline §4.6, E0806–E0808, E0812) | done (e073e7f) |
+| S6 | grok + relay | Ownership, Analysis A: moves and linear values (checker.md §3, E1001–E1006) | done (46ad614) |
+| S7 | grok + relay | Ownership, Analysis B: origin sets and the function boundary (checker.md §4, §6, E1201–E1205) | done (ef74f22) |
+| S8 | grok + relay | Ownership, Analysis C: loans (checker.md §5, E1101–E1105) | done (12eecab) |
+| S9 | grok + relay | Ownership: scopes and tasks (checker.md §7, E1401–E1403, E1407) | done (0747185) |
 | S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
 

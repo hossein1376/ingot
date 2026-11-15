@@ -19,7 +19,7 @@ fn argument(s: &Item) -> i64 {
     return get(s);
 }
 
-fn result(s: &Item) -> &dyn Named {
+fn result(s: &Item) -> &dyn Named from s {
     return s;
 }
 
@@ -30,11 +30,11 @@ fn binding(s: &Item) -> i64 {
 
 struct Holder { n: &dyn Named }
 
-fn field(s: &Item) -> Holder {
+fn field(s: &Item) -> Holder from s {
     return Holder.{ n: s };
 }
 
-fn mutable(s: &mut Item) -> &mut dyn Named {
+fn mutable(s: &mut Item) -> &mut dyn Named from s {
     return s;
 }
 

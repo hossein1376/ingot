@@ -21,7 +21,7 @@ pub(crate) enum Bm {
     RefMut,
 }
 
-impl Checker<'_, '_> {
+impl Checker<'_, '_, '_> {
     /// Type the pattern `p` against a scrutinee of type `ty`.
     pub(crate) fn pattern(&mut self, p: PatId, ty: TypeId) {
         self.pat_inner(p, ty, Bm::Value);

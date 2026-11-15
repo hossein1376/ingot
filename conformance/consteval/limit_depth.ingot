@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 9
+
+fn down(n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    return down(n - 1);
+}
+
+fn f() {
+    @static_assert(down(2000) == 0, "depth"); //~ E0808
+}

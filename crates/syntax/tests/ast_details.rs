@@ -196,3 +196,13 @@ fn the_else_arm_of_a_select_is_marked() {
         vec![false, true]
     );
 }
+
+#[test]
+fn a_static_origin_spans_only_its_keyword() {
+    let (source, ast) = module("fn f(a: []u8) -> []u8 from static, a { return a; }\n");
+    let Item::Fn(f) = &ast.items[0] else {
+        panic!("a function");
+    };
+    let texts: Vec<&str> = f.from.iter().map(|o| source.text_of(o.span)).collect();
+    assert_eq!(texts, vec!["static", "a"]);
+}

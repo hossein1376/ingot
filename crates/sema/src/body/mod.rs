@@ -70,8 +70,8 @@ pub(crate) struct LoopCtx {
     pub defer_depth: u32,
 }
 
-pub(crate) struct Checker<'c, 'a> {
-    pub cx: &'c mut Cx<'a>,
+pub(crate) struct Checker<'c, 'a, 'i> {
+    pub cx: &'c mut Cx<'a, 'i>,
     pub hir: &'a hir::Package,
     pub pkg: usize,
     pub file: usize,
@@ -103,6 +103,9 @@ pub(crate) struct Checker<'c, 'a> {
     pub poisoned: bool,
     /// The generic parameter definitions in scope (the function's and its impl's).
     pub in_item_init: bool,
+    /// `cx.body_owner` before this body: restored when the body ends, so a type written
+    /// in this body answers a signature constant with this body's owner.
+    pub(crate) prev_body_owner: Option<DefId>,
     /// The body is a `kernel fn` (section 27.1).
     pub kernel: bool,
     /// The body is a kernel (not a helper): its first parameter is `Idx`, so `Idx` is
@@ -110,22 +113,24 @@ pub(crate) struct Checker<'c, 'a> {
     pub kernel_index: bool,
 }
 
-impl<'c, 'a> Checker<'c, 'a> {
+impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
     // ------------------------------------------------------------------ setup
 
     pub(crate) fn new(
-        cx: &'c mut Cx<'a>,
+        cx: &'c mut Cx<'a, 'i>,
         owner: DefId,
         kind: BodyKind,
         root: BodyRoot,
         ret: TypeId,
         error: Option<TypeId>,
-    ) -> Checker<'c, 'a> {
+    ) -> Checker<'c, 'a, 'i> {
         let pkg = cx.pkg_of(owner);
         let file = cx.file_of(owner);
         let hir: &'a hir::Package = &cx.pkgs[pkg];
         let module = cx.sema.def(owner).module;
         cx.enter(owner);
+        let prev_body_owner = cx.body_owner;
+        cx.body_owner = Some(owner);
         let ctx_kind = match kind {
             BodyKind::Fn => CtxKind::Fn,
             BodyKind::Test => CtxKind::Test,
@@ -173,12 +178,14 @@ impl<'c, 'a> Checker<'c, 'a> {
             errors: 0,
             poisoned: false,
             in_item_init: matches!(kind, BodyKind::Const | BodyKind::Static),
+            prev_body_owner,
             kernel: false,
             kernel_index: false,
         }
     }
 
     pub(crate) fn finish(mut self) -> TypedBody {
+        self.cx.body_owner = self.prev_body_owner;
         let poison_seen = self
             .out
             .exprs
@@ -468,7 +475,7 @@ impl<'c, 'a> Checker<'c, 'a> {
 
     /// The span of the first `Idx` named by a type written in a body.
     fn idx_type_span(&self, t: &hir::Ty) -> Option<Span> {
-        fn path(this: &Checker<'_, '_>, p: &hir::PathRef, out: &mut Option<Span>) {
+        fn path(this: &Checker<'_, '_, '_>, p: &hir::PathRef, out: &mut Option<Span>) {
             if out.is_some() {
                 return;
             }
@@ -487,7 +494,7 @@ impl<'c, 'a> Checker<'c, 'a> {
                 }
             }
         }
-        fn ty(this: &Checker<'_, '_>, t: &hir::Ty, out: &mut Option<Span>) {
+        fn ty(this: &Checker<'_, '_, '_>, t: &hir::Ty, out: &mut Option<Span>) {
             use hir::TyKind as K;
             if out.is_some() {
                 return;
@@ -585,7 +592,7 @@ impl<'c, 'a> Checker<'c, 'a> {
 
 // ----------------------------------------------------------------- the driver
 
-impl Cx<'_> {
+impl Cx<'_, '_> {
     /// Phase 7 for the package being checked: the typed body of every function with a
     /// body, test, constant and static. Diagnostics and `not implemented` entries go
     /// to `self.d`.
@@ -596,6 +603,13 @@ impl Cx<'_> {
             return bodies;
         };
         for (&def, item) in &package.items {
+            // A body a constant evaluation reached was typed already; never type one
+            // twice (its diagnostics were reported once).
+            if let Some(t) = self.d.bodies.get(&def) {
+                bodies.bodies.insert(def, t.clone());
+                continue;
+            }
+            self.typing.insert(def);
             let typed = match item {
                 hir::Item::Fn(f) => match f.body {
                     Some(b) => self.check_fn_body(def, f, b),
@@ -606,6 +620,7 @@ impl Cx<'_> {
                 hir::Item::Static(s) => self.check_static_body(def, s),
                 _ => None,
             };
+            self.typing.remove(&def);
             if let Some(t) = typed {
                 bodies.bodies.insert(def, t);
             }
@@ -614,7 +629,12 @@ impl Cx<'_> {
         bodies
     }
 
-    fn check_fn_body(&mut self, def: DefId, f: &hir::FnItem, body: BlockId) -> Option<TypedBody> {
+    pub(crate) fn check_fn_body(
+        &mut self,
+        def: DefId,
+        f: &hir::FnItem,
+        body: BlockId,
+    ) -> Option<TypedBody> {
         self.ensure_sig(def);
         let sig = self.d.fn_sig(def)?.clone();
         let error = sig.error;
@@ -667,7 +687,11 @@ impl Cx<'_> {
         Some(c.finish())
     }
 
-    fn check_const_body(&mut self, def: DefId, item: &hir::ConstItem) -> Option<TypedBody> {
+    pub(crate) fn check_const_body(
+        &mut self,
+        def: DefId,
+        item: &hir::ConstItem,
+    ) -> Option<TypedBody> {
         self.ensure_sig(def);
         let ty = match self.d.items.get(&def) {
             Some(ItemSig::Const(c)) => c.ty,
@@ -687,7 +711,11 @@ impl Cx<'_> {
         Some(c.finish())
     }
 
-    fn check_static_body(&mut self, def: DefId, item: &hir::StaticItem) -> Option<TypedBody> {
+    pub(crate) fn check_static_body(
+        &mut self,
+        def: DefId,
+        item: &hir::StaticItem,
+    ) -> Option<TypedBody> {
         self.ensure_sig(def);
         let ty = match self.d.items.get(&def) {
             Some(ItemSig::Static(s)) => s.ty,

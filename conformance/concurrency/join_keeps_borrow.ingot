@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 18
+
+struct Pair { a: i64, b: i64 }
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn f() -> i64 {
+    var p = Pair.{ a: 1, b: 2 };
+    scope s {
+        let h = spawn bump(&mut p.a) in s;
+        h.join();
+        p.a = 3; //~ E1101
+    }
+    return p.a + p.b;
+}

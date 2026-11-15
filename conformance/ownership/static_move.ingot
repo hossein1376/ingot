@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 11, 12
+
+struct Buf { len: i64 }
+
+static buf: Buf = Buf.{ len: 1 };
+
+fn f() -> Buf {
+    return buf; //~ E1002
+}

@@ -1,0 +1,242 @@
+//! expect: reject
+//! section: 9, 5.6, 7
+
+fn sum(n: i64) -> i64 {
+    var s: i64 = 0;
+    for i in 0..n {
+        s += i;
+    }
+    return s;
+}
+
+fn deferred(n: i64) -> i64 {
+    var s: i64 = 0;
+    for i in 0..n {
+        defer { s += 1; }
+        s += i;
+    }
+    return s;
+}
+
+fn g(x: i64) -> i64 ! i64 {
+    if x < 0 {
+        fail 0 - x;
+    }
+    return x;
+}
+
+fn propagated(x: i64) -> i64 ! i64 {
+    return try g(x);
+}
+
+fn caught(x: i64) -> i64 {
+    return propagated(x) catch _ => 0 - 1;
+}
+
+fn maybe(x: i64) -> ?i64 {
+    if x < 0 {
+        return .none;
+    }
+    return .some(x);
+}
+
+fn unoption(x: i64) -> i64 {
+    match maybe(x) {
+        .none => { return 0 - 1; }
+        .some(v) => { return v; }
+    }
+}
+
+fn slice_sum(xs: []i64) -> i64 {
+    var s: i64 = 0;
+    for v in xs {
+        s += v;
+    }
+    return s;
+}
+
+fn array_sum() -> i64 {
+    let a = [3]i64.{ 1, 2, 3 };
+    return slice_sum(&a[0..3]);
+}
+
+fn third() -> f32 {
+    return 1.0 / 3.0;
+}
+
+fn lost() -> f32 {
+    return (1.0 + 1.0e-8) - 1.0;
+}
+
+fn id[T](x: T) -> T {
+    return x;
+}
+
+copy enum Color: u8 { red, green }
+
+fn green() -> Color {
+    return .green;
+}
+
+fn pick(c: Color) -> i64 {
+    match c {
+        .red => { return 1; }
+        .green => { return 2; }
+    }
+}
+
+interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+copy struct Item { n: i64 }
+
+impl Named for Item {
+    fn name(self: &Item) -> i64 {
+        return self.n;
+    }
+}
+
+fn call_named[I: Named](x: &I) -> i64 {
+    return x.name();
+}
+
+fn named() -> i64 {
+    let i = Item.{ n: 7 };
+    return call_named(&i);
+}
+
+fn twice[T: Num](x: T) -> T {
+    return x + x;
+}
+
+fn refs_sum(xs: []i64) -> i64 {
+    var s: i64 = 0;
+    for v in xs.refs() {
+        s += v.*;
+    }
+    return s;
+}
+
+fn through_refs() -> i64 {
+    let a = [3]i64.{ 1, 2, 3 };
+    return refs_sum(&a[0..3]);
+}
+
+fn inc(x: i64) -> i64 {
+    return x + 1;
+}
+
+const plus_one: fn(i64) -> i64 = inc;
+
+fn through_value() -> i64 {
+    let g = inc;
+    return g(2);
+}
+
+fn widen(x: i32) -> i64 {
+    return (x as i64) * 4294967296;
+}
+
+fn fwiden() -> f64 {
+    let x: f32 = 0.5;
+    return x as f64;
+}
+
+fn inner[U: Discard](x: U) -> i64 {
+    return @sizeof(U);
+}
+
+fn outer[T: Discard](x: T) -> i64 {
+    return inner(x);
+}
+
+fn generic_size() -> i64 {
+    let x: i32 = 1;
+    return outer(x);
+}
+
+fn closure_generic[T: Discard](x: T) -> i64 {
+    let k = fn [](y: i64) -> i64 { return y + @sizeof(T); };
+    return k(1);
+}
+
+fn floats() -> f32 {
+    var a = @zero([4]f32);
+    a[1] = 1.5;
+    a[3] = 0.25;
+    var s: f32 = 0.0;
+    for v in a {
+        s += v;
+    }
+    return s;
+}
+
+fn bools() -> i64 {
+    var b = [3]bool.{ true, false, true };
+    b[1] = true;
+    b[0] = false;
+    var n: i64 = 0;
+    for x in b {
+        if x { n += 1; }
+    }
+    return n;
+}
+
+fn grid() -> i64 {
+    var m = @zero([3][4]i64);
+    m[1][2] = 5;
+    m[2][3] = 7;
+    let row = m[1];
+    return row[2] + m[2][3] + m[0][0];
+}
+
+fn sliced() -> i64 {
+    var a = [5]i64.{ 1, 2, 3, 4, 5 };
+    let s = &mut a[1..4];
+    s[0] = 20;
+    let n = s.len as i64;
+    return a[1] + n;
+}
+
+fn make() -> [4]u8 {
+    return [4]u8.{ 1, 2, 3, 4 };
+}
+
+const t: [4]u8 = make();
+
+fn closure_caps(n: i64) -> i64 {
+    let a = 1;
+    let g = fn [a](x: i64) -> i64 { return x + a; };
+    return g(n);
+}
+
+fn f() {
+    @static_assert(sum(5) == 10, "loop");
+    @static_assert(deferred(3) == 6, "defer");
+    @static_assert(caught(3) == 3, "try");
+    @static_assert(caught(-3) == -1, "catch");
+    @static_assert(unoption(5) == 5, "some");
+    @static_assert(unoption(-5) == -1, "none");
+    @static_assert(array_sum() == 6, "slice loop");
+    @static_assert(third() == 0.33333334, "f32 rounds each operation");
+    @static_assert(lost() == 0.0, "f32 loses the small addend");
+    @static_assert(id(7) == 7, "generic");
+    @static_assert(pick(green()) == 2, "enum tag from a call");
+    @static_assert(named() == 7, "call through a bound");
+    @static_assert(twice(6) == 12, "Num bound");
+    @static_assert(through_refs() == 6, "std iterator");
+    @static_assert(through_value() == 3, "function value");
+    @static_assert(plus_one(2) == 3, "constant function value");
+    @static_assert(widen(1) == 4294967296, "integer widening keeps the destination type");
+    @static_assert(fwiden() == 0.5, "float widening converts the bits");
+    @static_assert(generic_size() == 4, "generic arguments substitute through a call");
+    @static_assert(closure_generic(1) == 9, "generic arguments substitute into a closure");
+    @static_assert(closure_caps(10) == 11, "closure captures");
+    @static_assert(floats() == 1.75, "packed f32");
+    @static_assert(bools() == 2, "packed bool");
+    @static_assert(grid() == 12, "nested packs");
+    @static_assert(sliced() == 23, "write through a slice of a pack");
+    @static_assert(t[2] == 3, "a constant holding a pack");
+    @static_assert(sum(5) == 11, "deliberate"); //~ E0810
+}

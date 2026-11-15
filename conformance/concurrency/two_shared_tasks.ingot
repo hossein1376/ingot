@@ -1,0 +1,15 @@
+//! expect: accept
+//! section: 18
+
+fn read(x: &i64) {
+    _ = x.*;
+}
+
+fn f() -> i64 {
+    let x: i64 = 1;
+    scope s {
+        spawn read(&x) in s;
+        spawn read(&x) in s;
+    }
+    return x;
+}

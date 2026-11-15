@@ -1,0 +1,49 @@
+// closures: each capture mode and each call mode; dyn coercions
+
+struct Move { v: i64 }
+
+fn shared_call(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+fn mutable_call(f: &mut dyn FnMut(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+fn caps(n: i64) -> i64 {
+    let a = 1;
+    var b = 2;
+    var b2 = 4;
+    let c = 3;
+    let g = fn [a](x: i64) -> i64 { return x + a; };
+    var h = fn [&mut b](x: i64) -> i64 { b.* += x; return b.*; };
+    let f = fn [a, &mut b2, c](x: i64) -> i64 { b2.* += a; return x + c; };
+    let m = Move.{ v: 5 };
+    let once = fn [m]() -> i64 { return m.v; };
+    let r1 = g(n);
+    let r2 = h(n);
+    let r3 = f(n);
+    let r4 = once();
+    let r5 = shared_call(&g, n);
+    let r6 = mutable_call(&mut h, n);
+    return r1 + r2 + r3 + r4 + r5 + r6;
+}
+
+interface Show {
+    fn show(self: &Self) -> i64;
+}
+
+copy struct N { v: i64 }
+
+impl Show for N {
+    fn show(self: &N) -> i64 { return self.v; }
+}
+
+fn show_it(x: &dyn Show) -> i64 {
+    return x.show();
+}
+
+fn dyn_show() -> i64 {
+    let n = N.{ v: 4 };
+    return show_it(&n);
+}

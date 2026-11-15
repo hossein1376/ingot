@@ -1,0 +1,9 @@
+//! expect: accept
+//! section: 13.1
+
+fn pick(a: []u8, b: []u8, first: bool) -> []u8 from a, b {
+    if first {
+        return a;
+    }
+    return b;
+}

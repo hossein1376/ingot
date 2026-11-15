@@ -64,10 +64,10 @@ fn build(text: &str) -> B {
     let inputs = vec![add("std", &STD, &mut sources), app_pkg];
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, 1);
+    let decls = check_declarations(&sources, &out, &target, 1, None);
     // Keep a copy of the phase 6 result for its diagnostics.
     let phase6: Vec<_> = decls.diagnostics.clone();
-    let bodies = check_bodies(&sources, &out, decls, &target, 1);
+    let bodies = check_bodies(&sources, &out, decls, &target, 1, None);
     let mut decls = Declarations::new();
     decls.diagnostics = phase6;
     B {
@@ -1212,8 +1212,10 @@ fn the_rules_of_this_step_are_errors() {
 
 #[test]
 fn a_body_that_passes_is_left_for_the_ownership_phases() {
+    // Phase 7 leaves every body it checked to phase 8; that phase's own message is
+    // recorded by `ingot-cfg`, not here.
     let b = build("fn f() -> i64 { return 1; }\n");
-    assert_eq!(b.ni(), [crate::UNCHECKED_OWNERSHIP.to_string()]);
+    assert!(b.ni().is_empty(), "{:?}", b.ni());
     let b = build("const c: i64 = 3;\nstatic s: i64 = 4;\n");
     assert!(b.ni().is_empty(), "{:?}", b.ni());
     let b = build("fn f() -> i64 { return true; }\n");

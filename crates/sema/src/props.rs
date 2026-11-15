@@ -24,6 +24,34 @@ struct AdtParts {
 }
 
 impl Declarations {
+    /// The return type is written with a borrow: `&`, `[]`, `&dyn`, a view struct, or
+    /// one of those inside a tuple, array, optional or result. A type parameter and an
+    /// associated type stop the walk (they are not themselves written borrows).
+    pub fn written_with_borrow(&mut self, ty: TypeId) -> bool {
+        fn go(d: &mut Declarations, ty: TypeId, seen: &mut Vec<TypeId>) -> bool {
+            if seen.contains(&ty) {
+                return false;
+            }
+            seen.push(ty);
+            match d.types.kind(ty).clone() {
+                TyKind::Ref(..) | TyKind::Slice(..) | TyKind::Dyn(..) | TyKind::DynFn(..) => true,
+                TyKind::Param(_) | TyKind::Projection(..) => false,
+                TyKind::Adt(_, _) | TyKind::Closure(..) => {
+                    if d.props(ty).view == Tri::Yes {
+                        return true;
+                    }
+                    let kids = d.types.children(ty);
+                    kids.into_iter().any(|c| go(d, c, seen))
+                }
+                _ => {
+                    let kids = d.types.children(ty);
+                    kids.into_iter().any(|c| go(d, c, seen))
+                }
+            }
+        }
+        go(self, ty, &mut Vec::new())
+    }
+
     /// The properties of `ty`, computed once.
     pub fn props(&mut self, ty: TypeId) -> Props {
         if let Some(p) = self.props.get(&ty) {
@@ -221,10 +249,24 @@ impl Declarations {
             },
             TyKind::Param(p) => {
                 let g = self.granted(p);
+                // A bound that failed to resolve is `Poison`. Linearity is unknown,
+                // and unknown is not a linear obligation. `Fn` and `FnMut` grant
+                // `Discard` (spec §8), so those parameters are not linear either.
+                let poison = self
+                    .param_bounds
+                    .get(&p)
+                    .into_iter()
+                    .flatten()
+                    .any(|b| matches!(b, Bound::Poison));
+                let maybe_linear = if poison {
+                    Tri::Unknown
+                } else {
+                    Tri::from_bool(!g.contains(&PropBound::Discard))
+                };
                 Props {
                     copy: Tri::from_bool(g.contains(&PropBound::Copy)),
                     linear: Tri::No,
-                    maybe_linear: Tri::from_bool(!g.contains(&PropBound::Discard)),
+                    maybe_linear,
                     view: Tri::No,
                     maybe_view: Tri::from_bool(!g.contains(&PropBound::Owned)),
                     send: Tri::from_bool(g.contains(&PropBound::Send)),

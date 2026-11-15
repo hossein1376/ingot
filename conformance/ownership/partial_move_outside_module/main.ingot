@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 10, 11
+
+import partial_move_outside_module.lib;
+
+fn steal(b: lib.Box) -> lib.Token {
+    return b.t; //~ E1006
+}

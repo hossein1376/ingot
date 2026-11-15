@@ -31,7 +31,7 @@ struct Finding {
     message: String,
 }
 
-impl Cx<'_> {
+impl Cx<'_, '_> {
     /// Phase 7: the body rules for every `kernel fn` (kernel and helper), each body on
     /// its own.
     pub(crate) fn check_kernel_bodies(&mut self, bodies: &mut Bodies) {
@@ -1016,7 +1016,8 @@ impl Cx<'_> {
             Err(crate::consteval::Fail::Generic) => Constness::Generic,
             Err(crate::consteval::Fail::Reported) => Constness::AlreadyReported,
             Err(crate::consteval::Fail::OutOfRange(_)) => Constness::AlreadyReported,
-            Err(crate::consteval::Fail::NotImplemented(m)) => {
+            Err(crate::consteval::Fail::NotImplemented(m))
+            | Err(crate::consteval::Fail::Interpret(m)) => {
                 self.ni(format!("{m} (S5b)"));
                 Constness::Unimplemented
             }

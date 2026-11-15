@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 9, 27
+
+fn p() -> i64 {
+    @panic("boom"); //~ E0806
+}
+
+fn f() {
+    @static_assert(p() == 0, "panic");
+}

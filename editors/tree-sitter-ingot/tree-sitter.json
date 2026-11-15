@@ -1,0 +1,23 @@
+{
+  "grammars": [
+    {
+      "name": "ingot",
+      "camelcase": "Ingot",
+      "scope": "source.ingot",
+      "path": ".",
+      "file-types": [
+        "ingot"
+      ]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "description": "Tree-sitter grammar for the Ingot language",
+    "authors": [
+      {
+        "name": "Hossein Yazdani",
+        "email": "hosseinyazdani1376@gmail.com"
+      }
+    ]
+  }
+}

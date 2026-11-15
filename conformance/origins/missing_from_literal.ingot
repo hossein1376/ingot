@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 13.1
+
+fn greeting() -> []u8 { //~ E1201
+    return "hello";
+}

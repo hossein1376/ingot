@@ -1,0 +1,10 @@
+// straight-line code: bindings, temporaries and an arithmetic check
+
+fn f() {
+    let a: i64 = 2;
+    var b: i64 = a + 3;
+    b += 1;
+    b -= 2;
+    let c = b * a;
+    @assert(c == 8);
+}

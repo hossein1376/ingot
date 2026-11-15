@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 13.1
+
+fn f() -> []u8 from static {
+    let a: [4]u8 = @zero;
+    return &a[0..2]; //~ E1203
+}

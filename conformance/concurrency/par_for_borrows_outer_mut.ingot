@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 19
+
+fn f() {
+    var x: i64 = 0;
+    par for i in 0..4 {
+        let r = &mut x; //~ E1407
+        r.* += i;
+    }
+}

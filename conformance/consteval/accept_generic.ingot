@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 9
+
+fn id[T](x: T) -> T {
+    return x;
+}
+
+const three: i64 = id(3);

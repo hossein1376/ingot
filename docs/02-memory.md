@@ -76,10 +76,10 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
   value that is an error (E1003, at its declaration), because one path would leak it.
 * A temporary, a value that is used without being bound, lives until the end of the
   statement that contains it. In the header of an `if`, `match`, `while` or `for` that
-  is the end of the whole statement, and for a loop, of each iteration. A borrow of a
-  temporary that is still live after that is E1105; bind the value with `let` to keep
-  it. A linear temporary that is not consumed by then is E1003 at the expression that
-  made it.
+  is the end of the whole statement, and for a loop, of each iteration. A temporary is
+  not a place (section 5.5), so it cannot be borrowed, explicitly or as a method
+  receiver (E0607); bind the value with `let` to borrow it. A linear temporary that is
+  not consumed by then is E1003 at the expression that made it.
 * Uninitialized memory does not exist in safe code. `@uninit(T)` is an `unsafe` builtin.
 
 ## 12. Borrows
@@ -178,11 +178,14 @@ this distinction a method could hand out the same `[]mut u8` twice. Slicing a *s
 slice stored in `p.*` copies it first, which is why `rest` above is `from self.*`.
 
 The body is checked against the clause: returning a borrow whose origin is not covered
-is an error, and the fix adds the missing source.
+is an error, and the fix adds the missing source. The clause covers the whole result
+`T ! E`: a borrow that leaves through `fail e` is checked exactly like one that leaves
+through `return v`, and a signature whose `T` or `E` is written with a borrow must have
+a clause.
 
 ### 13.2 `into`: where a stored borrow goes
 
-A function may store a view argument inside something it was given by `&mut`, or start
+A function may store a view argument inside something it was given by `&mut` or `[]mut`, or start
 a task with it in a scope it was given (section 18), but only if the parameter says so.
 
 ```ingot

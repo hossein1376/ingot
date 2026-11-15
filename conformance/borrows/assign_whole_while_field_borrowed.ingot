@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 12
+
+struct Pair { a: i64, b: i64 }
+
+fn f() -> i64 {
+    var p = Pair.{ a: 1, b: 2 };
+    let r = &p.a;
+    p = Pair.{ a: 3, b: 4 }; //~ E1101
+    return r.*;
+}

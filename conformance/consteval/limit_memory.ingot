@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 9
+
+fn big() -> i64 {
+    let x = @zero([16777217]u8);
+    return x[0] as i64;
+}
+
+fn f() {
+    @static_assert(big() == 0, "memory"); //~ E0808
+}

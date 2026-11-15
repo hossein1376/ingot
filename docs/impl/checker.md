@@ -52,7 +52,7 @@ callee from the signature alone.
 
   | Element of `S` | Contributes |
   |---|---|
-  | a loan with root `y` | `O(y)` at the current point |
+  | a loan on path `λ` | the origin set of a read of `λ` (§4.3) at the current point: `O(y)` for `λ = y` with no dereference, and `inner` applied once per dereference otherwise, so a loan on `p.*` contributes `Inner(p)`, not `Param(p)` |
   | `Param(p)` or `Inner(p)` | `Inner(p)` |
 
   `inner*(S)` is `S` closed under `inner`.
@@ -61,16 +61,31 @@ callee from the signature alone.
 
 A forward dataflow. The state maps each path that is ever moved, and each local, to one
 of **init**, **moved**, **maybe** (moved on some path). The join of *init* and *moved* is
-*maybe*.
+*maybe*. For each path of enum type, the state also holds the set of variants the path
+may hold. It starts as every variant, and the join is the union.
 
 Transfer:
 
 | Statement | Effect |
 |---|---|
-| storage start of `x` | `x` is *moved* (it holds nothing yet) |
-| `π = ...` | `π` and everything under it become *init* |
+| storage start of `x` | `x` is *moved* (it holds nothing yet). A parameter and a `scope` local arrive holding their value: *init* |
+| `π = ...` | `π` and everything under it become *init*. If the value is a variant aggregate of variant `v`, `π` may hold only `v`; otherwise it may hold every variant |
+| the variant record `π is v` (pipeline.md §5) | `π` may hold only `v` |
+| the variant record `π is not v` | `π` may no longer hold `v` |
 | a use of `π` marked **move** | `π` becomes *moved*. Everything under it too |
 | a use marked **copy**, or a borrow | no change |
+
+**The payload of a variant that a path cannot hold is no value.** The checks below
+ignore `π.w` when `π` may not hold `w`, and an enum path stands for its payloads: an
+enum value whose payloads are moved, absent or not linear holds nothing linear. The
+exception is `T ! E`, which is linear in itself (§10 of the specification): each of its
+two variants is an obligation, whatever `T` and `E` are, until its payload is moved.
+That is why lowering moves the payload of the chosen variant of a `T ! E` (pipeline.md
+§5). So
+`match o { .some(t) => t.release(), .none => {} }` consumes a linear `o: ?Token` on both
+arms, and so does `if let .some(t) = o { t.release(); }`, whose other path holds `none`.
+`o` stays usable in the `.none` arm. `let o: ?Token = .none;` needs no consuming,
+and a `?Token` returned by a call may hold either variant, so it must be consumed.
 
 Checks:
 
@@ -180,8 +195,9 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
    against `Self` if `a_p` is itself a scope parameter.
 2. **Type-parameter flow.** For each type parameter `T` of `f`, let `U_T` be the union,
    over every parameter `q` whose type mentions `T`, of:
-   `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner*(A_q)` if it
-   occurs inside one. Then for every parameter `p` passed by `&mut` whose type mentions
+   `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner⁺(A_q)` if it
+   occurs inside one. `inner⁺(S)` is `inner*(inner(S))`: what is hidden inside the
+   borrow, without the borrow's own origins (its loan, `Param(q)`), which are not a `T`. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
    `T`, store `U_T` through `a_p` as in step 1.
 3. **Result.** `S(dest)` is the union of:
    * for each `from p`: `A_p ∪ inner*(A_p)`;
@@ -236,8 +252,10 @@ call terminator that activates it, and as exclusive from then on.
 ### 5.2 Access checks
 
 At every statement and terminator, each access to a path `π` is checked against every
-loan `L` that is live at that point, was not created by this same statement, and whose
-path overlaps `π`:
+loan `L` that is live at that point, was not created by this execution of the same
+statement, and whose path overlaps `π`. A loan that the same statement created on an
+earlier iteration of a loop, and that is still live, does conflict: two tasks spawned in
+one loop with `&mut total` are E1102. The conflicts are:
 
 | Access to `π` | Conflicts when | Error |
 |---|---|---|
@@ -250,6 +268,9 @@ path overlaps `π`:
 Every one of these reports `borrow` (the point of `L`) and `later_use` (a use of a
 holder that keeps `L` live; for a scope, the `scope_wait`).
 
+A compound assignment `π op= e` reads and writes `π` as one access. It is checked as
+an assignment, so a live loan on `π` gives E1101 and not also E1103.
+
 An access *through* the borrow that holds an exclusive loan is an access to a path
 rooted at a different local (`r.*...`), so it does not overlap and needs no exception.
 
@@ -257,14 +278,14 @@ rooted at a different local (`r.*...`), so it does not overlap and needs no exce
 
 ### 6.1 Returns
 
-For `return v` where `v` has a view type, each origin in `S(v)`:
+For `return v`, and for `fail e`, where the value has a view type, each origin in `S(v)`:
 
 | Origin | Requirement | Error |
 |---|---|---|
 | a loan on local storage | never allowed | E1203 |
 | any other loan | none. It is a reborrow through a borrow, and the other origins in the set cover it | |
-| `Param(p)` | `from p`, or the result type mentions a type parameter that the type of `p` mentions | E1202, fix adds `p` |
-| `Inner(p)` | `from p` or `from p.*`, or the same type-parameter condition | E1202, fix adds `p.*` |
+| `Param(p)` | `from p`, or the result type mentions a type parameter that occurs in the type of `p` outside any borrow | E1202, fix adds `p` |
+| `Inner(p)` | `from p` or `from p.*`, or the result type mentions a type parameter that the type of `p` mentions | E1202, fix adds `p.*` |
 | `Self(s)` | `from s` | E1202 |
 
 **In a closure body** a returned view may hold any parameter or capture origin, because
@@ -282,12 +303,16 @@ element of `S` must be one of:
 
 * `Inner(p)` itself (moving things around inside `p`);
 * `Param(x)` or `Inner(x)` where `x` is declared `into p`;
-* `Param(x)` or `Inner(x)` where the types of `x` and `p` mention a common type
-  parameter;
+* `Param(x)` where a type parameter that the type of `p` mentions occurs in the type
+  of `x` outside any borrow, or `Inner(x)` where the types of `x` and `p` mention a
+  common type parameter. This is exactly what the caller adds by type-parameter flow
+  (§4.5 step 2): `A_x` when `T` is outside a borrow in `x`'s type, only `inner*(A_x)`
+  when it is inside one. So `fn set[T](h: &mut Holder[T], x: &T) { h.r = x; }` stores
+  the borrow `x` itself, which the caller does not add, and needs `into h`;
 * a loan that is not on local storage.
 
 `Param(x)` or `Inner(x)` otherwise is E1204, with the fix ` into p` on `x` when `p` is
-`&mut` or `&Scope` (E1206 rejects `into` on anything else, so there is then no fix). A
+`&mut`, `[]mut` or `&Scope` (E1206 rejects `into` on anything else, so there is then no fix). A
 loan on local storage is E1205.
 
 ### 6.3 Interface implementations

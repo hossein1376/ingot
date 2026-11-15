@@ -1,0 +1,35 @@
+{
+  "name": "tree-sitter-ingot",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Ingot language (highlighting-grade, derived from docs/grammar.md)",
+  "homepage": "https://github.com/hossein1376/ingot",
+  "repository": "https://github.com/hossein1376/ingot",
+  "keywords": [
+    "tree-sitter",
+    "ingot",
+    "parser"
+  ],
+  "main": "bindings/node",
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "src/**",
+    "queries",
+    "bindings"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.ingot",
+      "file-types": [
+        "ingot"
+      ],
+      "highlights": "queries/highlights.scm",
+      "brackets": "queries/brackets.scm",
+      "outline": "queries/outline.scm",
+      "indents": "queries/indents.scm"
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.27.2"
+  }
+}
