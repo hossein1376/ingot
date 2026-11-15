@@ -1,10 +1,11 @@
 //! Phase 9, the ownership checker (checker.md).
 //!
 //! Analysis A (moves and linear values, E1001–E1006) is [`moves`]. Analysis B
-//! (origin sets, E1202–E1205) is [`origins`]. Loans, scopes and phase 10 are not
-//! done. Phase 9 never changes the CFG. The driver still records
-//! [`crate::UNCHECKED_OWNERSHIP`].
+//! (origin sets, E1202–E1205) is [`origins`]. Analysis C (loans, E1101–E1105) is
+//! [`loans`]. Scopes, tasks and phase 10 are not done. Phase 9 never changes the
+//! CFG. The driver still records [`crate::UNCHECKED_OWNERSHIP`].
 
+mod loans;
 mod moves;
 mod origins;
 
@@ -16,14 +17,14 @@ use ingot_diag::source::{Sources, Span};
 use ingot_sema::defs::Sema;
 use ingot_sema::sigs::Declarations;
 
-/// Diagnostics from analyses A and B, plus `from` clauses for phase 6's E1201.
+/// Diagnostics from analyses A, B and C, plus `from` clauses for phase 6's E1201.
 pub struct OwnershipReport {
     pub diagnostics: Vec<Diagnostic>,
     pub not_implemented: Vec<String>,
     pub from_fixes: Vec<FromFix>,
 }
 
-/// Run analyses A and B on every CFG phase 8 produced for the checked package.
+/// Run analyses A, B and C on every CFG phase 8 produced for the checked package.
 ///
 /// `cfgs` is that package only (std is not checked unless it is the package under
 /// analysis). Constant-evaluation CFGs are a separate set and are not passed here.
@@ -42,6 +43,11 @@ pub fn check_ownership(
         diagnostics.extend(out.diagnostics);
         not_implemented.extend(out.not_implemented);
         from_fixes.extend(out.from_fixes);
+        if !out.origins.diverged {
+            let loans = loans::check_cfg(sema, decls, sources, cfg, &out.origins);
+            diagnostics.extend(loans.diagnostics);
+            not_implemented.extend(loans.not_implemented);
+        }
     }
     not_implemented.sort();
     not_implemented.dedup();

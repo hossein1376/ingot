@@ -1,15 +1,14 @@
 //! `ingot-cfg`: pipeline phase 8, lowering the typed bodies of a package to the
-//! control-flow graph of `docs/impl/pipeline.md` section 5, and phase 9's first
-//! analysis.
+//! control-flow graph of `docs/impl/pipeline.md` section 5, and phase 9.
 //!
 //! [`lower_package`] takes the result of phase 7 ([`ingot_sema::typed::Bodies`]) and
 //! produces one [`Cfg`] per function and test body, plus one for each closure body and
 //! each `par for` body. [`dump::dump`] prints a CFG as deterministic text; the format
 //! is described at the top of `dump.rs`. [`validate`] checks the structural rules every
 //! CFG must satisfy. [`check`] is phase 9: Analysis A (moves and linear values) lives
-//! in `check::moves`, Analysis B (origin sets) in `check::origins`. Loans, scopes and
-//! phase 10 are not implemented; a body that reached phase 8 still contributes
-//! [`UNCHECKED_OWNERSHIP`].
+//! in `check::moves`, Analysis B (origin sets) in `check::origins`, and Analysis C
+//! (loans, E1101–E1105) in `check::loans`. Scopes, tasks and phase 10 are not
+//! implemented; a body that reached phase 8 still contributes [`UNCHECKED_OWNERSHIP`].
 //!
 //! The lowering reports no diagnostics. A body that phase 7 rejected is not lowered
 //! (the phase gate of pipeline section 3). A construct the lowering does not handle

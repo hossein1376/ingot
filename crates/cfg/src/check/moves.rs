@@ -1506,31 +1506,7 @@ impl<'a> Cx<'a> {
     }
 
     fn exit_spans(&self, block: usize, stmt_idx: usize) -> Vec<Span> {
-        let Some(data) = self.cfg.blocks.get(block) else {
-            return Vec::new();
-        };
-        // Only a storage end with nothing but cleanup after it, leaving through
-        // a return or a goto. A `scope_wait` has no span that names the exit.
-        let after = data.stmts.get(stmt_idx.saturating_add(1)..).unwrap_or(&[]);
-        if !after.iter().all(|s| is_cleanup(&s.kind)) {
-            return Vec::new();
-        }
-        if !matches!(data.term, Terminator::Return { .. } | Terminator::Goto(_)) {
-            return Vec::new();
-        }
-        let mut spans = Vec::new();
-        if data.term_span != Span::default() {
-            spans.push(data.term_span);
-        }
-        for s in &data.stmts {
-            if let Some(d) = s.defer
-                && d.exit_span != Span::default()
-                && !spans.contains(&d.exit_span)
-            {
-                spans.push(d.exit_span);
-            }
-        }
-        spans
+        exit_spans(self.cfg, block, stmt_idx)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1773,6 +1749,37 @@ fn path_key(place: &Place) -> Option<PathKey> {
         proj.push(step);
     }
     Some(PathKey { local, proj })
+}
+
+/// Spans that name the exit ending storage at `stmt_idx`, the same ones E1003
+/// uses. Empty when this storage end is not that exit: a fall-through has no
+/// span here, and a `scope_wait` does not name one either.
+pub(crate) fn exit_spans(cfg: &Cfg, block: usize, stmt_idx: usize) -> Vec<Span> {
+    let Some(data) = cfg.blocks.get(block) else {
+        return Vec::new();
+    };
+    // Only a storage end with nothing but cleanup after it, leaving through
+    // a return or a goto. A `scope_wait` has no span that names the exit.
+    let after = data.stmts.get(stmt_idx.saturating_add(1)..).unwrap_or(&[]);
+    if !after.iter().all(|s| is_cleanup(&s.kind)) {
+        return Vec::new();
+    }
+    if !matches!(data.term, Terminator::Return { .. } | Terminator::Goto(_)) {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    if data.term_span != Span::default() {
+        spans.push(data.term_span);
+    }
+    for s in &data.stmts {
+        if let Some(d) = s.defer
+            && d.exit_span != Span::default()
+            && !spans.contains(&d.exit_span)
+        {
+            spans.push(d.exit_span);
+        }
+    }
+    spans
 }
 
 fn is_cleanup(kind: &StmtKind) -> bool {

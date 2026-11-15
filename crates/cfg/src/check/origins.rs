@@ -46,7 +46,6 @@ pub enum LoanStep {
 
 /// A loan created at one program point. The id is the index in [`Origins::loans`].
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // `kind` and `two_phase` are for Analysis C.
 pub struct Loan {
     pub id: u32,
     pub local: Local,
@@ -94,15 +93,13 @@ pub(crate) struct Output {
     pub diagnostics: Vec<Diagnostic>,
     pub not_implemented: Vec<String>,
     pub from_fixes: Vec<FromFix>,
-    /// Block entry states and loans. Analysis C reads this; nothing in this step does.
-    #[allow(dead_code)]
+    /// Block entry states and loans. Analysis C reads this.
     pub origins: Origins,
 }
 
 /// `O(x)` just before statement `stmt_index` of `block`. `stmt_index == stmts.len()`
 /// is the point before the terminator. An empty map means the block is unreachable
 /// or the analysis gave up on the body.
-#[allow(dead_code)]
 pub(crate) fn sets_before(
     origins: &Origins,
     sema: &Sema,
@@ -111,30 +108,103 @@ pub(crate) fn sets_before(
     block: usize,
     stmt_index: usize,
 ) -> OriginMap {
-    if origins.diverged {
+    if stmt_index == 0 {
+        if origins.diverged {
+            return OriginMap::new();
+        }
+        return origins
+            .entry
+            .get(block)
+            .and_then(|s| s.clone())
+            .unwrap_or_default();
+    }
+    let mut found = None;
+    let ok = replay_block(origins, sema, decls, cfg, block, |i, map| {
+        if i == stmt_index {
+            found = Some(map.clone());
+        }
+    });
+    if !ok {
         return OriginMap::new();
     }
+    found.unwrap_or_default()
+}
+
+/// Replay `block`. `visit` sees the origin map before each statement, then once
+/// more before the terminator. `false` means the block is unreachable or the
+/// replay gave up; `visit` may already have run for earlier points.
+pub(crate) fn replay_block(
+    origins: &Origins,
+    sema: &Sema,
+    decls: &mut Declarations,
+    cfg: &Cfg,
+    block: usize,
+    mut visit: impl FnMut(usize, &OriginMap),
+) -> bool {
+    if origins.diverged {
+        return false;
+    }
     let Some(start) = origins.entry.get(block).and_then(|s| s.clone()) else {
-        return OriginMap::new();
+        return false;
     };
     let mut cx = Cx::new(sema, decls, cfg, None, origins.loans.clone());
     cx.report = false;
     let mut flow = start;
-    let n = cfg.blocks.get(block).map(|b| b.stmts.len()).unwrap_or(0);
-    let stop = stmt_index.min(n);
     cx.block_id = block as u32;
-    for i in 0..stop {
-        let Some(stmt) = cfg.blocks.get(block).and_then(|b| b.stmts.get(i)).cloned() else {
-            break;
-        };
+    let stmts = cfg
+        .blocks
+        .get(block)
+        .map(|b| b.stmts.clone())
+        .unwrap_or_default();
+    for (i, stmt) in stmts.iter().enumerate() {
+        visit(i, &flow);
         cx.stmt_index = i as u32;
         cx.span = stmt.span;
-        cx.transfer_stmt(&mut flow, &stmt);
+        cx.transfer_stmt(&mut flow, stmt);
         if cx.diverged {
-            return OriginMap::new();
+            return false;
         }
     }
-    flow
+    visit(stmts.len(), &flow);
+    true
+}
+
+/// Origin map before every statement of `block`, plus one more entry for the
+/// point before the terminator. Empty maps mean the block is unreachable or the
+/// replay gave up. Analysis C reads these instead of calling [`sets_before`] once
+/// per statement; both use the same transfer.
+pub(crate) fn flow_points(
+    origins: &Origins,
+    sema: &Sema,
+    decls: &mut Declarations,
+    cfg: &Cfg,
+    block: usize,
+) -> Vec<OriginMap> {
+    let n = cfg.blocks.get(block).map(|b| b.stmts.len()).unwrap_or(0);
+    let mut points = vec![OriginMap::new(); n.saturating_add(1)];
+    let ok = replay_block(origins, sema, decls, cfg, block, |i, map| {
+        if let Some(slot) = points.get_mut(i) {
+            *slot = map.clone();
+        }
+    });
+    if !ok {
+        return vec![OriginMap::new(); n.saturating_add(1)];
+    }
+    points
+}
+
+/// One projection, as a loan step. An index of a slice is a dereference; an
+/// index of an array is not (checker.md §2). Shared with Analysis C.
+pub(crate) fn loan_step(kind: &TyKind, proj: &Projection) -> LoanStep {
+    match proj {
+        Projection::Field { index, .. } => LoanStep::Field(*index as u32),
+        Projection::TupleField(i) => LoanStep::Tuple(*i as u32),
+        Projection::Index(_) if matches!(kind, TyKind::Slice(..)) => LoanStep::Deref,
+        Projection::Index(_) => LoanStep::Elem,
+        Projection::Deref => LoanStep::Deref,
+        Projection::DerefRaw => LoanStep::Raw,
+        Projection::Payload { variant } => LoanStep::Payload(*variant as u32),
+    }
 }
 
 pub(super) fn check_cfg(
@@ -2050,18 +2120,8 @@ impl<'a> Cx<'a> {
                 .all(|s| matches!(s, LoanStep::Deref | LoanStep::Raw))
     }
 
-    /// One projection, as a loan step. An index or slice element of a slice is a
-    /// dereference; an index of an array is not (checker.md §2).
     fn loan_step(&self, ty: TypeId, proj: &Projection) -> LoanStep {
-        match proj {
-            Projection::Field { index, .. } => LoanStep::Field(*index as u32),
-            Projection::TupleField(i) => LoanStep::Tuple(*i as u32),
-            Projection::Index(_) if matches!(self.kind(ty), TyKind::Slice(..)) => LoanStep::Deref,
-            Projection::Index(_) => LoanStep::Elem,
-            Projection::Deref => LoanStep::Deref,
-            Projection::DerefRaw => LoanStep::Raw,
-            Projection::Payload { variant } => LoanStep::Payload(*variant as u32),
-        }
+        loan_step(&self.kind(ty), proj)
     }
 
     fn loan_steps_of(&mut self, place: &Place) -> Vec<LoanStep> {

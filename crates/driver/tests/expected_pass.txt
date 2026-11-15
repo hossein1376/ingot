@@ -1,6 +1,19 @@
 arith/constant_division_by_zero.ingot
 arith/constant_overflow.ingot
 arith/constant_shift_out_of_range.ingot
+borrows/array_elements_one_place.ingot
+borrows/assign_field_while_struct_borrowed.ingot
+borrows/assign_while_borrowed.ingot
+borrows/assign_whole_while_field_borrowed.ingot
+borrows/borrow_outlives_place.ingot
+borrows/closure_capture_conflict.ingot
+borrows/container_keeps_borrow.ingot
+borrows/forget_while_borrowed.ingot
+borrows/growing_while_sliced.ingot
+borrows/loop_local_borrow_escapes.ingot
+borrows/move_while_borrowed.ingot
+borrows/read_while_mutably_borrowed.ingot
+borrows/two_exclusive.ingot
 concurrency/bad_waitable_receiver.ingot
 concurrency/constant_par_for.ingot
 concurrency/constant_spawn.ingot
@@ -216,6 +229,7 @@ names/var_never_mutated.ingot
 origins/bad_origin_clause.ingot
 origins/closure_store_needs_into.ingot
 origins/from_on_non_view.ingot
+origins/from_self_keeps_receiver.ingot
 origins/missing_from.ingot
 origins/missing_from_literal.ingot
 origins/missing_from_two_params.ingot
@@ -227,6 +241,8 @@ origins/slice_of_local.ingot
 origins/store_local_through_param.ingot
 origins/store_needs_into.ingot
 origins/store_needs_into_nested.ingot
+origins/stored_borrow_must_outlive.ingot
+origins/type_parameter_flow.ingot
 origins/view_of_local.ingot
 ownership/array_element_move.ingot
 ownership/closure_capture_moves.ingot

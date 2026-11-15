@@ -264,7 +264,22 @@ and for every other enum only a variant whose payload is linear. The join of a
 `match`, `try`, `catch` or `orelse` does not report a leak that every arm consumed.
 A consuming `for` over an array moves each element with `for_elem` and, on the normal
 exit only, `iter_consumed` of the array temporary.
-Loans, scopes, tasks and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry stays.
+`check/loans.rs` is Analysis C (loans, E1101–E1105). It runs after B on every CFG whose
+origin analysis did not diverge. Use-liveness of locals is a backward dataflow: a use
+is a read, a move, a borrow or a storage-dependent terminator, and a whole-local
+assignment kills that local. A loan is live where it sits in `O(v)` and `v` is
+use-live, or a live loan is rooted at `v` (a borrow of a container keeps what the
+container borrows). A two-phase exclusive loan is shared until the call, `spawn`,
+`dispatch`, `select` or `par for` that uses its temporary, and exclusive from that
+terminator on. Each access is checked against every live loan that overlaps it and was
+not created by the same statement. The kill rule of §4.4 drops the loans an assignment
+removes, so those do not report E1101. The storage end of a local reports E1105 for a
+loan on that local's storage, except when every holder is kept live only by the
+`return` or `fail` that follows: that loan is E1203. Each report carries `borrow` and
+`later_use`. E1105 carries `scope_end` for each exit span Analysis A would use for
+E1003, and omits the label when there is none. Scopes and tasks are not checked here,
+so there is no E1403.
+Scopes, tasks and phase 10 are not done: the `UNCHECKED_OWNERSHIP` entry stays.
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;

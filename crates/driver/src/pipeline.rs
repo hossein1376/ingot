@@ -3,11 +3,12 @@
 //! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
 //! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
 //! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phase 9 runs
-//! Analysis A (moves and linear values) and Analysis B (origin sets) on the checked
-//! package's CFGs. A `from` clause computed for E1201 is attached to that diagnostic.
-//! Loans, scopes and phase 10 are not done, so a package with a body that passes phase
-//! 7 still records that in `not_implemented`. A constant that phase 6 cannot evaluate
-//! is not accepted either. The command line exits with status 2 instead of 0 when
+//! Analysis A (moves and linear values), Analysis B (origin sets) and Analysis C
+//! (loans, E1101–E1105) on the checked package's CFGs. A `from` clause computed for
+//! E1201 is attached to that diagnostic. Scopes, tasks and phase 10 are not done, so a
+//! package with a body that passes phase 7 still records that in `not_implemented`. A
+//! constant that phase 6 cannot evaluate is not accepted either. The command line exits
+//! with status 2 instead of 0 when
 //! `not_implemented` is non-empty.
 
 use crate::files::{self, Files};
@@ -234,8 +235,8 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         not_implemented.extend(bodies.not_implemented.iter().cloned());
         not_implemented.extend(lowered_not_implemented);
-        // Phase 9, analyses A and B. Constant-evaluation CFGs are not in `cfgs`.
-        // Loans, scopes and phase 10 are still open: the ownership entry stays.
+        // Phase 9, analyses A, B and C. Constant-evaluation CFGs are not in `cfgs`.
+        // Scopes, tasks and phase 10 are still open: the ownership entry stays.
         // E1201 was copied out of the declarations above; attach the clause here.
         let owned =
             ingot_cfg::check::check_ownership(&output.sema, &mut bodies.declarations, &all, &cfgs);
