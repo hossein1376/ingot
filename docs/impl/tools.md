@@ -382,17 +382,22 @@ What is offered depends on what comes before the partial name:
   that the current module may name.
 * **`Type.`**: the variants of an enum, and the functions of the type's inherent impls;
   for an interface, its methods.
+* **`@`**: the builtins of the language (spec §1: `@name`), and nothing else. `name` is
+  written without the `@`. The answer does not depend on the program.
 * **Anything else**: the locals and parameters in scope at the cursor (declared before
   it, in a block, arm, loop or closure that contains it), the generic parameters of the
-  enclosing item, the module's items and imports, and the built-in names (pipeline
-  §4.3).
+  enclosing item, the module's items and imports, the built-in names (pipeline §4.3),
+  and the keywords. Keywords are offered wherever this context applies; no attempt is
+  made to offer only those the grammar allows at the cursor.
 
 Only names that start with the partial name are offered, case included: since types and
 values are spelled differently (spec §1), `Ti` offers types and `ti` values. Lines are in
 order of `name`, then `path`. Each has `name` and `item` (§5's list, plus `builtin` for
-a built-in name); a declared item also has `path`, `signature` and `doc` as `query def`
-gives them; a local or parameter has `of`, its type, when it is known. A name that
-appears twice in scope (a shadowed local) is offered once, as the innermost.
+a built-in name, `builtin_fn` for an `@` builtin and `keyword` for a keyword); a
+declared item also has `path`, `signature` and `doc` as `query def` gives them; a local
+or parameter has `of`, its type, when it is known. A name that appears twice in scope
+(a shadowed local) is offered once, as the innermost. A keyword is offered even where a
+declared name has the same spelling, which the language does not allow anyway.
 
 The code at the cursor is usually incomplete: `t.` with nothing after the dot is the
 common case, and the file then has a syntax error. The answer must be what the program

@@ -83,7 +83,7 @@ fn completion_after_a_dot_uses_the_unsaved_text() {
         .and_then(|capabilities| capabilities.get("completionProvider"))
         .and_then(|provider| provider.get("triggerCharacters"))
         .expect("completionProvider");
-    assert_eq!(characters, &Json::Array(vec![s(".")]));
+    assert_eq!(characters, &Json::Array(vec![s("."), s("@")]));
     client.open(&lib, LIB);
     client.open(&main, "fn f() -> i64 { return 0; }\n");
     client.published(&main);
@@ -143,6 +143,26 @@ fn completion_after_a_dot_uses_the_unsaved_text() {
     );
     assert_eq!(
         item(&items, "helper").get("kind").and_then(Json::as_i64),
+        Some(3)
+    );
+
+    // A keyword at the start of a statement, and a builtin after `@`.
+    let text = "fn run() -> i64 {\n    let result = 1;\n    re\n    return result;\n}\n";
+    client.change(&main, text);
+    let items = complete(&mut client, &main, text, "    re");
+    assert_eq!(
+        item(&items, "return").get("kind").and_then(Json::as_i64),
+        Some(14)
+    );
+    assert_eq!(
+        item(&items, "result").get("kind").and_then(Json::as_i64),
+        Some(6)
+    );
+    let text = "fn run() -> i64 {\n    let x = @ab;\n    return 0;\n}\n";
+    client.change(&main, text);
+    let items = complete(&mut client, &main, text, "@ab");
+    assert_eq!(
+        item(&items, "abs").get("kind").and_then(Json::as_i64),
         Some(3)
     );
 }

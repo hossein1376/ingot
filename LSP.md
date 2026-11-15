@@ -106,12 +106,12 @@ outline panel uses the grammar's `outline.scm`; LSP symbols serve the symbol sea
 
 **Completion (L4)** comes from `query complete` at the cursor, answered after the
 batch's changes like the other queries. `completionProvider` has `triggerCharacters:
-["."]`. Each line becomes a `CompletionItem`: `label` = `name`, `detail` = `signature`
+[".", "@"]`. Each line becomes a `CompletionItem`: `label` = `name`, `detail` = `signature`
 (or `of` for a local), `documentation` = `doc` as Markdown, `kind` by `item`: `fn` 3
 (2 after a `.` on a value), `field` 5, `variant` 20, `struct` 22, `enum` 13, `interface`
 8, `type` 25, `generic` 25, `const` 21, `static` 6, `local` and `param` 6, `module` 9,
-`builtin` 7. The list is complete (`isIncomplete: false`); the client filters further as
-the user types.
+`builtin` 7, `builtin_fn` 3, `keyword` 14. The list is complete (`isIncomplete: false`);
+the client filters further as the user types.
 
 **Workspace symbols** run `query symbols --match TEXT` on each package that has an open
 document, in package order, and concatenate the results.

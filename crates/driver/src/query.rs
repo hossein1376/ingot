@@ -12,8 +12,8 @@ use ingot_sema::hir::{ExprId, LocalId, PatId, Res};
 use ingot_sema::sigs::{Head, ItemSig, Tri};
 use ingot_sema::ty::{TyKind, TypeId};
 use ingot_sema::typed::{ExprRes, PatRes, TypedBody};
-use ingot_syntax::lexer::lex;
-use ingot_syntax::token::{Token, TokenKind};
+use ingot_syntax::lexer::{BUILTINS, lex};
+use ingot_syntax::token::{Kw, Token, TokenKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -242,6 +242,27 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
         offset -= 1;
     }
     let (partial_start, partial) = partial_name(&text, offset);
+    // After `@` only a builtin can follow, whatever the program says (tools.md §5).
+    if partial_start > 0 && text.as_bytes()[partial_start - 1] == b'@' {
+        let mut names: Vec<&str> = BUILTINS
+            .iter()
+            .copied()
+            .filter(|name| name.starts_with(partial.as_str()))
+            .collect();
+        names.sort_unstable();
+        let mut lines: Vec<String> = names
+            .into_iter()
+            .map(|name| completion_line(name, "builtin_fn").json.to_text())
+            .collect();
+        let human = lines.join("\n");
+        lines.push(summary("complete", true, started));
+        return QueryOutcome {
+            lines,
+            human,
+            error: None,
+            exit: 0,
+        };
+    }
     // The first try uses the text as written. A file with an E01xx/E02xx error declares
     // nothing, so a cursor after a dot needs a placeholder identifier to make it parse.
     let member_start = partial_start;
@@ -2485,6 +2506,15 @@ impl Context<'_> {
             .into_values()
             .filter(|line| line.name.starts_with(partial))
             .collect();
+        // Keywords are not names in scope: they are offered beside them, wherever this
+        // context applies (tools.md §5).
+        lines.extend(
+            Kw::ALL
+                .iter()
+                .map(|keyword| keyword.as_str())
+                .filter(|keyword| keyword.starts_with(partial))
+                .map(|keyword| completion_line(keyword, "keyword")),
+        );
         lines.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
         lines
     }
@@ -2672,16 +2702,21 @@ fn builtin_member_line(name: &str) -> CompletionLine {
     }
 }
 
-fn builtin_line(name: &str) -> CompletionLine {
+/// A line with only a name and an item: a keyword or an `@` builtin.
+fn completion_line(name: &str, item: &str) -> CompletionLine {
     CompletionLine {
         name: name.to_string(),
         path: String::new(),
         json: object(vec![
             ("type", Json::String("completion".to_string())),
             ("name", Json::String(name.to_string())),
-            ("item", Json::String("builtin".to_string())),
+            ("item", Json::String(item.to_string())),
         ]),
     }
+}
+
+fn builtin_line(name: &str) -> CompletionLine {
+    completion_line(name, "builtin")
 }
 
 fn generic_line(generic: &hir::GenericParam) -> CompletionLine {

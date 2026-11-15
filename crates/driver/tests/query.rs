@@ -1007,6 +1007,57 @@ fn completion_separates_types_from_values_and_offers_builtins() {
 }
 
 #[test]
+fn completion_offers_keywords_beside_names_and_builtins_after_an_at() {
+    let (_dir, main) = complete_package("complete-keywords");
+    // A partial name at the start of a statement: the local and the keywords.
+    let text = "fn run() -> i64 {\n    let result = 1;\n    re\n    return result;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "    re", 0));
+    assert_eq!(completion_names(&lines), ["result", "return"]);
+    let keyword = lines
+        .iter()
+        .find(|line| line.get("name").and_then(Json::as_str) == Some("return"))
+        .unwrap();
+    assert_eq!(text_field(keyword, "item"), "keyword");
+    assert!(keyword.get("path").is_none(), "{keyword:?}");
+
+    // Keywords are not members: nothing after a dot is a keyword.
+    let text =
+        "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "t.", 0));
+    assert!(
+        lines
+            .iter()
+            .all(|line| text_field(line, "item") != "keyword"),
+        "{lines:?}"
+    );
+
+    // After `@`: the builtins only, without the `@`, in order of name.
+    let text = "fn run() -> i64 {\n    let x = @a;\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "@a", 0));
+    let names = completion_names(&lines);
+    assert!(names.contains(&"abs".to_string()), "{names:?}");
+    assert!(names.contains(&"alignof".to_string()), "{names:?}");
+    assert!(names.iter().all(|name| name.starts_with('a')), "{names:?}");
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert!(
+        lines
+            .iter()
+            .all(|line| text_field(line, "item") == "builtin_fn")
+    );
+
+    // `@` with nothing after it offers every builtin, whatever else is broken.
+    let text = "fn run() -> i64 {\n    @\n    return 0;\n}\n";
+    fs::write(&main, text).unwrap();
+    let lines = completions(&after(&main, "@", 0));
+    assert_eq!(lines.len(), ingot_syntax::lexer::BUILTINS.len());
+}
+
+#[test]
 fn completion_in_a_file_with_another_syntax_error_gives_no_lines() {
     let (_dir, main) = complete_package("complete-error");
     let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\nfn broken( {\n";

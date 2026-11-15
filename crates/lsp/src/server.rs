@@ -238,7 +238,10 @@ impl Server {
             ("workspaceSymbolProvider", Json::Bool(true)),
             (
                 "completionProvider",
-                object(vec![("triggerCharacters", Json::Array(vec![string(".")]))]),
+                object(vec![(
+                    "triggerCharacters",
+                    Json::Array(vec![string("."), string("@")]),
+                )]),
             ),
         ]);
         self.result(
@@ -1125,6 +1128,8 @@ fn completion_kind(item: &str, value_member: bool) -> i64 {
         "local" | "param" => 6,
         "module" => 9,
         "builtin" => 7,
+        "builtin_fn" => 3,
+        "keyword" => 14,
         _ => 1,
     }
 }
