@@ -252,8 +252,10 @@ call terminator that activates it, and as exclusive from then on.
 ### 5.2 Access checks
 
 At every statement and terminator, each access to a path `π` is checked against every
-loan `L` that is live at that point, was not created by this same statement, and whose
-path overlaps `π`:
+loan `L` that is live at that point, was not created by this execution of the same
+statement, and whose path overlaps `π`. A loan that the same statement created on an
+earlier iteration of a loop, and that is still live, does conflict: two tasks spawned in
+one loop with `&mut total` are E1102. The conflicts are:
 
 | Access to `π` | Conflicts when | Error |
 |---|---|---|
@@ -265,6 +267,9 @@ path overlaps `π`:
 
 Every one of these reports `borrow` (the point of `L`) and `later_use` (a use of a
 holder that keeps `L` live; for a scope, the `scope_wait`).
+
+A compound assignment `π op= e` reads and writes `π` as one access. It is checked as
+an assignment, so a live loan on `π` gives E1101 and not also E1103.
 
 An access *through* the borrow that holds an exclusive loan is an access to a path
 rooted at a different local (`r.*...`), so it does not overlap and needs no exception.
