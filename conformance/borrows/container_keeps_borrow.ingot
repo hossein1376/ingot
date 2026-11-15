@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 12
+
+struct Holder { r: &mut i64 }
+
+fn f() -> i64 {
+    var x: i64 = 1;
+    let h = Holder.{ r: &mut x };
+    let w = &h;
+    let y = &mut x; //~ E1102
+    _ = w;
+    y.* = 5;
+    return y.*;
+}

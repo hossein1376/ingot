@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 12
+
+fn f() -> i64 {
+    var x: i64 = 1;
+    var c = fn [&mut x]() { x.* += 1; };
+    c();
+    let y = &mut x;
+    y.* = 5;
+    return y.*;
+}

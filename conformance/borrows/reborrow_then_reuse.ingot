@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 12
+
+fn f(r: &mut i64) -> i64 {
+    let r2 = &mut r.*;
+    r2.* = 2;
+    let n = r2.*;
+    r.* = n + 1;
+    return r.*;
+}

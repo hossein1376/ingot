@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 11, 12
+
+fn f(n: i64, seed: &i64) -> i64 {
+    var r: &i64 = seed;
+    for i in 0..n {
+        let local: i64 = i;
+        r = &local; //~ E1105
+    }
+    return r.*;
+}
