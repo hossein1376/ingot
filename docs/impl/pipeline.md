@@ -27,7 +27,7 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 7 | Type-check | function bodies | typed tree | E04xx, E06xx, E07xx, E08xx, E13xx, E14xx (shape rules), E15xx |
 | 8 | Lower | typed tree | one CFG per function, checks explicit | none |
 | 9 | Ownership | CFG | the same CFG, verified | E10xx, E11xx, E12xx, E1401 to E1403, E1407 |
-| 10 | Check removal | CFG | CFG without the checks §31 requires gone, and the cost items | none |
+| 10 | Check removal | CFG | CFG without the checks §31 requires gone, and the cost items | E0806 (rule 5 of section 6) |
 | 11 | Instantiate | generic CFGs, roots | one CFG per concrete instance | E0806, E0809, E0810, E1514 only |
 | 12 | Optimize | CFGs | CFGs or back-end IR | none |
 | 13 | Emit | | object code, kernel shaders | none |
@@ -355,7 +355,7 @@ else can change it (invariant I2). Facts come from:
 | 1 | it guards the element access generated for `for x in xs`. Lowering (section 5) emits no such check, so this rule holds by construction |
 | 2, 3 | it is a bounds check on index `e` against `len(p)` and the facts give `0 <= e` and `e < len(p)`. For a slice range or vector access of width `k`: `0 <= e` and `e + k <= len(p)` |
 | 4 | it is an overflow check on `a op b` and the facts bound the exact result inside the type's range |
-| 5 | both operands are constants. The operation is folded; an overflow is E0806 |
+| 5 | both operands are constants: literals, `const` items, or operations on those (not locals, and not constant generic parameters, which are symbols here). The operation is folded; a trap is E0806, reported by this phase at the operation |
 | 6 | an identical check on the same operands dominates it with no assignment to them in between |
 
 The analysis is a forward dataflow; at a join each bound is the weaker of the two, and

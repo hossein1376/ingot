@@ -225,7 +225,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
 | E0805 | `not_generic` | generic arguments on something that takes none | the argument list | delete them |
-| E0806 | `constant_evaluation_trapped` | a constant expression traps. The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
+| E0806 | `constant_evaluation_trapped` | a constant expression traps, or an operation in a body whose operands are all constants traps (pipeline §6, rule 5). The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
 | E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function, or runs `spawn`, `par for`, `select` or `dispatch` (pipeline §4.6) | the operation (`call` as for E0806) | — |
 | E0808 | `evaluation_limit` | constant evaluation takes more than 2^24 steps, nests calls more than 1024 deep, or holds more than 2^24 bytes of values at once (pipeline §4.6) | the outermost call | — |
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
