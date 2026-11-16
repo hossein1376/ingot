@@ -189,6 +189,12 @@ code alone.
   commit protocol between arms; the timer's deadline is fixed at preparation; std and
   programs add waitable operations without compiler changes. *Rejected:* a
   compiler-known set of waitable functions.
+* **A waitable body cannot fail** (*user*, 2026-11-16, found reviewing P1b; 03 §21,
+  E1410). `fail`, a propagating `try` and falling off the end are errors in it; an error
+  found while preparing is kept in the operation and given by its first `poll`. *Why:*
+  every arm of a `select` then always has an operation, and the lowering of a direct
+  call stays "prepare, then wait". *Rejected:* an error exit counting as an operation
+  already complete with that error.
 * **`try` in a `select` arm** (review 2, L1): `_ = try clock.after_ms(250) => ...`. The
   timer's `.canceled` error must stay, so the arm needed a way to propagate it.
 * **`Scope.canceled` is split** into `is_canceled` (a read) and the waitable `canceled`

@@ -294,7 +294,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1407 | `par_for_outer_mutation` | a `par for` body assigns to, moves or exclusively borrows something declared outside the loop | the operation (`declared`) | — |
 | E1408 | `par_for_exit` | `break`, a `continue` of an outer loop, `return`, `fail` or `try` inside a `par for` body | the statement | — |
 | E1409 | `not_waitable` | a `select` arm's operation is not a call of a `waitable fn` | the call (`callee`) | — |
-| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow, that has no `self` parameter, that has a parameter that is not `Discard`, or whose body does not return one `Wait + Discard` type whose `Output` is the declared result (§21) | the `self` parameter, or the function's name when it has none | — |
+| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow, that has no `self` parameter, that has a parameter that is not `Discard`, or whose body does not return one `Wait + Discard` type whose `Output` is the declared result, or leaves by `fail`, a propagating `try` or its end (§21) | the `self` parameter, or the function's name when it has none | — |
 
 A task that would use the same data twice is not a separate code: it is E1102 or E1103
 with a `spawn` related span.

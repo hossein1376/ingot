@@ -244,6 +244,9 @@ pub interface Wait {
 
 A `waitable fn` declared `-> R` has a body that **prepares** an operation: every
 `return` gives a value of one type `W`, where `W: Wait + Discard` and `W.Output` is `R`.
+The body leaves only by such a `return`: `fail`, a `try` that propagates out of the
+body, and reaching the end of the body are E1410. A preparation cannot fail; an error it
+finds is kept in `W` and given by the first `poll` (`R` may be `T ! E`).
 The preparation runs once, must not block, and changes nothing another task can
 observe. Its receiver is a shared borrow and its other parameters are `Discard`, so an
 operation that is not chosen is simply dropped (E1410 otherwise).
