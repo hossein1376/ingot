@@ -1,12 +1,18 @@
 # Roadmap
 
-The specification in [docs/](docs/README.md) is the definition of the language. The
-bootstrap front end, CFG ownership checker, CFG phase-10 pruning and evaluator in `src/`
-cover item 1 steps 1 to 3 for the cases in [conformance/](conformance/README.md),
-including package and module loading. Code generation is still open. The standard library
-has started in [std/](std/README.md) with `Env`, `mem`, `io`, `fs`, `net`, `time`, `text`,
-`fmt`, `math`, `hash`, `sort`, `sys` and `sys.macos`; containers and runtime bindings
-remain.
+The specification in [docs/](docs/README.md) is the definition of the language.
+
+**Where it stands.** The bootstrap compiler in `crates/` covers item 1 steps 1 to 3
+and the check-removal half of step 8: the front end, types and constant evaluation, the
+CFG and the whole ownership checker, and phase-10 check removal with the bounds and
+overflow part of `ingot cost`. `query`, `serve` and an LSP adapter work. Nothing is
+generated or run yet: code generation (step 4) is next, and the backend design is under
+review. [COMPILER.md](COMPILER.md) has the step-by-step record.
+
+The standard library is being designed in [docs/std/](docs/std/) (`rt`, `task`, `sync`,
+`mem`, `env`, `time`), with the language features it needs specified first (raw pointer
+casts, `Cell`, atomics). `std/` holds only the declaration stubs the compiler loads as
+`std` today.
 
 ## 0. Before writing the compiler
 
@@ -31,25 +37,26 @@ Follow [docs/impl/](docs/impl/README.md). Each step is done when the conformance
 for its area pass, and each new rule or error code gets a test before it is
 implemented.
 
-1. Front end, in Rust: lexer, parser, modules, name resolution, JSON diagnostics with fix
-   edits.
-2. Types and checking: structs, enums with payloads, `match`, `?T`, `T ! E`, tuples,
+1. **Done.** Front end, in Rust: lexer, parser, modules, name resolution, JSON
+   diagnostics with fix edits.
+2. **Done.** Types and checking: structs, enums with payloads, `match`, `?T`, `T ! E`, tuples,
    interfaces and `impl`, generics with bounds, trapping arithmetic and the conversion
    builtins, compile-time evaluation.
-3. A control-flow-graph IR, and on it the ownership checker: moves, linear consumption,
-   borrows, origins. Everything in the standard library depends on this.
-4. Code generation through LLVM IR, linking for Mach-O, and the Apple arm64 C ABI for
+3. **Done.** A control-flow-graph IR, and on it the ownership checker: moves, linear
+   consumption, borrows, origins, scopes and tasks. Everything in the standard library
+   depends on this.
+4. **Next.** Code generation through LLVM IR, linking for Mach-O, and the Apple arm64 C ABI for
    `extern` and `export`.
 5. Standard library core: `sys.macos`, `mem` (arena, heap), `list`, `map`, `str`, `fmt`,
-   `fs`, `text`. Started in [std/](std/README.md): the module tree, `Env`, `mem` types and
-   byte helpers, `text` UTF-8 and integer parsing, `fmt` decimal encoders, `math`, `hash`,
-   `sort`, and the raw `sys.macos` boundary. Allocator bodies and owning containers wait
-   for code generation.
+   `fs`, `text`. The design of `rt`, `task`, `sync`, `mem`, `env` and `time` is drafted
+   in [docs/std/](docs/std/); bodies wait for code generation.
 6. SIMD types and builtins.
 7. Runtime: scheduler, task stacks, `scope`/`spawn`, `par for`, `sync`, kqueue I/O.
 8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `query`, `serve`, as
-   [docs/impl/tools.md](docs/impl/tools.md) defines them. `fmt` needs its layout rules
-   written first.
+   [docs/impl/tools.md](docs/impl/tools.md) defines them. Done: check removal, the
+   bounds and overflow items of `cost`, `query` and `serve`. Open: the other `cost`
+   items (allocations, indirect calls, copies, spawns, locks, park points), `audit`,
+   `layout`, `api`. `fmt` needs its layout rules written first.
 
 ## 2. Second target: `x86_64-linux-znver4`
 
@@ -76,8 +83,8 @@ Once the first target runs real programs: `ingot build --profile` and an
 constraints in section 10 of [docs/impl/pipeline.md](docs/impl/pipeline.md).
 Post-link layout optimization only if a measured program shows the need.
 
-A formatter specification, a Tree-sitter grammar derived from `docs/grammar.md`, and a
-Language Server adapter over `ingot serve`.
+A formatter specification. (The Tree-sitter grammar and the Language Server adapter
+over `ingot serve` exist: see [editors/](editors/README.md) and [LSP.md](LSP.md).)
 
 The deferred list in section 12 of the rationale: a struct-of-arrays container,
 contracts, static borrow types, named origin parameters on structs, SME streaming

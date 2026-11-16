@@ -124,7 +124,7 @@ For editors, `cargo build --release --bin ingot-lsp` builds the language server,
 | [docs/std/](docs/std/) | Standard library design drafts, under review |
 | [conformance/](conformance/README.md) | The programs every implementation must agree on |
 | `crates/` | The compiler: `syntax`, `sema`, `cfg` (CFG, ownership, check removal), `diag`, `driver` (the `ingot` command) and `lsp` |
-| `std/` | Early standard library sources |
+| `std/` | Declaration stubs the compiler loads as `std` until the real library exists |
 | [editors/](editors/README.md) | Tree-sitter grammar and Zed extension |
 | [COMPILER.md](COMPILER.md) | How this compiler is built, its rules and its step plan |
 | [LSP.md](LSP.md) | The language server plan |
