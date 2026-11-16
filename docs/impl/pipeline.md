@@ -82,6 +82,10 @@ and the manifest.
 * Parallelism inside the compiler is allowed and expected (phases 7 to 10 per function).
   It must not be observable.
 * Paths in debug information and trap messages are relative to the package root.
+* The output files are reproducible too: no timestamps (`/Brepro` for PE), a build
+  identifier computed from content (ELF build-id, Mach-O UUID), no absolute paths
+  (inputs are passed to the assembler and linker by relative path; on macOS the debug
+  map of object files is the known leak), and a fixed order of inputs.
 
 ## 3. Error recovery and poisoning
 
@@ -291,6 +295,12 @@ Lowering must do the following, because the checker's rules are stated on the re
   registration. `errdefer` bodies are copied only to error exits. After this there is no
   `defer` in the CFG. A value consumed in a deferred block is therefore simply moved on
   each exit path, and the linear check needs no special case for it.
+* **A `waitable fn` call** becomes a call of its body, the preparation, into a temporary
+  operation, then a `select` terminator over that one operation. **`select`** becomes
+  the preparation calls of every arm, in order (§21), then one `select` terminator over
+  the prepared operations, whose successor per arm binds the arm's pattern (after
+  `try`, if the arm has it) and runs its block. The operations of the arms not chosen
+  are dropped at the terminator.
 * **`try e`** becomes: evaluate `e` to a temporary; switch on its tag; on `err`, convert
   (identity or a `from` variant), run the block's deferred code for an error exit, and
   return the error; on `ok`, move the payload out.

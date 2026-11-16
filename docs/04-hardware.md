@@ -377,7 +377,10 @@ export fn ingot_checksum(data: *u8, len: i64) -> u32 {
   `extern fn` type: creating it is safe, calling it is not. A variadic one may not be
   used as a value.
 * `export fn` defines a function with the platform C ABI and an unmangled symbol. Its
-  parameters and result must be FFI types.
+  parameters and result must be FFI types. The exported names of a program are one
+  namespace (E1711 for two with one name); a package should prefix its exported names
+  with its own name, and `std` uses `ingot_rt_`. The body runs outside any task
+  (section 23).
 * **The platform C ABI** is the target's: Apple arm64 on macOS, System V AMD64 on Linux,
   Microsoft x64 on Windows. The compiler implements all three, including their different
   rules for variadic calls and for structs passed by value.

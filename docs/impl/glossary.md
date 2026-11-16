@@ -28,6 +28,7 @@ Each term has one meaning throughout the specification and the implementer's doc
 | **interface** | A named set of required functions and associated types | 4.4 |
 | **bound** | A requirement on a generic parameter: an interface or a built-in property | 8 |
 | **instantiation** | A generic item with concrete arguments. Each distinct one is compiled separately | 8 |
+| **visibility** | Where an item or field can be named: its module (no mark), its package (`pub(pkg)`) or everywhere (`pub`) | 2 |
 | **constant expression** | An expression the compiler evaluates | 9 |
 | **target** | One CPU model under one operating system | 24 |
 
@@ -45,7 +46,7 @@ Each term has one meaning throughout the specification and the implementer's doc
 | **self-contained**, **`Owned`** | A type that contains no borrow | 10 |
 | **`Send`** | A value may be moved to another task | 20 |
 | **`Sync`** | A shared borrow may be used from several tasks at once | 20 |
-| **interior mutability** | The ability to change a value through a shared borrow. Only `std.sync` types and the arena have it in safe code | 13.6 |
+| **interior mutability** | The ability to change a value through a shared borrow. A type has it when it contains a `std.sync.Cell` by value | 13.6 |
 | **capability** | A value whose possession allows an effect: `Heap`, `Vm`, `&Fs`, `&Net`, `&Clock`, `gpu.Device` | 33.1 |
 | **FFI type** | A type allowed in an `extern` or `export` signature | 29 |
 
@@ -97,12 +98,12 @@ Each term has one meaning throughout the specification and the implementer's doc
 |---|---|---|
 | **task** | A function call running on its own stack, scheduled by the runtime | 17 |
 | **worker** | An OS thread of the runtime that runs tasks | 23 |
-| **scope** | A `scope s { }` block and the value `s` that names it. Every task belongs to one | 18 |
+| **scope** | A `scope s { }` block and the value `s`, a shared borrow of the block's `Scope`, that names it. Every task belongs to one | 18 |
 | **handle** | A `Task[R]`, the value of an expression-form `spawn` | 18 |
 | **park** | To suspend a task until something it waits for happens. The worker runs other tasks | 23 |
 | **park point** | A place where a task may park: `join`, a channel operation, a lock, a timer, I/O, the end of a scope | 23 |
 | **steal** | A worker taking an unstarted task from another worker's queue | 23 |
-| **waitable** | A function the scheduler can wait for without committing to it, usable as a `select` arm | 21 |
+| **waitable** | A function whose body prepares an operation (a `std.task.Wait` value) that the scheduler can wait for without committing to it. A direct call waits for it; a `select` arm polls it | 21 |
 | **canceled** | The state of a scope after `cancel()` or an error exit. Blocking operations in it fail | 22 |
 | **grain** | The smallest number of items one chunk of a `par for` handles | 19 |
 
@@ -137,3 +138,6 @@ appear in the specification.
 | **primary span** | The source range a diagnostic is reported at |
 | **related span** | Another source range that explains a diagnostic, with a role |
 | **poison** | A type or value produced after an error, which suppresses further diagnostics that depend on it |
+| **instance** | A body and its arguments after substitution, found by phase 11a: a function, a closure or `par for` body, a method table, a `spawn` thunk ([pipeline.md](pipeline.md) section 6a) |
+| **frozen** | A type in which no `Cell`, raw pointer, `dyn` or type parameter occurs at any depth ([checker.md](checker.md) section 10) |
+| **trap site** | The static record a trap call points to: the code, the position and the fixed text of the message ([pipeline.md](pipeline.md) section 7) |

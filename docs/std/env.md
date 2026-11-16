@@ -21,7 +21,9 @@ import std.time.Clock;
 
 ```ingot
 /// Everything the process was given (section 33.1). The compiler knows this type by
-/// path: it is the parameter of `main` and the result of `@test_env()`.
+/// path: it is the parameter of `main`, and `@test_env()` gives one inside a
+/// `TestEnv`. The capability types have `pub(pkg)` constructors, so `rt.start` and
+/// `rt.test_env` can build them and programs cannot (01-core §2, §4.2).
 pub struct Env {
     pub args: [][]u8,
     pub vars: &Vars,
@@ -87,22 +89,34 @@ case-insensitive environment rules.
 ## 3. `@test_env`
 
 ```ingot
-/// Builtin, available only inside a `test` block. One environment per test block;
-/// repeated calls in the same block return the same `&Env`.
-@test_env() -> &Env
+/// Builtin, available only inside a `test` block (E1706). One environment per test
+/// block; repeated calls in the same block return the same `&TestEnv`.
+@test_env() -> &testing.TestEnv
+
+// std.testing
+pub struct TestEnv {
+    pub env: &Env,
+    /// The clock that `env.clock` reads; it moves only when the test steps it.
+    pub clock: &ManualClock,
+    /// The temporary directory's path.
+    pub dir: []u8,
+    _private: void,          // so only std makes one
+}
 ```
 
 The test environment is built by `std.sys.rt.test_env` and is not constructible by
-safe code. It has:
+safe code. `t.env` has:
 
-- a file system rooted in a fresh temporary directory that is removed after the test;
-- a clock whose wall and monotonic time move only when the test asks (see D4);
+- a file system rooted in a fresh temporary directory, `t.dir`, removed after the test;
+- a clock whose wall and monotonic time move only when the test calls
+  `t.clock.step(d)` (`time.md` §4);
 - a network capability whose only addresses are loopback;
 - the same `Heap`, `Vm`, `Rand`, standard streams and `gpu` shape as a normal `Env`.
 
 `@test_env` is a builtin because the compiler must reject it outside a `test` block
 and because the test harness, not the program, owns the temporary directory. Its result
-borrows the test harness's storage for the duration of the test block.
+borrows the test harness's storage for the duration of the test block. Every later
+test-only need is a field or a method of `TestEnv` (review 2, L2).
 
 ## Decisions for the human
 
@@ -111,26 +125,21 @@ borrows the test harness's storage for the duration of the test block.
   tasks receive the individual capability they need.
 - **D3. `@test_env` identity.** **Decided: accepted.** One environment per test block,
   reused by repeated calls.
-- **D4. Stepping the test clock.** **Decided: accepted provisionally** through
-  `time.md` D5. The builtin `@test_clock_step(clock, d)` is the mechanism; the
-  test-only API goes to design review.
+- **D4. Stepping the test clock.** **Decided: replaced by review 2.** `TestEnv.clock`,
+  a `&ManualClock` with `step(d)`; no `@test_clock_step` builtin.
 - **D5. `args` includes `argv[0]`.** **Decided: accepted.** `Env.args` is the process
   argument vector.
 - **D6. `Vars` returns a borrow.** **Decided: accepted.** `?[]u8 from self`.
 
 ## Language questions
 
-- **L1. Test-only API.** Ingot has no conditional compilation for tests and no
-  "available only in a test" method. `@test_env` is a builtin exception, but stepping
-  the clock, observing the temporary directory path and asserting the network is
-  loopback all need test-only members. The spec says these behaviors exist but not how
-  a test reaches them (section 32). A builtin is the cleanest place.
-- **L2. Capability visibility.** `Env`'s fields are `pub`, while the capability types
-  have private fields. That stops construction of a capability, but not a struct
-  literal of `Env` if a program somehow has every field value. The spec's privacy rule
-  (section 4.2) covers this, but `@test_env` needs a compiler-known way to build `Env`
-  from inside `std`; no path for that is specified.
+- **L1. Test-only API.** Settled by review 2 (05-tooling §32): `@test_env()` gives a
+  `TestEnv`, a capability only the test harness makes; test-only operations are its
+  fields and methods.
+- **L2. Capability visibility.** Settled by review 2 (01-core §2): the capability types'
+  constructors are `pub(pkg)`, so the rest of `std` (`rt.start`, `rt.test_env`) can
+  build them and programs cannot.
 - **L3. Test environment cleanup.** The temporary directory is removed after the test;
   a test that hands a path to a foreign thread or a spawned task may still use it. The
-  test harness waits for tasks in the test's scopes, but a `std.thread` group or a
-  foreign callback is not covered. The spec does not say how cleanup is ordered.
+  test harness waits for tasks and threads in the test's scopes (`thread.spawn` is a
+  scope child), but a foreign callback is not covered. The spec does not say how cleanup is ordered.

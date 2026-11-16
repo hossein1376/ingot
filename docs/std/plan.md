@@ -9,16 +9,16 @@ designing them. It does not repeat their APIs.
 
 **`std.time`.** Designed in `time.md`: `Clock`, `Instant`, `Duration`, `Timestamp` and
 timers. Needs the monotonic clock and the park deadline from `rt`, and the manual clock
-from `@test_env`. The test-clock step and the result shape of a fallible waitable timer
-are still open there. This module is first in the design order and is done.
+from `@test_env`. Review 2 settled the test-clock step (`TestEnv.clock`) and the
+fallible waitable timer (`try` in a `select` arm). This module is first in the design order and is done.
 
 **`std.sys`.** The `unsafe` OS layer: `std.sys.macos`, `std.sys.linux`,
 `std.sys.windows` behind one internal interface. Needs `when @target.os`, `extern`,
 `unsafe`, and the OS declarations already listed in `rt.md` §5. It is the only module
 that knows about file descriptors, `HANDLE`s, `kqueue`, `io_uring` and IOCP. The
-public API above it must not expose those types. Design it together with `std.io`,
-`std.fs`, `std.net` and `std.mem`, because each one names a different slice of the OS
-surface.
+public API above it must not expose those types. It is not designed as one surface
+up front: each module above it defines the slice it needs, and its items are
+`pub(pkg)`.
 
 **`std.io`.** `Reader`, `Writer`, buffered wrappers, block-until-parked calls, and
 the `Formatter` that `Format` writes to. Needs `rt.park`/`rt.wake`, `std.sys`,
@@ -101,23 +101,28 @@ imports one compiles only for that target. No runtime dependency.
 
 ## 2. Order
 
-1. `std.time`: every I/O and timer design needs `Duration`, `Instant` and `Clock`.
-2. `std.sys`: settle the OS surface and the `when` split before `io`, `fs`, `net` and
-   `gpu` each invent one.
-3. `std.io` and `std.fmt`: together, because `@format` is the boundary between them.
-   `std.text` comes with the number printing `fmt` needs.
-4. `std.fs` and `std.net`: the first real users of `io` and `sys`.
-5. `std.str` and the containers: `list`, `str`, `ring`, `heap`, then `map`/`set`
-   (Map needs the most design: SIMD probing and linear keys).
-6. `std.simd`, `std.par`, `std.sort`: data-parallel primitives after the allocators
-   and containers exist.
-7. `std.math`, `std.hash`, `std.rand`: independent leaves; can be done as needed.
-8. `std.exec`, `std.gpu`, `std.linalg`: last, because they depend on the kernel ABI
-   and on every layer below them.
-9. `arch.aarch64`, `arch.x86_64`: with the first intrinsic a module needs, not before.
+Replaced by the language designer's second review (S6). Two rules first:
 
-The ordering is a dependency order, not a release order. A module may be designed
-earlier if a user needs it; the documents should still name the base it assumes.
+1. **A std design document is accepted only when its declarations pass `ingot check`
+   as stubs** (signatures with trivial bodies). Three of review 2's findings (the
+   `thread.group` design, the missing `from` clauses, the `from` on `first_of`) would
+   have been found by compiling the declarations, and none by reading.
+2. **Implement before designing further.** After the first runnable programs (step B3),
+   write `rt` core, `mem`, `list` and `str`, `sync` and `task` for real, with `test`
+   blocks, before `io`, `fs` and `net` are designed. A design document comes one step
+   before the step that implements it (COMPILER.md's step plan: R1 to R5).
+
+`std.sys` is not designed as one surface up front: each module above it defines the
+part it needs, and `pub(pkg)` keeps it internal.
+
+The order: `rt` core; `mem`; `list`, `str` (`list` is the first real user of the
+allocator and of the `_or_return` convention, and needs no operating system); `sync`;
+`task` and the scheduler (its own document, `sched.md`, built in three stages: inline,
+parking, workers); `time`; `io`, `fmt` and the number printing of `text` (settle
+whether `Reader` and `Writer` are interfaces or concrete handles first: it decides
+`Env`'s field types and `@format`'s first parameter); `fs`, `net`; `map`, `set`, `ring`,
+`heap`; `par`, `simd`, `sort`; `math`, `hash`, `rand` when needed; `exec`, `gpu`,
+`linalg` last; `arch.*` with the first intrinsic a module needs.
 
 ## Decisions for the human
 
@@ -125,12 +130,14 @@ earlier if a user needs it; the documents should still name the base it assumes.
   already says a `Formatter` records the first write error itself and `@format` returns
   it, so `format` cannot fail. What remains open is which writer types `@format` accepts
   and the exact error type it returns. No note from the earlier review applies.
-- **D2. Design order.** **Decided: accepted.** The order in §2 above.
-- **D3. `std.sys` visibility.** **Decided: accepted.** `pub` only inside `std` in
-  practice, with every item documented as an unsafe OS primitive.
-- **D4. Container error names.** **Decided: accepted.** Per-container error enums with a
-  `from AllocErr` variant for the no-value case and an `AllocFail[T]` payload for the
-  value case.
+- **D2. Design order.** **Decided: replaced by review 2.** The order and the two rules
+  in §2 above.
+- **D3. `std.sys` visibility.** **Decided: settled by review 2.** `std.sys` items are
+  `pub(pkg)` (01-core §2), so programs cannot import them and `ingot api std` does not
+  print them.
+- **D4. Container error names.** **Decided: changed by review 2.** Per-container error
+  enums with a `from AllocErr` variant; the ordinary functions require `T: Discard`, and
+  the `_or_return` forms return `AllocFail[T]` (05-tooling §35).
 - **D5. `std.math` scope.** **Decided: accepted.** A fixed correctly rounded set, not a
   full libm.
 
@@ -142,17 +149,15 @@ earlier if a user needs it; the documents should still name the base it assumes.
   can be designed.
 - **L2. Kernel IR and the GPU emitters.** Pipeline §11 says the kernel IR and its
   three emitters (masked vector code, Metal Shading Language, SPIR-V) are not
-  specified. `std.exec` and `std.gpu` cannot be implemented against a contract that
+  specified. Review 2 (B6) proposes a structured kernel IR in a new
+  `docs/impl/kernels.md`, written with step B5. `std.exec` and `std.gpu` cannot be implemented against a contract that
   does not exist. Sections 27 and 28 are involved.
-- **L3. `@format` and the structural `Format` form.** The compiler generates a
-  structural form for a type that does not implement `Format`, and `main`'s error line
-  uses it. The language does not say where that generated implementation lives, whether
-  it is visible to `ingot api`, or how a user type opts out. Section 33.1 and §35 are
-  involved.
-- **L4. `std.sys` in `ingot api`.** Section 35 says the public API is the same on all
-  targets, and `std.sys` is the unsafe layer. It does not say whether `std.sys` items
-  are part of the public API that `ingot api std` prints. The plan D3 choice needs a
-  rule so the tool and the library agree.
+- **L3. `@format` and the structural `Format` form.** Settled by review 2 (05-tooling
+  §35): it is not an `impl` or an item, is generated per printed instance, is not shown
+  by `ingot api`, prints the value as the language writes it and only visible fields,
+  and a type opts out by implementing `Format`. What the generated code calls is listed
+  in pipeline §8 once `std.fmt` exists.
+- **L4. `std.sys` in `ingot api`.** Settled by review 2: `pub(pkg)` (D3).
 
 ## Traps in std
 
@@ -166,17 +171,17 @@ trap.
 | `rt.md` §1 `trap` | the compiler's trap entry, codes T01–T17 | named runtime failure, section 16.1 |
 | `rt.md` §1 `stack_probe` / `stack_overflow` | guard page | T11, named in section 16.1 |
 | `rt.md` §2 `spawn` | no task record or stack | T12, named in section 16.1 |
-| `rt.md` L2 | `scope`/`Task` on a foreign thread | T17, named in section 16.1 |
+| `rt.md` L2 | `scope`, `spawn`, `par for`, `select` or parking in an `export fn` body | T17, named in section 16.1 |
 | `mem.md` §9 `copy` | short destination | T02, index/slice misuse; allowed by section 35 |
 | `mem.md` §1 `Allocator` | negative size or non-power-of-two alignment | neither; now `AllocErr.bad_request` |
 | `mem.md` §3 `Vm.reserve` | negative or too-large size | neither; now `.bad_request` |
 | `mem.md` §4 `Arena.init` | negative or too-large size | neither; now `.bad_request` |
 | `mem.md` §11 `Allocator::free`/`resize` | broken safety precondition | section 16.2 undefined behavior, not a trap |
-| `sync.md` §2 `Atomic` order | invalid or too-strong order | neither; now clamped, never trapped |
-| `sync.md` §7 `WaitGroup.add` | negative `n` | neither; now a no-op |
+| `sync.md` §2 `Atomic` order | invalid order | neither; orders are typed, so an invalid one cannot be written |
+| `sync.md` §7 `WaitGroup.add` | negative `n` | neither; now `WaitGroupErr.negative` |
 | `sync.md` §6 `Chan.init` | capacity less than 1 | neither; now `.bad_capacity` |
-| `time.md` §3 `after`, `after_ms`, `sleep` | negative delay | neither; now a zero delay |
-| `time.md` §4 `@test_clock_step` | negative step | neither; now a zero step |
+| `time.md` §3 `after`, `after_ms` | negative delay | neither; now a zero delay |
+| `time.md` §4 `ManualClock.step` | negative step | neither; now a zero step |
 | `time.md` §4 manual test clock | every task parked with a timer that can never fire | T13, named in section 16.1 |
 | `time.md` §1 `Duration` | arithmetic overflow | no trap; checked methods return `.none` and saturating methods clamp |
 

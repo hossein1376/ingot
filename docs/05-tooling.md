@@ -156,7 +156,7 @@ libs = ["vulkan-1"]
   compiles quickly with little optimization, for the edit-and-test loop. Both have
   identical semantics, traps included. There is no build mode that removes checks.
 * Commands: `build`, `run`, `check`, `fix`, `test`, `bench`, `fmt`, `explain`, `api`,
-  `cost`, `audit`, `layout`, `asm`, `targets`, `query` (definition, references, type,
+  `cost`, `audit`, `layout`, `asm`, `targets`, `deps` (section 33.2), `query` (definition, references, type,
   live borrows, symbols), `rename` and `serve` (one long-running process that answers
   the same commands). Every command that reports something accepts `--json`, and
   [impl/tools.md](impl/tools.md) defines what each prints.

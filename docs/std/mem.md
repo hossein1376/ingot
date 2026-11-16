@@ -4,8 +4,11 @@
 import std.sync.Cell;
 ```
 
-`std.mem` is the only module that defines allocation. `Allocator` is the interface
-`ingot cost` treats as "may allocate" (pipeline §8). Every allocating function either
+`std.mem` is the only module that defines allocation. A call whose error type is
+`AllocErr`, or converts to it by `from`, is what `ingot cost` reports as `alloc`, with
+the callee's `Allocator` argument as its allocator (05-tooling §31, pipeline §8).
+Updated for the language designer's second review: the `_or_return` convention,
+`Arc.release_last`, `FnMut` cleanups, an 8-byte `Handle`, and zero-size requests. Every allocating function either
 takes an allocator or is a method of a container that stores one.
 
 ## 1. Errors
@@ -18,17 +21,24 @@ pub copy enum AllocErr: u8 {
     bad_request,
 }
 
-/// The value an allocating function had already received when allocation failed.
-/// A linear value is returned here, never dropped.
+/// The error of the `_or_return` forms: the value an allocating function had already
+/// received when allocation failed, given back.
 pub struct AllocFail[T] {
     pub error: AllocErr,
     pub value: T,
 }
 ```
 
-`AllocFail[T]` is the error type of every allocating function that takes a `T` by
-value (`Box.init`, `Arc.init`, `Pool.insert`, `Arena.alloc`, `FixedBuf.alloc`). The
-allocator interface itself returns `AllocErr`, because it has no value to give back.
+Every allocating function that takes a `T` by value comes in two forms (05-tooling
+§35). The ordinary one (`Box.init`, `Arc.init`, `Pool.insert`, `Arena.alloc`,
+`FixedBuf.alloc`, and a container's `push`, `insert` and `reserve`) requires
+`T: Discard`, returns `! AllocErr`, and drops the value on failure, so `try` converts
+its error into any enum with a `from AllocErr` variant. The second, named
+`_or_return` (`init_or_return`, `insert_or_return`, `alloc_or_return`,
+`push_or_return`), takes any `T` and returns `! AllocFail[T]`: a caller with a linear
+value must decide what happens to it on failure anyway, so the explicit `catch` is the
+honest form there. `AllocFail` is a library type, never the error of the default name.
+The allocator interface itself returns `AllocErr`, because it has no value to give back.
 `AllocFail` is linear when `T` is, `Discard` when `T` is, `Owned` when `T` is, and
 `Send` when `T` is.
 
@@ -54,8 +64,10 @@ pub interface Allocator: Copy {
 ```
 
 The trait is `Copy` because an allocator value is a handle, not an owner. A valid
-request has `size >= 1`, `align` a power of two, and both at most `2^62`; an invalid
-request is `AllocErr.bad_request`. The caller of `free` and `resize` guarantees that
+request has `size >= 0`, `align` a power of two, and both at most `2^62`; an invalid
+request is `AllocErr.bad_request`. A request of size 0 gives a non-null pointer aligned
+to `align` that is never dereferenced, and freeing it does nothing, so containers need
+no special case for zero-sized elements. The caller of `free` and `resize` guarantees that
 `ptr` came from this allocator with that `size` and `align`; that is the `unsafe`
 precondition the implementation documents. `resize` does not report why it refused; a
 container that needs a reason allocates and copies instead.
@@ -106,7 +118,8 @@ impl Arena {
     pub fn init(vm: Vm, bytes: i64) -> Arena ! AllocErr
 
     /// A new `T` in arena memory. The result is an ordinary borrow of the arena.
-    pub fn alloc[T](self: &Arena, value: T) -> &mut T ! AllocFail[T] from self
+    pub fn alloc[T: Discard](self: &Arena, value: T) -> &mut T ! AllocErr from self
+    pub fn alloc_or_return[T](self: &Arena, value: T) -> &mut T ! AllocFail[T] from self
 
     /// `n` copies of `fill`. For non-`Copy` types use `alloc` in a loop or an unsafe
     /// uninitialized-slice function in a later revision.
@@ -146,9 +159,10 @@ its `resize` always returns `false`.
 pub struct FixedBuf { ... }
 
 impl FixedBuf {
-    pub fn init(buf: []mut u8) -> FixedBuf
+    pub fn init(buf: []mut u8) -> FixedBuf from buf
 
-    pub fn alloc[T](self: &FixedBuf, value: T) -> &mut T ! AllocFail[T] from self
+    pub fn alloc[T: Discard](self: &FixedBuf, value: T) -> &mut T ! AllocErr from self
+    pub fn alloc_or_return[T](self: &FixedBuf, value: T) -> &mut T ! AllocFail[T] from self
 
     pub fn alloc_slice[T: Copy](
         self: &FixedBuf,
@@ -174,9 +188,14 @@ outlive the buffer. Its offset lives in a `Cell`, so `alloc(&FixedBuf)` is sound
 /// One value in allocator memory. Linear: `deinit` or `into_inner` is required.
 pub linear struct Box[T, A: Allocator] { ... }
 
+impl[T: Discard, A: Allocator] Box[T, A] {
+    /// On failure the value is dropped.
+    pub fn init(a: A, value: T) -> Box[T, A] ! AllocErr
+}
+
 impl[T, A: Allocator] Box[T, A] {
     /// On failure the value is returned in `AllocFail`.
-    pub fn init(a: A, value: T) -> Box[T, A] ! AllocFail[T]
+    pub fn init_or_return(a: A, value: T) -> Box[T, A] ! AllocFail[T]
 
     pub fn get(self: &Box[T, A]) -> &T from self
     pub fn get_mut(self: &mut Box[T, A]) -> &mut T from self
@@ -200,9 +219,14 @@ impl[T: Discard, A: Allocator] Box[T, A] {
 /// Shared ownership. Linear: every owner is released explicitly.
 pub linear struct Arc[T, A: Allocator] { ... }
 
+impl[T: Owned + Discard, A: Allocator] Arc[T, A] {
+    /// On failure the value is dropped.
+    pub fn init(a: A, value: T) -> Arc[T, A] ! AllocErr
+}
+
 impl[T: Owned, A: Allocator] Arc[T, A] {
     /// On failure the value is returned in `AllocFail`.
-    pub fn init(a: A, value: T) -> Arc[T, A] ! AllocFail[T]
+    pub fn init_or_return(a: A, value: T) -> Arc[T, A] ! AllocFail[T]
 
     /// Adds one owner. The refcount is atomic.
     pub fn clone(self: &Arc[T, A]) -> Arc[T, A]
@@ -216,8 +240,10 @@ impl[T: Owned + Discard, A: Allocator] Arc[T, A] {
 }
 
 impl[T: Owned, A: Allocator] Arc[T, A] {
-    /// The last owner consumes `T` with `f`. For a linear `T`.
-    pub fn release_with(self: Arc[T, A], f: fn(T)) -> void
+    /// Gives up one owner. The last owner gets the value and the allocation is freed;
+    /// every other owner gets `.none`. For a linear `T`: the value comes back instead
+    /// of going to a callback, so its cleanup can use anything the caller has.
+    pub fn release_last(self: Arc[T, A]) -> ?T
 }
 ```
 
@@ -228,10 +254,10 @@ impl[T: Owned, A: Allocator] Arc[T, A] {
 ## 8. `Pool[T, A]` and `Handle[T]`
 
 ```ingot
-/// A generation-checked index. Copy and self-contained: it holds no `T`, so it is not
-/// a view and does not borrow the pool.
+/// A generation-checked index, 8 bytes. Copy and self-contained: it holds no `T`, so
+/// it is not a view and does not borrow the pool.
 pub copy struct Handle[T] {
-    index: i64,
+    index: u32,
     generation: u32,
 }
 
@@ -242,7 +268,7 @@ impl[T, A: Allocator] Pool[T, A] {
     pub fn init(a: A) -> Pool[T, A] ! AllocErr
 
     /// On failure the value is returned in `AllocFail`.
-    pub fn insert(self: &mut Pool[T, A], value: T) -> Handle[T] ! AllocFail[T]
+    pub fn insert_or_return(self: &mut Pool[T, A], value: T) -> Handle[T] ! AllocFail[T]
 
     /// A stale handle gives `.none`; it never returns another slot's value.
     pub fn get(self: &Pool[T, A], h: Handle[T]) -> ?&T from self
@@ -253,16 +279,22 @@ impl[T, A: Allocator] Pool[T, A] {
 }
 
 impl[T: Discard, A: Allocator] Pool[T, A] {
+    /// On failure the value is dropped.
+    pub fn insert(self: &mut Pool[T, A], value: T) -> Handle[T] ! AllocErr
     pub fn deinit(self: Pool[T, A]) -> void
 }
 
 impl[T, A: Allocator] Pool[T, A] {
-    pub fn deinit_with(self: Pool[T, A], f: fn(T)) -> void
+    /// A closure, not a `fn` pointer, so the cleanup can capture what it needs.
+    pub fn deinit_with[F: FnMut(T)](self: Pool[T, A], f: F) -> void
 }
 ```
 
-`Handle[T]` is `Copy`, `Discard`, `Owned`, `Send`, `Sync`. The type parameter is not a
-field, so a handle stays self-contained (section 14.4). `Pool` is `linear`; `Send` if
+`Handle[T]` is `Copy`, `Discard`, `Owned`, `Send`, `Sync`, and 8 bytes: handles replace
+pointers in graph code and are stored everywhere. A pool has at most 2^32 slots, and a
+slot whose generation counter is used up (2^32 reuses) is retired, never reused, so a
+stale handle can never match. The type parameter is not a field, so a handle stays
+self-contained (section 14.4). `Pool` is `linear`; `Send` if
 `T` and `A` are; `Sync` if `T` is `Sync` and `A` is `Sync`; `Owned` if both are.
 
 ## 9. Bulk operations
@@ -322,33 +354,31 @@ All six are decided. The recommendation was accepted in each case.
   request and `bad_request` for an invalid size or alignment; neither traps. The
   original recommendation had only `out_of_memory`; the human kept `bad_request` so
   that std never traps on bad input (§35).
-- **D2. Allocation failure with a linear value.** **Decided: accepted.** `AllocFail[T]`
-  returns the value; it is linear when `T` is.
+- **D2. Allocation failure with a linear value.** **Decided: accepted, changed by
+  review 2.** The ordinary function requires `T: Discard` and returns `AllocErr`, so
+  `try` works; the `_or_return` form returns `AllocFail[T]` for any `T`.
 - **D3. `copy` on a short destination.** **Decided: accepted.** It traps (T02); a short
   destination is a caller bug.
 - **D4. `Arc` contents.** **Decided: accepted.** `T: Owned`.
-- **D5. `Arc` and linear contents.** **Decided: accepted.** `release` for `T: Discard`;
-  `release_with(f)` for linear `T`.
-- **D6. `Handle` generation width.** **Decided: accepted.** `u32`; the handle is 16
-  bytes.
+- **D5. `Arc` and linear contents.** **Decided: changed by review 2.** `release` for
+  `T: Discard`; `release_last() -> ?T` for linear `T` (a `fn` pointer could not
+  capture what a cleanup needs).
+- **D6. `Handle` size.** **Decided (review 2, user): 8 bytes**, `index: u32` and
+  `generation: u32`; a slot whose generation is used up is retired.
+- **D7. Zero-size requests.** **Decided (review 2).** Size 0 is valid and gives a
+  non-null aligned pointer that is never dereferenced.
 
 ## Language questions
 
-### Settled by the f3e7d2a spec update
+### Settled by the spec (`f3e7d2a`, `720763f`)
 
 - **L1. Pointer casts and pointer arithmetic have no builtins.** Settled: `01-core.md`
   §5.4 makes `as` convert between raw pointer types, between `*T` and `*mut T`, and
   between a pointer and `u64`. `02-memory.md` §15 adds the safe `@offset(p, n)`. The
   dereference and `@borrow_from_raw`/`@slice_from_raw` remain `unsafe`, as they should.
 - **L3. Arena and interior mutability.** Settled: `02-memory.md` §13.6 says an arena
-  contains a `Cell` that holds its bump pointer, so `&Arena` has interior mutability and
-  is not read-only; the arena's cell holds no view.
-
-### Open
-
-- **L2. Allocation failure and linear arguments.** The specification says allocation
-  failure is `AllocErr`, but an allocating function that received a linear value must
-  return that value on failure; `AllocErr` cannot carry it. `AllocFail[T]` is the
-  library convention that does, but the language has no general rule for "the error
-  carries the argument". This affects every container with linear elements (sections
-  10, 14.1 and 35).
+  contains a `Cell`, so `&Arena` has interior mutability and is not read-only. It may
+  still hold views because nothing stored in it can be read back except through a
+  borrow it handed out (reworded by review 2).
+- **L2. Allocation failure and linear arguments.** Settled by review 2 as a library
+  convention, not a language rule (05-tooling §35): the `_or_return` forms.

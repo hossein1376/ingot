@@ -7,15 +7,16 @@ import std.sys.rt;
 ```
 
 The types in this module have interior mutability, so their contents are `Owned`
-(section 13.6). The cell that gives a type interior mutability is still a language gap
-(pipeline §11); this document proposes the interface the library needs and marks it as
-a language question.
+(section 13.6). `Cell` is the language item that defines interior mutability
+(02-memory §13.6, pipeline §8). Updated for the language designer's second review
+(spec `720763f`): `Cell` is public with a safe `get`, atomic orders are typed, and
+`Atomic[T]` is `Send` and `Sync` only when `T: Send`.
 
 ## 1. The interior-mutability cell
 
 ```ingot
-/// Compiler-known: a type that contains a `Cell` has interior mutability. Not for use
-/// outside `std`; a safe program cannot write through `get`.
+/// Compiler-known: a type that contains a `Cell` has interior mutability. Public: a
+/// program may build its own interior-mutable type on it.
 pub struct Cell[T: Owned] {
     value: T,
 }
@@ -23,9 +24,10 @@ pub struct Cell[T: Owned] {
 impl[T: Owned] Cell[T] {
     pub fn init(value: T) -> Cell[T]
 
-    /// The only write path. The caller must prove exclusive access by the protocol of
-    /// the enclosing type (`Mutex`, `Once`, `Atomic`, or an arena).
-    pub unsafe fn get(self: &Cell[T]) -> *mut T
+    /// The only write path. Safe, like every way of making a raw pointer; each use of
+    /// the pointer is `unsafe`, and its block must prove exclusive access by the
+    /// protocol of the enclosing type (`Mutex`, `Once`, `Atomic`, or an arena).
+    pub fn get(self: &Cell[T]) -> *mut T
 
     pub fn into_inner(self: Cell[T]) -> T
 }
@@ -34,12 +36,17 @@ impl[T: Owned] Cell[T] {
 `Cell` is `Send` if `T: Send`, and never `Sync`. It is `Owned` when `T: Owned`. The
 compiler reads the path `std.sync.Cell` to decide that an outer type has interior
 mutability; without that marker, an `&T` to a lock or a channel could be marked
-read-only by the optimizer. Writing through `get` is the only way to mutate a `Cell`'s
-contents through a shared borrow, and it is legal only inside `unsafe` (02-memory §15).
+read-only by the optimizer. Writing through the pointer `get` gives is the only way to
+mutate a `Cell`'s contents through a shared borrow, and it is legal only inside
+`unsafe` (02-memory §15).
 
 ## 2. `Atomic[T]`
 
 ```ingot
+/// The orders of each operation, as three types so that an order the operation does
+/// not allow cannot be written (02-memory §15).
+pub copy enum LoadOrder: u8 { relaxed, acquire, seq_cst }
+pub copy enum StoreOrder: u8 { relaxed, release, seq_cst }
 pub copy enum AtomicOrder: u8 { relaxed, acquire, release, acq_rel, seq_cst }
 
 /// A value that may be read and written through `&self` by a single instruction.
@@ -50,8 +57,8 @@ pub struct Atomic[T: AtomicValue] {
 impl[T: AtomicValue] Atomic[T] {
     pub fn init(value: T) -> Atomic[T]
 
-    pub inline fn load(self: &Atomic[T], order: AtomicOrder) -> T
-    pub inline fn store(self: &Atomic[T], value: T, order: AtomicOrder) -> void
+    pub inline fn load(self: &Atomic[T], order: LoadOrder) -> T
+    pub inline fn store(self: &Atomic[T], value: T, order: StoreOrder) -> void
     pub inline fn swap(self: &Atomic[T], value: T, order: AtomicOrder) -> T
 
     /// Success gives the previous value; failure also gives the observed value, so the
@@ -61,7 +68,7 @@ impl[T: AtomicValue] Atomic[T] {
         expected: T,
         new: T,
         success: AtomicOrder,
-        failure: AtomicOrder,
+        failure: LoadOrder,
     ) -> T ! T
 
     pub inline fn compare_exchange_weak(
@@ -69,7 +76,7 @@ impl[T: AtomicValue] Atomic[T] {
         expected: T,
         new: T,
         success: AtomicOrder,
-        failure: AtomicOrder,
+        failure: LoadOrder,
     ) -> T ! T
 
     pub fn get_mut(self: &mut Atomic[T]) -> &mut T from self
@@ -93,24 +100,19 @@ The `add`, `sub` and bitwise methods do not exist for the other allowed `T`, whi
 they also require `Int`. All operations map to one instruction and carry the memory
 order they are given.
 
-The atomic builtins require a **constant** order. Each method is `inline`, matches on its
-`order` parameter, and calls one constant builtin per arm; after inlining with a constant
-argument the match folds to one instruction. An order that the operation does not allow
-is **clamped, never trapped**:
+Each method is `inline` and passes its order straight to the builtin. The orders are
+typed, so `x.load(.release)` is an ordinary "no such variant" error, and the builtins
+take any value of the order type: a constant folds to one instruction, and an order that
+is still a variable after inlining becomes a branch over its values in the back end
+(pipeline §7). There is no clamping and no rule that the failure order of
+`compare_exchange` be weaker than the success order.
 
-- `load`: `release` becomes `relaxed`; `acq_rel` becomes `acquire`.
-- `store`: `acquire` becomes `relaxed`; `acq_rel` becomes `release`.
-- `compare_exchange` and `_weak`: a failure order of `release` becomes `relaxed` and
-  `acq_rel` becomes `acquire`; a failure order stronger than the success order's load
-  part becomes that load part.
-- `swap`, `add`, `sub`, `and`, `or` and `xor` accept every `AtomicOrder`.
-
-Properties: `Atomic[T]` is not `Copy`, is `Discard`, is not linear, is `Owned`,
-and is `Send` and `Sync` for every `T` (the `unsafe impl`s in the existing `std/sync.ingot`
-state this). A value is only moved in and out whole, by value, through `&self`, so `T`
-itself need not be `Send`. A raw pointer stored in an `Atomic` is still unusable
-outside an `unsafe` block; the atomic makes the pointer value shareable, not its
-pointee.
+Properties: `Atomic[T]` is not `Copy`, is `Discard`, is not linear, is `Owned`, and is
+`Send` and `Sync` **only when `T: Send`** (03-concurrency §20): `unsafe impl[T:
+AtomicValue + Send] Send for Atomic[T] {}` and the same for `Sync`. Every integer,
+`bool` and payload-free enum is `Send`, so only raw pointers are affected: a type built
+on `Atomic[*mut T]` (a lock-free stack) gets `Send` and `Sync` only through its own
+`unsafe impl`, which `ingot audit` lists.
 
 ## 3. `Mutex[T]` and its guard
 
@@ -122,8 +124,8 @@ pub struct Mutex[T: Owned] {
 
 impl[T: Owned] Mutex[T] {
     pub fn init(value: T) -> Mutex[T]
-    pub fn lock(self: &Mutex[T]) -> Guard[T]
-    pub fn try_lock(self: &Mutex[T]) -> ?Guard[T]
+    pub fn lock(self: &Mutex[T]) -> Guard[T] from self
+    pub fn try_lock(self: &Mutex[T]) -> ?Guard[T] from self
     pub fn get_mut(self: &mut Mutex[T]) -> &mut T from self
     pub fn into_inner(self: Mutex[T]) -> T
 }
@@ -136,6 +138,7 @@ impl[T: Discard + Owned] Mutex[T] {
 pub linear struct Guard[T: Owned] {
     mutex: &Mutex[T],
     value: &mut T,
+    not_send: [0]*u8,      // the language cannot say "not `Send`"; a raw pointer can
 }
 
 impl[T: Owned] Guard[T] {
@@ -149,8 +152,10 @@ lock is held. A guard is a view of its mutex; moving or dropping the mutex while
 guard is live is already an exclusivity error. Guards are **not `Send`**: a guard cannot
 be a `spawn` argument or a `par for` item. A task that holds a guard across a park and
 resumes on another worker is not sending it anywhere, so no task identity is needed for
-this. `Guard` is `Sync` when `T: Send + Sync`; the `unsafe impl` is needed because the
-guard holds a raw lock word.
+this. The language has no way to say "not `Send`": `&Mutex[T]` and `&mut T` are both
+`Send` when `T: Send`, so the guard holds a zero-sized `[0]*u8` field to lose the
+property, and `unsafe impl[T: Owned + Send + Sync] Sync for Guard[T]` adds back what the
+table says.
 
 ## 4. `RwLock[T]`
 
@@ -162,10 +167,10 @@ pub struct RwLock[T: Owned] {
 
 impl[T: Owned] RwLock[T] {
     pub fn init(value: T) -> RwLock[T]
-    pub fn read(self: &RwLock[T]) -> ReadGuard[T]
-    pub fn try_read(self: &RwLock[T]) -> ?ReadGuard[T]
-    pub fn write(self: &RwLock[T]) -> WriteGuard[T]
-    pub fn try_write(self: &RwLock[T]) -> ?WriteGuard[T]
+    pub fn read(self: &RwLock[T]) -> ReadGuard[T] from self
+    pub fn try_read(self: &RwLock[T]) -> ?ReadGuard[T] from self
+    pub fn write(self: &RwLock[T]) -> WriteGuard[T] from self
+    pub fn try_write(self: &RwLock[T]) -> ?WriteGuard[T] from self
     pub fn get_mut(self: &mut RwLock[T]) -> &mut T from self
     pub fn into_inner(self: RwLock[T]) -> T
 }
@@ -196,8 +201,9 @@ impl[T: Owned] WriteGuard[T] {
 ```
 
 Readers share `&T`, so `RwLock[T]` is `Sync` only when `T: Send + Sync` (section 20).
-Like `Guard`, the read and write guards are **not `Send`**; they are `Sync` when
-`T: Send + Sync`, because each holds `&RwLock[T]` as well as `&T` or `&mut T`.
+Like `Guard`, the read and write guards are **not `Send`** (each has a `[0]*u8` field);
+they are `Sync` when `T: Send + Sync`, by `unsafe impl`, because each holds `&RwLock[T]`
+as well as `&T` or `&mut T`.
 
 ## 5. `Once[T]`
 
@@ -212,7 +218,8 @@ impl[T: Owned] Once[T] {
     pub fn uninit() -> Once[T]
 
     /// Runs `f` at most once. Concurrent callers wait for the winner.
-    pub fn get_or_init[F: FnOnce() -> T](self: &Once[T], f: F) -> &T from self
+    /// `f` is `Discard`: it is dropped uncalled when another task initialized first.
+    pub fn get_or_init[F: FnOnce() -> T + Discard](self: &Once[T], f: F) -> &T from self
 
     /// `.none` until initialized.
     pub fn get(self: &Once[T]) -> ?&T from self
@@ -224,7 +231,7 @@ impl[T: Discard + Owned] Once[T] {
 }
 
 impl[T: Owned] Once[T] {
-    pub fn deinit_with(self: Once[T], f: fn(T)) -> void
+    pub fn deinit_with[F: FnMut(T)](self: Once[T], f: F) -> void
 }
 ```
 
@@ -284,12 +291,15 @@ impl[T: Discard + Owned, A: Allocator] Chan[T, A] {
 }
 
 impl[T: Owned, A: Allocator] Chan[T, A] {
-    /// Consumes every queued value with `f`, then frees the buffer. For linear `T`.
-    pub fn deinit_with(self: Chan[T, A], f: fn(T)) -> void
+    /// Consumes every queued value with `f`, then frees the buffer. For linear `T`. A
+    /// closure, not a `fn` pointer, so the cleanup can capture what it needs.
+    pub fn deinit_with[F: FnMut(T)](self: Chan[T, A], f: F) -> void
 }
 ```
 
-`Chan` is `Send` when `T: Send` and `A: Send`; `Sync` when `T: Send` and `A: Sync`.
+`Chan` keeps its queued values behind a raw pointer, not in a `Cell`, so it bounds them
+with `Owned` itself (02-memory §15). `Chan` is `Send` when `T: Send` and `A: Send`;
+`Sync` when `T: Send` and `A: Sync`.
 `A` is part of the type because the buffer must be freed by the allocator that made it
 (section 14.3). `close` only stops new values and wakes waiters; it does not discard
 queued values. `send` and `recv` are the cancellation-aware operations; `try_send` and
@@ -306,8 +316,8 @@ pub struct WaitGroup {
 impl WaitGroup {
     pub fn init() -> WaitGroup
 
-    /// Adds `n` to the count. A negative `n` is treated as zero (no change).
-    pub fn add(self: &WaitGroup, n: i64) -> void
+    /// Adds `n` to the count. A negative `n` is `.negative`, and the count is unchanged.
+    pub fn add(self: &WaitGroup, n: i64) -> void ! WaitGroupErr
 
     /// Decrements the count and wakes the waiter at zero.
     pub fn done(self: &WaitGroup) -> void
@@ -317,15 +327,20 @@ impl WaitGroup {
 }
 ```
 
-`WaitGroup` is `Send`, `Sync`, `Owned` and `Discard`; it is not `Copy`. A negative
-`n` in `add` is a no-op; it never traps.
+```ingot
+pub copy enum WaitGroupErr: u8 { negative }
+```
+
+`WaitGroup` is `Send`, `Sync`, `Owned` and `Discard`; it is not `Copy`. A negative `n`
+in `add` is an error the caller sees, not a trap and not a silent no-op (review 2,
+S5-7: an error is visible, a no-op hides the bug).
 
 ## 8. Properties
 
 | Type | `Copy` | `Discard` | linear | `Owned` | `Send` | `Sync` |
 |---|---|---|---|---|---|---|
 | `Cell[T]` | no | if `T: Discard` | if `T` is | if `T: Owned` | if `T: Send` | no |
-| `Atomic[T]` | no | yes | no | yes | yes | yes |
+| `Atomic[T]` | no | yes | no | yes | if `T: Send` | if `T: Send` |
 | `Mutex[T]` | no | if `T: Discard` | if `T` is | if `T: Owned` | if `T: Send` | if `T: Send` |
 | `Guard[T]` | no | no | yes | no | no | if `T: Send + Sync` |
 | `RwLock[T]` | no | if `T: Discard` | if `T` is | if `T: Owned` | if `T: Send` | if `T: Send + Sync` |
@@ -334,7 +349,7 @@ impl WaitGroup {
 | `Once[T]` | no | if `T: Discard` | if `T` is | if `T: Owned` | if `T: Send` | if `T: Send + Sync` |
 | `Chan[T, A]` | no | no | yes | if `T`, `A: Owned` | if `T`, `A: Send` | if `T: Send`, `A: Sync` |
 | `WaitGroup` | no | yes | no | yes | yes | yes |
-| `AtomicOrder`, `RecvErr`, `TryRecvErr`, `ChanErr` | yes | yes | no | yes | yes | yes |
+| `LoadOrder`, `StoreOrder`, `AtomicOrder`, `RecvErr`, `TryRecvErr`, `ChanErr`, `WaitGroupErr` | yes | yes | no | yes | yes | yes |
 
 The `Cell`, `Atomic`, guard, lock, `Once` and `Chan` rows need `unsafe impl`s; the
 fields include `Cell`, raw pointers and atomics. No row is `Sync` unless every operation
@@ -342,18 +357,21 @@ that reads the contents synchronizes or is a read-only `&T`.
 
 ## 9. What is `unsafe` inside
 
-- `Cell.get`, `Atomic` operations, the lock state machines, the channel queue and its
-  wakeups, and `WaitGroup`'s counter are `unsafe` blocks with a reason.
-- `Cell.get` must never be called twice concurrently for a `T` that is not atomic;
-  `Mutex`, `RwLock`, `Once` and `Atomic` are the types that establish the protocol.
-- `rt.park`, `rt.wake` and `rt.select` are called with pointers to waiters that stay
-  valid until the operation completes. A `Chan` keeps its waiter nodes in its own
-  buffer; a lock keeps one in its state.
+- Every use of the pointer `Cell.get` gives, the `Atomic` operations, the lock state
+  machines, the channel queue and its wakeups, and `WaitGroup`'s counter are `unsafe`
+  blocks with a reason.
+- The pointer from `Cell.get` must never be written through by two tasks at once for a
+  `T` that is not atomic; `Mutex`, `RwLock`, `Once` and `Atomic` are the types that
+  establish the protocol.
+- A waitable operation (`Chan.recv`) is a `std.task.Wait` value: its `poll` registers on
+  a `WaitQueue` through `WaitCx` and consumes a value only when it returns `.some`
+  (03-concurrency §21, `rt.md` §3). A `Chan` keeps its queues in its own state.
 
 ## Decisions for the human
 
-- **D1. Cell.** **Decided: accepted.** The compiler-known `std.sync.Cell[T: Owned]` with
-  `unsafe fn get(&self) -> *mut T` is the interior-mutability marker.
+- **D1. Cell.** **Decided: accepted, then changed by review 2.** The compiler-known
+  `std.sync.Cell[T: Owned]` is the interior-mutability marker; it is public, and `get`
+  is a safe function giving `*mut T`.
 - **D2. Atomic-able bound.** **Decided: accepted.** `Atomic[T: AtomicValue]`; the new
   spec binds exactly the allowed types.
 - **D3. `compare_exchange` result.** **Decided: accepted.** `T ! T`: the previous value
@@ -364,10 +382,14 @@ that reads the contents synchronizes or is a read-only `&T`.
 - **D5. `Chan` errors.** **Decided: accepted.** Four error enums, split by operation and
   cancellation behavior.
 - **D6. `Once` spelling.** **Decided: accepted.** `Once[T].uninit()` and `get_or_init`.
+- **D7. Atomic orders.** **Decided (review 2, user): typed.** `LoadOrder`, `StoreOrder`
+  and `AtomicOrder` replace run-time clamping of one `AtomicOrder`.
+- **D8. `WaitGroup.add` with a negative `n`.** **Decided (review 2, user): an error**,
+  `WaitGroupErr.negative`, replacing the no-op.
 
 ## Language questions
 
-### Settled by the f3e7d2a spec update
+### Settled by the spec (`f3e7d2a`, `720763f`)
 
 - **L1. The interior-mutability primitive.** Settled: `02-memory.md` §13.6 now makes
   `std.sync.Cell[T: Owned]` the one language item and defines "contains a `Cell`".
@@ -375,12 +397,11 @@ that reads the contents synchronizes or is a read-only `&T`.
 - **L2. Atomic operations have no builtins.** Settled: `02-memory.md` §15 now defines
   `@atomic_load`, `@atomic_store`, `@atomic_swap`, `@atomic_cmpxchg`,
   `@atomic_cmpxchg_weak`, the five integer read-modify-write builtins, and the safe
-  `@fence`. Their order arguments use `std.sync.AtomicOrder`.
+  `@fence`. Their order arguments are typed: `LoadOrder`, `StoreOrder`, `AtomicOrder`
+  (`720763f`).
 - **L3. No atomic-able bound.** Settled: `01-core.md` §8 defines `AtomicValue` and
   E0423 rejects any other type.
 
-### Open
-
-- **L4. `waitable fn` and `Chan.recv`.** The same gap as `rt.md` L1: the specification
-  does not say how an unchosen `recv` arm is prevented from consuming a value. Sections
-  21 and 22 are involved.
+- **L4. `waitable fn` and `Chan.recv`.** Settled by `720763f` (03-concurrency §21):
+  `recv` prepares a `Wait` operation whose `poll` consumes only when it completes, so an
+  unchosen arm consumes nothing.

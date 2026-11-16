@@ -5,6 +5,10 @@ import std.Env;
 import std.par.Split;
 ```
 
+Updated for the language designer's second review (spec `720763f`): the trap ABI,
+the generated entry, waitable operations instead of `WaitOp`, chunked `par for`
+bodies, the foreign-thread rule, thread-local state and the stack switch.
+
 `std.sys.rt` is the only part of `std` the compiler calls by path. It is written in
 Ingot like the rest of the library; the entries below are its ABI, not a public API.
 Everything outside this module reaches the runtime through `std.task`, `std.sync`,
@@ -15,7 +19,7 @@ that never blocks or spawns does not link the scheduler:
 |---|---|---|
 | core | entry, `trap`, stack probe | every executable |
 | sched | scope, task, park/wake, select, `par for` | a `scope`, `spawn`, `par for`, `select`, or a blocking std call is reachable |
-| test | `test_env` | `ingot test` |
+| test | `test_env`, the manual clock | `ingot test` |
 | os | the `extern` declarations of the three systems | the group that uses it |
 
 `std.sys.rt.os` is selected with `when @target.os == ...`. Only its declarations are
@@ -29,15 +33,20 @@ pub copy enum TrapCode: u8 {
     t10, t11, t12, t13, t14, t15, t16, t17,
 }
 
+/// A static record per trap site, emitted by the compiler (pipeline §7).
 pub copy struct TrapSite {
+    pub code: TrapCode,
     pub file: []u8,
     pub line: i32,
     pub col: i32,
+    /// The fixed text of the message: the operator, the type name, the source text of
+    /// an assertion.
+    pub text: []u8,
 }
 
-/// The compiler's only trap entry. `a`, `b` and `c` are the trap's operands in the
-/// order of diagnostics.md; `text` is the op name, assertion source or message.
-pub fn trap(code: TrapCode, site: &TrapSite, a: i64, b: i64, c: i64, text: []u8) -> never
+/// The compiler's only trap entry. `a`, `b` and `c` are the run-time operands the
+/// catalog's message prints (`{i}`, `{len}`, `{lo}`, `{hi}`, `{n}`), in its order.
+pub fn trap(site: &TrapSite, a: i64, b: i64, c: i64) -> never
 
 /// Called at function entry when the frame is larger than one page. Touches each page
 /// below the caller's stack pointer; a guard-page fault reaches `stack_overflow`.
@@ -45,13 +54,15 @@ pub noinline fn stack_probe(bytes: i64) -> void
 
 pub fn stack_overflow() -> never
 
-/// The process entry. `entry` is the compiler-generated wrapper that calls the
-/// program's `main` and maps its result and error to an exit status.
+/// The process entry when no scheduler entry is reachable. `entry` is the
+/// compiler-generated `fn(&Env) -> i32` for the root package (for `ingot test`, the
+/// wrapper that runs the one test named on the command line). The compiler emits the
+/// target's process entry symbol, which calls this (pipeline §8).
 pub fn start(argc: i32, argv: *mut *mut u8, envp: *mut *mut u8, entry: fn(&Env) -> i32) -> never
 
-/// The test harness's environment. Only reachable through the `@test_env` builtin;
-/// linked only into `ingot test` binaries.
-pub fn test_env() -> &Env
+/// The test harness's environment, with its manual clock and temporary directory.
+/// Only reachable through the `@test_env` builtin, in a `test` block.
+pub fn test_env() -> &testing.TestEnv
 ```
 
 `start` builds the process's `Env` from `argc`, `argv` and `envp`, installs the
@@ -60,7 +71,13 @@ with the status `entry` returns otherwise. `entry` is generated per package: it 
 `error: ...` for a returned error in the structural form of that error's type, then
 returns 1. `start` itself performs no formatting and allocates nothing.
 
-`stack_probe` is `noinline` and is never optimized away. On Windows it may be an
+On Windows there is no C runtime: the entry symbol takes no arguments and `start`
+reads the command line and environment from the system (05-tooling §33.2, review 2
+U3). On macOS and Linux the system's start code calls the entry with `argc`, `argv`
+and `envp`.
+
+`stack_probe` is `noinline` and is never optimized away. If the back end emits probes
+inline in the prologue on every target (to be confirmed in step B1), it is not needed. On Windows it may be an
 `extern` alias for `__chkstk`; on macOS and Linux it is an Ingot loop that writes one
 byte per page. `stack_overflow` is called from the fault handler and must not allocate.
 
@@ -140,6 +157,20 @@ return value at `result`. The compiler knows the same offset, so `Task.join` cas
 dropped by the runtime; the language's move rules require every result to be joined or
 forgotten, and statement-form spawns have `void` results.
 
+A task record is recycled at `task_join`, or when the task finishes if it came from a
+statement-form `spawn`, so a scope that keeps spawning (an accept loop) does not grow
+(03-concurrency §23). A scope child may also be an OS thread, started by
+`thread_spawn(state, start, args, ...)` with the same record layout; the scope's wait
+joins it.
+
+**Thread-local state.** The current worker and task are found through one OS
+thread-local slot: `pthread_getspecific`/`pthread_setspecific`, `TlsGetValue`/
+`TlsSetValue`. It is a call, so no address computed before a park is reused after the
+task resumes on another worker. **The stack switch** is a short assembly file per
+target in `std.sys` (`[link.<target>] asm` in std's manifest, 05-tooling §33.2):
+save the callee-saved registers and swap the stack pointer, and on Windows also the
+stack bounds in the thread block.
+
 The scheduler owns per-worker caches for task records and stacks. `spawn` and parking
 must not call the general heap. A `scope` whose state is left without `scope_wait` is a
 compiler bug, not a user-visible condition.
@@ -153,50 +184,79 @@ pub struct Waiter { ... }
 
 pub copy enum ParkResult: u8 { woken, canceled, timed_out }
 
-/// `deadline_ns` is a monotonic deadline in nanoseconds, or 0 for none.
+/// The largest `i64`: no deadline. (Zero is a real instant: the test clock starts at
+/// monotonic zero.)
+pub const no_deadline: i64 = 9223372036854775807;
+
+/// `deadline_ns` is a monotonic deadline in nanoseconds, or `no_deadline`.
 pub unsafe fn park(waiter: *mut Waiter, deadline_ns: i64, cancelable: bool) -> ParkResult
 
 pub unsafe fn wake(waiter: *mut Waiter) -> void
 
-/// One arm of a `select`. Construction is private to the waitable primitive; `select`
-/// treats it as opaque and returns the chosen index, or -1 for the `else` arm.
-pub struct WaitOp { ... }
+/// What a `std.task.Wait` operation's `poll` is given (03-concurrency §21).
+pub struct WaitCx { ... }
 
-pub fn select(ops: []WaitOp) -> i64
+impl WaitCx {
+    /// True when the waiting task's scope is canceled.
+    pub fn canceled(self: &WaitCx) -> bool
+    /// Wake the task when `queue` is signaled after `ticket`.
+    pub fn on(self: &mut WaitCx, queue: &WaitQueue, ticket: u64) -> void
+    /// Wake the task at a monotonic deadline.
+    pub fn until(self: &mut WaitCx, deadline_ns: i64) -> void
+}
+
+/// A queue of waiting tasks with tickets, so that a wake between a poll and the park
+/// is not lost: a poll reads the ticket, and the park returns at once if it moved.
+pub struct WaitQueue { ... }
+
+/// One arm of a `select`, as the compiler passes it: the prepared operation, the
+/// generated poll function for its type, and the place for its result.
+pub copy struct SelectArm {
+    pub op: *mut u8,
+    pub poll: fn(*mut u8, &mut WaitCx, *mut u8) -> bool,
+    pub result: *mut u8,
+}
+
+/// Polls the arms in a random order each round until one completes; returns its index,
+/// or -1 for the `else` arm when `has_else` and nothing completed on the first round.
+pub fn select(arms: []SelectArm, has_else: bool) -> i64
 ```
 
 `park` parks the calling task; the waker need not be a task (a foreign callback may
 call `wake`, which is why the pointer is `unsafe`). `cancelable` is true for I/O,
 `Chan.send`, `Chan.recv` and timers, and false for `Mutex.lock`, `Task.join`,
-`WaitGroup.wait` and the scope wait. A waitable arm that is not chosen must be
-unregistered before `select` returns and must leave no value consumed; that obligation
-belongs to the primitive that built its `WaitOp`.
+`WaitGroup.wait` and the scope wait. A `poll` consumes only when it returns `.some`
+(its `true` here), and the polls run one after another on the selecting task, so a
+losing arm has had no effect and no commit protocol between arms is needed. A direct
+call of a waitable function is a `select` over one arm with no `else`.
 
 ## 4. `par for`
 
 ```ingot
-/// The compiler-generated body for a range. `item` points to an i64 in the worker's
-/// frame; the body must not retain it.
+/// The compiler-generated body runs one chunk: it iterates `lo..hi` (with the loop's
+/// step) itself, so the hot loop has no indirect call per item and can be vectorized.
 pub fn par_for_range(
     lo: i64,
     hi: i64,
     step: i64,
     grain: i64,
-    body: fn(*mut u8, *mut u8),
+    body: fn(captures: *mut u8, lo: i64, hi: i64),
     captures: *mut u8,
 ) -> void
 
-/// The compiler-generated body for a `par.Split`. Captures are shared, so `C: Sync`;
-/// the item is moved into the call and must be `Send`.
+/// For a `par.Split`, the leaf body takes a whole part and iterates it with `next`.
+/// Captures are shared, so `C: Sync`; the part is moved into the call and must be
+/// `Send`.
 pub fn par_for_split[S: Split, C: Sync](
     it: S,
     grain: i64,
-    body: fn(&C, S.Item),
+    body: fn(&C, S),
     captures: &C,
 ) -> void
 ```
 
-Both return after every iteration has finished. The body may run on any worker and in
+`exec.par` uses the same chunk shape, each chunk run as `exec.simd`. Both return after
+every iteration has finished. The body may run on any worker and in
 any order. Iterations are never duplicated. The runtime splits a range or a `Split`
 recursively and lets idle workers steal halves; it does not divide evenly per worker.
 `grain` is the smallest chunk in items; when it is 0, the runtime picks the default of
@@ -218,7 +278,8 @@ The following are the OS layer, declared in `std.sys.rt.os` under `when`:
 | `CreateThread` / `WaitForSingleObject` | Windows workers, `thread` |
 | futex, `os_unfair_lock`, `WaitOnAddress` | `park`/`wake` |
 | `clock_gettime` / `mach_absolute_time` / `QueryPerformanceCounter` | deadlines, `Clock` |
-| `sigaction` / `AddVectoredExceptionHandler` | guard-page handler |
+| `sigaction` / `AddVectoredExceptionHandler` | guard-page handler, an `export fn` that runs outside any task |
+| `pthread_getspecific` / `pthread_setspecific` / `TlsGetValue` / `TlsSetValue` | the current worker and task |
 
 `trap` itself, `stack_probe`, the scope functions, `spawn`, `task_join`, `task_wait`,
 `park`, `wake`, `select` and both `par_for` entries are Ingot. The compiler never emits
@@ -232,27 +293,28 @@ All five are decided. The recommendation was accepted in each case.
 - **D1. Entry split.** **Decided: accepted.** Two entries, `rt.start` (no scheduler)
   and `rt.start_tasks` (scheduler, `main` as the root task); the compiler selects one
   by reachability.
-- **D2. Spawn record.** **Decided: accepted.** The runtime owns a copy of the argument
-  record, with `result` at a compiler-computed aligned offset inside it. The scope owns
-  the record until its wait.
-- **D3. Trap ABI.** **Decided: accepted.** `trap(code, site, three operands, text)`,
-  with `site` a static and operands in registers.
-- **D4. `select` descriptor.** **Decided: accepted.** An opaque `WaitOp` built by the
-  waitable primitive; `select` returns the chosen index, or -1 for `else`.
-- **D5. `park` deadline.** **Decided: accepted.** Monotonic nanoseconds; 0 means none.
+- **D2. Spawn record.** **Decided: accepted, changed by review 2.** The runtime owns a
+  copy of the argument record, with `result` at a compiler-computed aligned offset
+  inside it. It is recycled at `join`, or at finish for a statement-form spawn, not at
+  the scope's wait.
+- **D3. Trap ABI.** **Decided: changed by review 2.** `trap(site, a, b, c)`: the code,
+  position and fixed text live in the static `TrapSite`; four arguments per cold block.
+- **D4. `select` descriptor.** **Decided: replaced by review 2.** Each arm is a prepared
+  `Wait` operation with a generated poll function; `WaitCx` and `WaitQueue` replace
+  `WaitOp`.
+- **D5. `park` deadline.** **Decided: changed by review 2.** Monotonic nanoseconds;
+  `no_deadline` (the largest `i64`) means none, since the test clock starts at zero.
+- **D6. No temporary C runtime.** **Decided (review 2).** The entry, `trap`, `write` and
+  `exit` are written in Ingot from the first back-end step.
 
 ## Language questions
 
-The waitable and foreign-thread questions remain open. L3 is an implementation
-contract rather than a language feature.
+All three are settled by the spec of review 2 (`720763f`):
 
-- **L1. `waitable fn` lowering.** The specification does not say how an arbitrary
-  waitable function becomes a `WaitOp`, how `Scope.canceled()` can be a poll in a normal
-  call and a wait in `select`, or how a losing `Chan.recv` is prevented from consuming.
-  This blocks a correct `select`. Sections 18, 21 and 22 are involved.
-- **L2. Foreign-thread task state.** T17 says blocking, `spawn` and `par for` outside a
-  task trap. It does not say whether a plain `scope` block or a `Task` handle may cross
-  an `export fn` boundary. The runtime needs one rule; the spec has none.
-- **L3. Main wrapper ABI (implementation contract).** `Env` has private capability
-  fields, so only `std` can build it. The compiler needs a stable path and signature for
-  the wrapper that calls `main`; the spec only says the runtime calls `main`.
+- **L1. `waitable fn` lowering.** 03-concurrency §21 and pipeline §5: a waitable body
+  prepares a `std.task.Wait` operation; `select` prepares every arm and polls.
+- **L2. Foreign-thread task state.** 03-concurrency §23: the body of an `export fn` runs
+  outside any task; entering a `scope`, `spawn`, `par for`, `select` or parking there is
+  T17; `task.run(f)` is the way in. A `Task` or `&Scope` is not an FFI type.
+- **L3. Main wrapper ABI.** Pipeline §8: the compiler generates `entry: fn(&Env) -> i32`
+  and the process entry symbol, which calls `start` or `start_tasks`.

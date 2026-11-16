@@ -7,12 +7,16 @@ import std.sys.rt;
 
 `scope s { ... }` is the only way to make a `Scope`; `spawn` is the only way to make a
 `Task`. Both are compiler-known by path (pipeline §8), so the fields below are private.
+Updated for the language designer's second review (spec `bd0bbd2`, `720763f`): `s` is a
+shared borrow of the block's `Scope`, waitable functions prepare a `Wait` operation,
+`Scope.canceled` is split, and `thread.spawn` replaces `thread.group`.
 
 ## 1. `Scope`
 
 ```ingot
-/// The view of a `scope s { ... }` block. The compiler allocates the state; a program
-/// cannot construct one.
+/// The scope of a `scope s { ... }` block. Lowering declares one per block and binds
+/// `s = &σ`, a shared borrow (03-concurrency §18), so `s` cannot outlive the block. A
+/// program cannot construct one.
 pub struct Scope {
     state: Cell[rt.ScopeState],
 }
@@ -21,9 +25,12 @@ impl Scope {
     /// Sets the cancel flag for this scope and for every scope opened inside it.
     pub fn cancel(self: &Scope) -> void
 
-    /// True while the scope is canceled. In a `select` arm the same call waits until
-    /// it becomes true (section 21); outside one it only reads the flag.
-    pub waitable fn canceled(self: &Scope) -> bool
+    /// Reads the cancel flag. Never waits.
+    pub fn is_canceled(self: &Scope) -> bool
+
+    /// Completes when the scope is canceled, with no result. A direct call waits for
+    /// that; as a `select` arm it is one of the operations (section 21).
+    pub waitable fn canceled(self: &Scope) -> void
 }
 ```
 
@@ -54,7 +61,7 @@ pub linear struct Task[R] {
 }
 
 impl[R] Task[R] {
-    /// Waits for the task, moves its result out and releases the task record.
+    /// Waits for the task, moves its result out and recycles the task record.
     /// Does not observe cancellation (section 22).
     pub fn join(self: Task[R]) -> R from self
 
@@ -83,13 +90,25 @@ Properties of `Task[R]`:
 | `Sync` | no | `wait` is the only shared operation, and sharing a handle is not needed |
 
 The compiler builds a `Task` from the `rt.TaskRef` returned by `spawn`; the fields are
-private to `std.task` and the compiler is allowed to use them.
+private to `std.task`, and compiler-generated code is not subject to visibility
+(01-core §2). A task record is recycled at `join`, or, for a statement-form `spawn`,
+when the task finishes (03-concurrency §23), so a long-lived scope does not grow.
 
 ## 3. Functions in the module
 
 ```ingot
 /// Whether the current task's scope is canceled. For CPU-bound code that cannot block.
 pub fn canceled() -> bool
+
+/// Runs `f` as a task and blocks the calling thread until it returns. The way into the
+/// runtime from the body of an `export fn`, which runs outside any task (section 23).
+pub fn run[R, F: FnOnce() -> R + Send](f: F) -> R
+
+/// The operation a `waitable fn` prepares (section 21). `WaitCx` is `rt.md` §3's.
+pub interface Wait {
+    type Output;
+    fn poll(self: &mut Self, cx: &mut WaitCx) -> ?Self.Output;
+}
 
 /// Offers the worker to another task.
 pub fn yield() -> void
@@ -104,8 +123,8 @@ pub fn set_qos(class: Qos) -> void
 /// fail, returns the first failure, and if the scope is canceled, returns the
 /// cancellation of the first task that observes it.
 pub fn first_of[
-    R: Send,
-    E: Send,
+    R: Send + Discard,
+    E: Send + Discard,
     A: FnOnce() -> R ! E + Send,
     B: FnOnce() -> R ! E + Send,
 ](
@@ -114,9 +133,14 @@ pub fn first_of[
 ) -> R ! E
 ```
 
-`canceled()` is the module-level poll named in section 22. `Scope.canceled()` is the
-waitable form used in `select`. They are deliberately two spellings: the first has no
-receiver and cannot be an arm, the second can.
+`canceled()` is the module-level poll named in section 22, and `Scope.is_canceled()`
+reads one scope's flag. `Scope.canceled()` is the waitable form: a direct call waits,
+so `if s.canceled()` is a type error, not a silent block.
+
+`first_of` needs `R: Discard` and `E: Discard` because when both closures finish, one
+result, or the loser's error, is dropped. It needs no `from a, b`: a type parameter
+bounded by `FnOnce() -> R ! E` mentions `R` and `E` (02-memory §13.3), so the caller
+adds the closures' origins to the result.
 
 `first_of` takes exactly two closures because two closures of different anonymous
 types cannot be stored in one slice. Its own nested scope owns the arguments and waits
@@ -125,27 +149,15 @@ ends. A three-way form (`first_of3`) is a later addition if the human wants it.
 
 ## 4. `std.thread`
 
-Dedicated OS threads for foreign state that must stay on one thread. The scope is a
-library function, not the language's `scope` statement, because `scope` is a keyword
-and `std.thread.scope` would not parse.
+Dedicated OS threads for foreign state that must stay on one thread. A thread is a
+child of a scope, like a task: the only store a signature can declare for a closure is
+`into` a scope (review 2, S5-4; a library `Group` cannot hold borrowing closures, and a
+linear group in the caller's frame could be `@forget`-ed while threads still run).
 
 ```ingot
-/// A structured group of OS threads. Linear: `group` owns it and waits before return.
-pub linear struct Group { ... }
-
-impl Group {
-    /// Starts `f` on a dedicated OS thread. The thread is waited for by `group`.
-    pub fn spawn[F: FnOnce() + Send](self: &mut Group, f: F into self) -> void
-
-    /// Waits for every thread in the group. Called by `group` before it returns.
-    pub fn join_all(self: &mut Group) -> void
-
-    /// Waits for every thread and releases the group. `group` calls this.
-    pub fn deinit(self: Group) -> void
-}
-
-/// Creates a group, calls `body`, waits for every thread, and returns `body`'s result.
-pub fn group[T, F: FnOnce(&mut Group) -> T](body: F) -> T
+/// Runs `f` on a dedicated OS thread. The scope waits for the thread as it waits for
+/// its tasks.
+pub fn spawn[F: FnOnce() + Send](s: &Scope, f: F into s) -> void
 
 /// The OS thread that is running the current task.
 pub fn id() -> ThreadId
@@ -155,21 +167,9 @@ pub copy struct ThreadId {
 }
 ```
 
-Properties:
-
-| Type | `Copy` | `Discard` | linear | `Owned` | `Send` | `Sync` |
-|---|---|---|---|---|---|---|
-| `Group` | no | no | yes | yes | no | no |
-| `ThreadId` | yes | yes | no | yes | yes | yes |
-
-`Group` is not `Send` or `Sync`: it is created and consumed by one call to `group` and
-is never passed to a task. `ThreadId` is a plain value; it is `Copy`, `Owned`, `Send`
-and `Sync`.
-
-A thread's closure runs on an OS thread, so it must be `Send`. `into self` makes the
-closure's borrows part of the `Group`'s origin set; the borrow checker therefore keeps
-them live until `group` has waited. This is the same rule as `spawn` into a `Scope`,
-but here the store is through `&mut Group` rather than a compiler-known `&Scope`.
+Used as `scope s { thread.spawn(s, fn [&data]() { ... }); }`. The borrow rules are those
+of `spawn`, and the wait is the block's. The runtime needs one more kind of scope child,
+a thread (`rt.md` §2). `ThreadId` is `Copy`, `Discard`, `Owned`, `Send` and `Sync`.
 
 ## Decisions for the human
 
@@ -180,18 +180,17 @@ All five are decided. The recommendation was accepted in each case.
   failure that finishes.
 - **D3. `Task` `Send`.** **Decided: accepted.** `Task[R]` is `Send` when `R: Send`.
 - **D4. `ThreadId` contents.** **Decided: accepted.** The OS thread id as `u64`.
-- **D5. `Group` spelling.** **Decided: accepted.** `thread.group`.
+- **D5. `Group` spelling.** **Decided: accepted, then replaced by review 2.**
+  `thread.spawn(s, f)` into a scope; `thread.group` could not be written or used.
+- **D6. `Scope.canceled`.** **Decided (review 2).** Split into `is_canceled` (a read)
+  and the waitable `canceled` (completes on cancellation).
 
 ## Language questions
 
-- **L1. `waitable fn` lowering.** Same gap as `rt.md` L1. `Task.wait` and
-  `Scope.canceled` are only primitives here; the compiler still has no rule that turns
-  a waitable call into a registrable operation without running it.
-- **L2. `Scope.canceled` has two meanings.** Section 21 lists it as a waitable
-  function, while section 22 gives the poll `task.canceled()` as the CPU-bound check.
-  The spec never says that one call can both return a boolean and wait for it to become
-  true. A separate `wait_canceled` would be unambiguous.
-- **L3. No `into` for a `scope` local's own borrows.** `Scope` is the one built-in
-  exception to §13.6, and the compiler creates its `Self(s)` origins. A library
-  `Group` can only approximate this with `&mut` and `into`; a user-defined structured
-  thread type cannot be written with the same guarantees.
+All three are settled by the spec of review 2:
+
+- **L1. `waitable fn` lowering.** 03-concurrency §21: a waitable body prepares a `Wait`
+  operation; a direct call waits for it, and `select` polls the prepared operations.
+- **L2. `Scope.canceled` has two meanings.** Split (D6).
+- **L3. No `into` for a `scope` local's own borrows.** A scope is a borrowed local
+  (§18), and `thread.spawn` stores into a scope, so no library thread group is needed.

@@ -192,7 +192,7 @@ package, with `"pub(pkg)"` in `modifiers`:
 | `kind` | Extra fields |
 |---|---|
 | `bounds_check`, `overflow_check`, `div_check`, `shift_check` | none |
-| `alloc` | `allocator` (its static type) |
+| `alloc` | `allocator` (its static type), absent when the callee has no generic argument bound by `Allocator`, or more than one |
 | `indirect_call` | `through`: `fn`, `dyn` or `extern` |
 | `copy` | `bytes` |
 | `not_inlined` | `callee`, `reason` |
@@ -232,6 +232,16 @@ One `{"type":"target","name":N,"host":B,"build":K,"missing":[...]}` per target t
 compiler supports. `build` is true when everything a build for that target needs was
 found (the pinned `clang`, the system's linker inputs, a sysroot for another system),
 and `missing` names what was not.
+
+### `ingot deps [update NAME [--rev R] | fetch]`
+
+The only commands that use the network (05-tooling §33.2). `ingot deps` prints one
+`{"type":"dep","name":N,"source":"path"|"git","path":P,"rev":R,"hash":H,"via":[...]}`
+per package of the graph, in canonical order, where `via` is the chain of package names
+from the root. `ingot deps update NAME` fetches `NAME` at `--rev R` (default: the
+manifest's `rev`), computes its hash, and rewrites `rev` and `hash` in the manifest that
+names it, printing the `dep` line. `ingot deps fetch` fills the cache for every git
+dependency and prints nothing but the summary. A fetch failure is an `error` line.
 
 ### `ingot asm FILE --fn NAME`
 
