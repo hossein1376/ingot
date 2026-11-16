@@ -343,6 +343,15 @@ code alone.
   did not model (a scope; `shared` declared `from self.*`); a check that only one phase
   could make, deferred to nowhere (a length from a constant argument; recursion through
   impl arguments). Look for these first.
+* **Unspecified: what converts to `&dyn Fn`** (found in P2, 2026-11-16). 01 §5.6 says a
+  `fn` pointer satisfies `Fn` and names the forms `&dyn Fn(A) -> R` and `&mut dyn FnMut(A)
+  -> R`, but no rule says which borrows convert to them. Phase 7 accepts a borrowed
+  closure and rejects `&f` for a `fn` pointer `f` (E0401). Decide before B2 lowers
+  `&dyn Fn` tables.
+* **Holes found in P1b and P2, the same pattern:** a waitable call's result lost its
+  operation's origins when the lowering changed shape; `AtomicValue` was satisfied by
+  types its own implications excluded; a closure type did not carry its owner's
+  arguments, so instances of different owners merged.
 * **To confirm, before they are relied on** (review 2): that LLVM no longer requires a
   compare-exchange's failure order to be no stronger than its success order;
   `alwaysinline` at `-O0`; inline stack probes on aarch64 and Windows; the
