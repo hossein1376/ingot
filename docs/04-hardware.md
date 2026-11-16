@@ -278,7 +278,10 @@ let d: f32 = dispatch dot(xs, ys) over 0..xs.len on exec.simd;
 `dispatch k(args) over range on executor` first checks, once, that every input and
 output covers the range (a trap otherwise), then runs the kernel for every index, and
 returns when all of them are done. The executor expression has a type that implements
-the built-in `Executor` interface.
+the built-in `Executor` interface, and that type is known at each instance: a type
+parameter bounded by `Executor` is resolved per instance, and a dispatch on a `&dyn
+Executor` is E1514, since neither the code to generate nor the supported types are
+known.
 
 * `k` is a kernel, named directly; a kernel helper or an ordinary function is E1515. A
   kernel is never called directly or used as a value; `dispatch` is the only way to run

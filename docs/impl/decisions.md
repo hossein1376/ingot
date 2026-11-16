@@ -95,6 +95,13 @@ code alone.
 * **Niches are exact** (review 2, B3; 04 §25): "there is no other niche", since layout
   is visible through `@sizeof` and `ingot layout`. The `?Box` niche was dropped earlier
   (review 1, D15) because `Box` is a library struct.
+* **A length expression over constant parameters is part of the type, compared as a
+  tree** (*user*, 2026-11-16, found reviewing P2; 01 §8). `[n + 1]T` and `[n+1]T` are one
+  type, `[1 + n]T` another; substitution rewrites the tree, and a fully concrete one is
+  evaluated to an ordinary length. *Rejected:* normalizing `+` and `*` (a longer rule
+  for little gain) and forbidding expressions (contradicts "a length computed from a
+  constant generic argument"). The first implementation keyed the type by a hash of
+  the text and its owner, which rejected `Buf[3].{ data: @zero([4]u8) }`.
 
 ## 3. Bodies and expressions
 
@@ -273,6 +280,12 @@ code alone.
 * **The kernel IR is structured, not a CFG** (review 2, B6): two of the three emitters
   (SPIR-V, Metal source) want structured control flow. Its document,
   `docs/impl/kernels.md`, is written with step B5 (COMPILER.md).
+
+* **A dispatch's executor is concrete at each instance** (*user*, 2026-11-16, found
+  reviewing P2; 04 §27.2, E1514). `E: Executor` resolves per instance; `&dyn Executor`
+  at a dispatch is E1514. *Why:* the source names the executor, and `exec.simd` must be
+  vectorized, which needs the executor known when the instance is compiled.
+  *Rejected:* forbidding the type `dyn Executor` everywhere.
 
 ## 10. Packages, ABI and builds
 

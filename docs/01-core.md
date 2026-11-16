@@ -713,6 +713,15 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   constant parameter is a value and is spelled like one (`const n: i64`); an argument for
   it is a literal (a negative number included: `Ring[u8, -1]` is written as in an
   expression, section 1), a constant name or `{ expr }`: `Ring[u8, max_depth]`.
+* A length or constant argument may be an expression over constant parameters:
+  `[n + 1]u8`, `Ring[u8, {2 * n}]`. Inside the generic it is part of the type as
+  written. Two such types are the same when their expressions are the same tree after
+  the parameters are substituted: the same operators, literals and parameters in the
+  same places. So `[n + 1]T` and `[n+1]T` are one type, `[1 + n]T` is another, and a
+  field `[n + 1]u8` of `Buf[n]` is `[m + 1]u8` in `Buf[m]`. When every parameter has a
+  value the expression is evaluated, and the type is the ordinary one: that field of
+  `Buf[3]` is `[4]u8`. Evaluating it may trap (E0806) or give a length out of range
+  (E0521).
 * A generic body is checked **once**, against its bounds. An operation not granted by a
   bound is an error in the generic, not in some instantiation.
 * Each distinct instantiation is compiled as its own copy. Checking the generic once is
