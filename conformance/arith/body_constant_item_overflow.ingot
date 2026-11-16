@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 5.2, 31
+
+const k: i8 = 100;
+
+fn f() -> i8 {
+    return k + 100; //~ E0806
+}

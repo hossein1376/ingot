@@ -1,0 +1,15 @@
+//! expect: cost
+//! section: 31
+
+struct W { k: i64 }
+
+fn bump(x: &mut i64, y: i64) -> i64 {
+    x.* = 100;
+    return y;
+}
+
+fn f(a: [4]i64, w: W) -> i64 {
+    var w2 = w;
+    let y = bump(&mut w2.k, a[w2.k]); //~ bounds_check
+    return y +% a[w2.k]; //~ bounds_check
+}

@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+fn pick(s0: []mut i64) -> i64 {
+    var s = s0;
+    @assert(s.len >= 2);
+    let b = &mut s;
+    @forget(b);
+    return s[0]; //~ bounds_check
+}

@@ -5,7 +5,7 @@
 //! labels and the fix edit.
 
 use ingot_diag::source::Span;
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
+use ingot_driver::pipeline::{self, Analysis};
 
 fn analyze(name: &str, files: &[(&str, &str)]) -> Analysis {
     let dir = std::env::temp_dir().join(format!(
@@ -34,16 +34,11 @@ fn analyze_main(name: &str, source: &str) -> Analysis {
     analyze(name, &[("main.ingot", source)])
 }
 
-fn assert_unchecked(analysis: &Analysis) {
+fn assert_reached_phase_8(analysis: &Analysis) {
     assert!(
-        analysis
-            .not_implemented
-            .iter()
-            .any(|m| m == UNCHECKED_CHECK_REMOVAL),
-        "phase 10 must keep the check-removal entry, got {:?}\nE12: {:?}\nother: {:?}",
-        analysis.not_implemented,
-        e12(analysis),
-        others(analysis)
+        !analysis.cfgs.is_empty(),
+        "the body must reach phase 8, got {:?}",
+        analysis.not_implemented
     );
 }
 
@@ -103,12 +98,8 @@ fn others(analysis: &Analysis) -> Vec<String> {
 
 fn expect(name: &str, source: &str, diags: &[&str]) {
     let analysis = analyze_main(name, source);
-    assert_unchecked(&analysis);
-    let extra: Vec<&String> = analysis
-        .not_implemented
-        .iter()
-        .filter(|m| *m != UNCHECKED_CHECK_REMOVAL)
-        .collect();
+    assert_reached_phase_8(&analysis);
+    let extra: Vec<&String> = analysis.not_implemented.iter().collect();
     assert!(
         extra.is_empty(),
         "origin analysis gave up: {extra:?}\nE12: {:?}\nother: {:?}",

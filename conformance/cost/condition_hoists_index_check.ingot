@@ -1,0 +1,11 @@
+//! expect: cost
+//! section: 31
+
+fn pick(s: []i64, i: i64) -> i64 {
+    @assert(i >= 0);
+    @assert(i <= 1000);
+    if i + 2 <= s.len {
+        return s[i + 1];
+    }
+    return 0;
+}

@@ -69,6 +69,15 @@ fn cfg_golden() {
             continue;
         }
         let problems = ingot_cfg::validate::validate_all(&analysis.cfgs);
+        let after = ingot_cfg::validate::validate_all(&analysis.removed_cfgs);
+        if !after.is_empty() {
+            failures.push(format!(
+                "{}: phase 10 CFG validator:\n  {}",
+                path.display(),
+                after.join("\n  ")
+            ));
+            continue;
+        }
         let actual = ingot_cfg::dump::dump(&analysis.cfgs, &analysis.sources);
         if !problems.is_empty() {
             failures.push(format!(

@@ -1,10 +1,10 @@
 //! Runner for the hand-written conformance suite.
 //!
 //! The suite's contract is in `conformance/README.md`. This runner implements
-//! `accept` and `reject`, and checks every `.fixed.ingot` against the fix engine.
-//! `run`, `trap` and `cost` tests are recognised but fail, because evaluation and
-//! cost analysis are not implemented. A malformed test is a failure rather than a
-//! skip.
+//! `accept`, `reject` and `cost`, and checks every `.fixed.ingot` against the fix
+//! engine. A `cost` test compares the surviving check markers from phase 10. `run`
+//! and `trap` tests are recognised but fail, because evaluation is not implemented.
+//! A malformed test is a failure rather than a skip.
 
 use crate::fix;
 use crate::loader::{self, LoadOptions};
@@ -313,15 +313,40 @@ fn case_root(path: &Path) -> PathBuf {
 
 fn run_case(case: &Case) -> Result<(), String> {
     match case.expect {
-        Expect::Accept | Expect::Reject => {}
+        Expect::Accept | Expect::Reject | Expect::Cost => {}
         Expect::Run | Expect::Trap => return Err("evaluation not implemented".to_string()),
-        Expect::Cost => return Err("cost not implemented".to_string()),
     }
     run_expectation(case).and_then(|()| if case.has_fix { run_fix(case) } else { Ok(()) })
 }
 
 fn run_expectation(case: &Case) -> Result<(), String> {
     let analysis = analyze_case(case).ok_or_else(|| "could not read source".to_string())?;
+    if case.expect == Expect::Cost {
+        if !analysis.diagnostics.is_empty() {
+            return Err(format!(
+                "cost test reported [{}]",
+                format_markers(&diagnostics_markers(&analysis))
+            ));
+        }
+        let blocking: Vec<&String> = analysis
+            .not_implemented
+            .iter()
+            .filter(|entry| *entry != crate::commands::COST_UNIMPLEMENTED)
+            .collect();
+        if !blocking.is_empty() {
+            return Err(format!("not implemented: {blocking:?}"));
+        }
+        let actual = cost_markers(&analysis);
+        return if actual == case.markers {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected [{}], got [{}]",
+                format_markers(&case.markers),
+                format_markers(&actual)
+            ))
+        };
+    }
     let actual = diagnostics_markers(&analysis);
     if case.expect == Expect::Accept {
         return if !actual.is_empty() {
@@ -407,6 +432,34 @@ fn diagnostics_markers(analysis: &Analysis) -> BTreeSet<Marker> {
                 code: d.code.to_string(),
                 line,
             }
+        })
+        .collect()
+}
+
+/// The surviving check markers of a `cost` test. Only the four check kinds are
+/// compared (`conformance/README.md`); `scatter_check` is a cost line but has no
+/// marker.
+fn cost_markers(analysis: &Analysis) -> BTreeSet<Marker> {
+    analysis
+        .cost
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                ingot_cfg::removal::CostKind::BoundsCheck
+                    | ingot_cfg::removal::CostKind::OverflowCheck
+                    | ingot_cfg::removal::CostKind::DivCheck
+                    | ingot_cfg::removal::CostKind::ShiftCheck
+            )
+        })
+        .filter_map(|item| {
+            let source = analysis.sources.files.get(item.file)?;
+            let line = source.position(item.span.start).line;
+            Some(Marker {
+                file: source.path.clone(),
+                code: item.kind.name().to_string(),
+                line,
+            })
         })
         .collect()
 }

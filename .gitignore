@@ -1,7 +1,8 @@
-/ingot
-/build/
-*.s.tmp
+# Cargo build output
 /target/
+
+# Local scratch folder for trying the compiler by hand
+/ingot/
+
+# macOS
 .DS_Store
-/tree-sitter-ingot/
-/zed-ingot/

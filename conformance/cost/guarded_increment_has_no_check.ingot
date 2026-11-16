@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+fn advance(xs: []i64) -> i64 {
+    var i: i64 = 0;
+    while i + 2 <= xs.len { //~ overflow_check
+        i += 2;
+    }
+    return i;
+}

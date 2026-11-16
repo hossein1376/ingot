@@ -286,8 +286,42 @@ reads an outer local whose type is not `Sync` is E1402. A body that assigns to, 
 or exclusively borrows an outer local is E1407, and that is the only code for that
 use. Analysis B applies a `spawn`'s argument effects and stores those origins into
 the scope, the same way as `into`. A scope parameter without `into` is E1204. Each
-`select` arm is applied on its own successor. Phase 10 is what remains: the
-`UNCHECKED_CHECK_REMOVAL` entry stays.
+`select` arm is applied on its own successor.
+
+**Phase 10** (`crates/cfg/src/removal.rs`). A forward dataflow tracks, per integer
+local, a set of lower and upper bounds: a constant, a constant generic parameter plus
+a constant, or `len(place)` plus a constant. Type ranges and widening casts seed it;
+a branch or `@assert` on `x + c` against a constant or `len(place)` adds facts, and so
+does a loop counter, `x += c`, and `place.len`. A fact about a local dies when the
+local is assigned (except the kept bound of `x += c`); a fact about `len(place)` dies
+when the place is assigned. An exclusive borrow of a place rooted at a local resets
+that local's bounds, kills every `len` fact that overlaps the borrowed place and
+drops the rule-6 checks it protects, at the borrow itself: whether the borrow is
+stored in a struct, reassigned in a branch or passed to a call makes no difference.
+A two-phase exclusive borrow also kills them again at the terminator that activates
+it, because its root may be read between reservation and activation. A local whose
+borrow is cast to a raw pointer gets no facts in that body: no bounds, no `len` fact
+and no rule-6 availability, because an `unsafe` write through the pointer could
+follow a fact. A bound that names `len(raw place)` is likewise never recorded, even
+on a local that is not itself raw. If the cast's borrow origin is a field the CFG
+does not name, every local of that body is treated that way. Joins intersect the bounds, so a fact one
+side lacks is dropped. The six §31 removals are applied to the check statements: the `for`
+element access emits no check; a bounds check goes when the facts put `e` in
+`0 .. len(p)` (with the width for a slice or vector); an overflow check when the
+operands' ranges put the exact result in the type's range; a check whose operands are
+all constants is folded, and a trap is E0806 at the operation; and an identical check
+dominated with no assignment in between is dropped. `@gather`, `@scatter`-range,
+`@scatter`-distinct and `dispatch` coverage checks are never removed, and `@narrow`
+is not a cost item. A surviving check becomes a `removal::CostItem`; `ingot cost`
+prints those items in `(function, span)` order. The phase-8 CFG is unchanged, so the
+dump and its goldens stay phase 8's output; `Analysis.removed_cfgs` is the CFG with
+the removed checks gone. Generic bodies are analysed uninstantiated, with constant
+generic parameters as symbols. What only instantiation can decide is one
+`per-instance checks (pipeline phase 11)` entry: an `@static_assert` whose condition
+depends on a generic parameter, a kernel type that is a type parameter (E1514), a
+constant evaluation over a generic parameter, and polymorphic recursion (E0809: a call
+cycle with an argument that is not a bare caller parameter; a closure argument is
+growing, since its environment makes a new type at every level).
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;
@@ -318,7 +352,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S7 | grok + relay | Ownership, Analysis B: origin sets and the function boundary (checker.md §4, §6, E1201–E1205) | done (ef74f22) |
 | S8 | grok + relay | Ownership, Analysis C: loans (checker.md §5, E1101–E1105) | done (12eecab) |
 | S9 | grok + relay | Ownership: scopes and tasks (checker.md §7, E1401–E1403, E1407) | done (0747185) |
-| S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
+| S10 | relay | Check removal and `ingot cost` (pipeline §6) | done (633b48e) |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
 
 Alongside each S step, a Haiku subagent may write the missing conformance tests for the

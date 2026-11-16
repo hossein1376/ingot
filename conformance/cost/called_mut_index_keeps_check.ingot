@@ -1,0 +1,14 @@
+//! expect: cost
+//! section: 31
+
+fn touch(i: &mut i64) {
+}
+
+fn pick(s: []i64, start: i64) -> i64 {
+    var i = start;
+    @assert(i >= 0);
+    @assert(i <= 1000);
+    @assert(i + 2 <= s.len);
+    touch(&mut i);
+    return s[i]; //~ bounds_check
+}

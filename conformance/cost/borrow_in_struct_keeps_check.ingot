@@ -1,0 +1,18 @@
+//! expect: cost
+//! section: 31
+
+struct W { r: &mut i64 }
+
+fn set(w: &mut W) {
+    w.r.* = 100;
+}
+
+fn via_struct(a: [4]i64) -> i64 {
+    var i: i64 = 0;
+    if i < 4 {
+        var w = W.{ r: &mut i };
+        set(&mut w);
+        return a[i]; //~ bounds_check
+    }
+    return 0;
+}

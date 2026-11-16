@@ -1,0 +1,11 @@
+//! expect: cost
+//! section: 31
+
+fn add_k[const k: i64](x: u8) -> i64 {
+    let y = x as i64;
+    return y + k; //~ overflow_check
+}
+
+fn use_it() -> i64 {
+    return add_k.[9223372036854775807](200);
+}

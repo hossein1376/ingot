@@ -337,7 +337,9 @@ impl Checker<'_, '_, '_> {
                     }
                     // A condition over a type or constant generic parameter is checked
                     // for each instance in phase 11 (section 9).
-                    Err(crate::consteval::Fail::Generic) => {}
+                    Err(crate::consteval::Fail::Generic) => {
+                        self.ni(crate::PER_INSTANCE_CHECKS);
+                    }
                     Err(crate::consteval::Fail::Interpret(_reason)) => {
                         let ty = self.cx.d.types.bool_;
                         let body = self.out.clone();
@@ -362,7 +364,9 @@ impl Checker<'_, '_, '_> {
                             Err(crate::consteval::Fail::OutOfRange(sp)) => {
                                 self.err("E0405", "the condition does not fit its type", sp);
                             }
-                            Err(crate::consteval::Fail::Generic) => {}
+                            Err(crate::consteval::Fail::Generic) => {
+                                self.ni(crate::PER_INSTANCE_CHECKS);
+                            }
                             Err(crate::consteval::Fail::NotImplemented(m))
                             | Err(crate::consteval::Fail::Interpret(m)) => {
                                 self.ni(format!("{m} (S5b)"));

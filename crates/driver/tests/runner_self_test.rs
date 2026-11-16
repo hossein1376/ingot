@@ -1,9 +1,9 @@
 //! The conformance runner's own tests. Each mutant of a copied test must fail;
 //! the unmutated copy must pass.
 //!
-//! The fixtures are lex and syntax tests, which the front end decides on its
-//! own. Trap and cost tests cannot pass yet, because evaluation and cost analysis
-//! are not implemented, so for those the tests assert the failure reason instead.
+//! The fixtures are lex, syntax, reject and cost tests, which the front end decides
+//! on its own. Trap tests cannot pass yet, because evaluation is not implemented, so
+//! those tests assert the failure reason instead.
 
 use ingot_driver::conformance::{self, read_case};
 use std::fs;
@@ -132,16 +132,14 @@ fn changed_trap_code_fails() {
 
 #[test]
 fn missing_cost_marker_fails() {
-    // Cost tests cannot pass until cost analysis exists. What can be checked is
-    // that the marker is read: removing it removes it from the parsed markers.
     let dir = scratch("cost-missing");
     let case = dir.join("case.ingot");
     copy_test(COST, &case);
-    assert_fails_because(&dir, "cost not implemented");
+    assert_passes(&dir);
     let before = read_case(&case).markers.len();
     replace(&case, " //~ bounds_check", "");
     assert_eq!(read_case(&case).markers.len(), before - 1);
-    assert_fails_because(&dir, "cost not implemented");
+    assert_fails(&dir, "a removed cost marker");
 }
 
 #[test]
@@ -149,7 +147,7 @@ fn extra_cost_marker_fails() {
     let dir = scratch("cost-extra");
     let case = dir.join("case.ingot");
     let text = copy_test(COST, &case);
-    assert_fails_because(&dir, "cost not implemented");
+    assert_passes(&dir);
     let before = read_case(&case).markers.len();
     let mutated = text.replacen(
         "fn pick(xs: []i64, i: i64) -> i64 {",
@@ -158,7 +156,7 @@ fn extra_cost_marker_fails() {
     );
     fs::write(&case, mutated).unwrap();
     assert_eq!(read_case(&case).markers.len(), before + 1);
-    assert_fails_because(&dir, "cost not implemented");
+    assert_fails(&dir, "an extra cost marker");
 }
 
 #[test]

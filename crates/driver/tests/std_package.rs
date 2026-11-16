@@ -43,12 +43,13 @@ fn std_resolves_without_a_diagnostic() {
         eprintln!("{}", d.to_human(&analysis.sources));
     }
     assert!(analysis.diagnostics.is_empty());
-    // std's bodies are type-checked too (`ingot check std`); ownership is the next
-    // phase. Its constants, including the executors' struct values, are evaluated
-    // (S5b).
-    assert_eq!(
-        analysis.not_implemented,
-        vec![ingot_cfg::UNCHECKED_CHECK_REMOVAL.to_string()]
+    // std's bodies are type-checked too (`ingot check std`), through ownership and
+    // check removal. Its constants, including the executors' struct values, are
+    // evaluated (S5b).
+    assert!(
+        analysis.not_implemented.is_empty(),
+        "{:?}",
+        analysis.not_implemented
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
     assert_eq!(analysis.files, 14);

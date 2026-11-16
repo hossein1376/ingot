@@ -64,6 +64,11 @@ pub const BUILTIN_SOURCE: &str = include_str!("builtin.ingot");
 /// `not_implemented` entry, since it is a compiler failure, not an error in the program.
 pub const BUILTIN_PATH: &str = "<builtin>";
 
+/// What phase 7 defers to instantiation: an `@static_assert` whose condition depends
+/// on a generic parameter, a kernel uniform or element type that is a type parameter
+/// (E1514), a constant evaluation over a generic parameter, and E0809.
+pub const PER_INSTANCE_CHECKS: &str = "per-instance checks (pipeline phase 11)";
+
 /// The module path of the builtin declarations: a hidden module of the package `std`
 /// (whose `hash` and `fmt` modules the declarations name). No `import` can spell it.
 pub const BUILTIN_MODULE_PATH: &str = "std.<builtin>";

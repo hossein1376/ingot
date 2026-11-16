@@ -1,0 +1,8 @@
+//! expect: cost
+//! section: 31
+
+fn twice(xs: []i64, i: i64) -> i64 {
+    let a = xs[i]; //~ bounds_check
+    let b = xs[i];
+    return a +% b;
+}
