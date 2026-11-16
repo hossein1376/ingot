@@ -94,7 +94,7 @@ impl[T: AtomicValue + Int] Atomic[T] {
 ```
 
 `Atomic` is instantiable only for the `AtomicValue` types: integers, `bool`, raw
-pointers and payload-free enums (section 21; `01-core` §8). `AtomicValue` implies
+pointers to `Owned` types and payload-free `copy enum`s (section 21; `01-core` §8). `AtomicValue` implies
 `Copy`, `Discard`, `Owned` and `Eq`, but not `Send` or `Sync`; a raw pointer is neither.
 The `add`, `sub` and bitwise methods do not exist for the other allowed `T`, which is why
 they also require `Int`. All operations map to one instruction and carry the memory

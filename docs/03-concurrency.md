@@ -185,8 +185,8 @@ boundary.
 All of these are in `std.sync`. None of them is special to the compiler apart from the
 atomics, which map to single instructions.
 
-**Atomics.** `Atomic[T: AtomicValue]`: integers, `bool`, raw pointers and payload-free
-enums (section 8). It is built on the atomic builtins of section 15.
+**Atomics.** `Atomic[T: AtomicValue]`: integers, `bool`, raw pointers to `Owned` types
+and payload-free `copy enum`s (section 8). It is built on the atomic builtins of section 15.
 Every operation names its ordering: `x.load(.acquire)`, `x.store(v, .release)`,
 `x.add(n, .relaxed)`, `x.compare_exchange(old, new, .seq_cst, .relaxed)`.
 

@@ -171,6 +171,11 @@ code alone.
   written. *Replaced:* clamping an invalid order at run time, which accepted
   `x.load(.release)` silently. The orders need not be constants; a non-constant one is a
   branch in the back end.
+* **`AtomicValue` is satisfied by raw pointers to `Owned` types and payload-free `copy
+  enum`s**, besides the integers and `bool` (found reviewing P1b, 2026-11-16; 01 §8). The
+  bound implies `Copy` and `Owned`, but an enum is `Copy` only when declared `copy enum`,
+  and a `*T` whose `T` is a view is a view; the old wording ("raw pointers and
+  payload-free enums") let `Atomic[*&T]` put a borrow in a `Cell`, which §13.6 forbids.
 * **`Atomic[T]` is `Send` and `Sync` only if `T: Send`** (review 2, Q4, H6). *Why:* raw
   pointers are neither so that a type built on them gets the properties only through an
   `unsafe impl` that `ingot audit` lists; `Atomic[*mut Node]` undid that.

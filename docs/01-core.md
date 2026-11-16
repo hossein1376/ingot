@@ -736,7 +736,7 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   | `Discard` | letting a value go out of scope unused |
   | `Send`, `Sync` | crossing task boundaries (section 20) |
   | `Owned` | holding no borrow, so a value may outlive everything around it (section 13.6) |
-  | `AtomicValue` | the atomic builtins (section 15). Satisfied by the integers, `bool`, raw pointers and payload-free enums, and nothing else. Implies `Copy`, `Discard`, `Owned` and `Eq`, but not `Send` or `Sync` (a raw pointer is neither) |
+  | `AtomicValue` | the atomic builtins (section 15). Satisfied by the integers, `bool`, raw pointers to `Owned` types and payload-free `copy enum`s, and nothing else. Implies `Copy`, `Discard`, `Owned` and `Eq`, but not `Send` or `Sync` (a raw pointer is neither) |
   | `Int`, `SInt`, `UInt`, `Float`, `Num` | the arithmetic and comparison operators, `@zero`, literals. Only scalars satisfy them, so each implies `Copy`, `Discard`, `Owned`, `Send` and `Sync` |
   | `Fn(..)`, `FnMut(..)`, `FnOnce(..)` | calling the value. Only non-linear types satisfy `Fn` and `FnMut` (section 5.6: a closure that owns a non-`Copy` capture is only `FnOnce`), so each of those two implies `Discard` |
 
