@@ -53,6 +53,10 @@ pub(crate) struct FnCtx {
     /// The span of the error type in the signature, for the `signature` related span.
     pub error_span: Option<Span>,
     pub kind: CtxKind,
+    /// The body prepares a `std.task.Wait` operation (03-concurrency §21).
+    pub waitable: bool,
+    /// The one `Wait` type every `return` of a waitable body gives.
+    pub wait_type: Option<TypeId>,
     /// The length of the loop stack when the function was entered: `break` and
     /// `continue` see only the loops above it.
     pub loop_base: usize,
@@ -136,6 +140,15 @@ impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
             BodyKind::Test => CtxKind::Test,
             BodyKind::Const | BodyKind::Static => CtxKind::Item,
         };
+        // A waitable body is checked against §21 only when its receiver is already
+        // valid; otherwise phase 6 reported E1410 and the body is ordinary code.
+        let waitable = cx.d.fn_sig(owner).is_some_and(|f| {
+            f.mods.waitable
+                && f.params.first().is_some_and(|p| {
+                    p.name == "self"
+                        && matches!(cx.d.types.kind(p.ty), TyKind::Ref(Mutability::Shared, _))
+                })
+        });
         Checker {
             cx,
             hir,
@@ -163,6 +176,8 @@ impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
                 error,
                 error_span: None,
                 kind: ctx_kind,
+                waitable,
+                wait_type: None,
                 loop_base: 0,
                 defer_base: 0,
             }],
@@ -185,6 +200,9 @@ impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
     }
 
     pub(crate) fn finish(mut self) -> TypedBody {
+        if let Some(w) = self.fns.first().and_then(|c| c.wait_type) {
+            self.cx.d.wait_types.insert(self.owner, w);
+        }
         self.cx.body_owner = self.prev_body_owner;
         let poison_seen = self
             .out
@@ -661,7 +679,16 @@ impl Cx<'_, '_> {
             c.out.params.push(p.local);
         }
         let completes = c.block(body);
-        if completes && sig.ret != c.void() && !c.is_never(sig.ret) && !c.is_poison(sig.ret) {
+        if completes && c.fnctx().waitable {
+            let b = c.hir.block(body).span;
+            let at = Span::new(b.end.saturating_sub(1), b.end);
+            c.err(
+                "E1410",
+                "a path through this `waitable fn` reaches the end of its body without returning its `Wait` operation",
+                at,
+            );
+        } else if completes && sig.ret != c.void() && !c.is_never(sig.ret) && !c.is_poison(sig.ret)
+        {
             let b = c.hir.block(body).span;
             let at = Span::new(b.end.saturating_sub(1), b.end);
             c.err(

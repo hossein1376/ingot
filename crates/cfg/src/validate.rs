@@ -258,12 +258,9 @@ fn check_term(cfg: &Cfg, b: usize, term: &Terminator, errors: &mut Vec<String>) 
         Terminator::Select { ops } => {
             for op in ops {
                 target(op.successor, errors);
-                if let Some(call) = &op.call {
-                    check_call(cfg, &call.target, b, errors);
-                    for a in &call.args {
-                        check_operand(cfg, a, b, errors);
-                    }
-                    check_place(cfg, &call.dest, b, errors);
+                if let Some(call) = &op.op {
+                    check_place(cfg, &call.value, b, errors);
+                    check_place(cfg, &call.result, b, errors);
                 }
             }
         }
@@ -537,11 +534,9 @@ fn term_uses_local(term: &Terminator, l: Local) -> bool {
         }
         Terminator::ScopeWait { scope, .. } => *scope == l,
         Terminator::Select { ops } => ops.iter().any(|op| {
-            op.call.as_ref().is_some_and(|c| {
-                call_uses_local(&c.target, l)
-                    || c.args.iter().any(|a| operand_uses_local(a, l))
-                    || place_uses_local(&c.dest, l)
-            })
+            op.op
+                .as_ref()
+                .is_some_and(|c| place_uses_local(&c.value, l) || place_uses_local(&c.result, l))
         }),
         Terminator::ParFor {
             captures,

@@ -1,0 +1,26 @@
+// a direct call of a waitable function: preparation, then one select over it
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Sig { v: i64 }
+
+struct Get { v: i64 }
+
+impl Wait for Get {
+    type Output = i64;
+    fn poll(self: &mut Get, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.v);
+    }
+}
+
+impl Sig {
+    waitable fn wait(self: &Sig) -> i64 {
+        return Get.{ v: self.v };
+    }
+}
+
+fn direct(sig: &Sig) -> i64 {
+    return sig.wait();
+}

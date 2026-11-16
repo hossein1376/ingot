@@ -1414,6 +1414,35 @@ impl Cx<'_, '_> {
                 }
             }
         }
+        // E1410: every parameter besides the receiver is `Discard`, so an operation
+        // that is not chosen is simply dropped (03-concurrency §21).
+        if f.mods.waitable && !poisoned {
+            for p in f.params.iter().skip(1) {
+                if self.d.types.has_poison(p.ty) {
+                    continue;
+                }
+                match self.d.props(p.ty).discard() {
+                    Tri::No => {
+                        let t = self.ty_name(p.ty);
+                        self.error(
+                            "E1410",
+                            format!(
+                                "the parameter `{}` of a `waitable fn` has type `{t}`, which is \
+                                 not `Discard`",
+                                p.name
+                            ),
+                            file,
+                            p.name_span,
+                        );
+                    }
+                    Tri::Unknown => self.ni(format!(
+                        "whether the parameter `{}` of a `waitable fn` is `Discard`",
+                        p.name
+                    )),
+                    Tri::Yes => {}
+                }
+            }
+        }
         // E1206 (the part about names)
         if poisoned {
             return self.check_fn_symbol(f, file);

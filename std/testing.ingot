@@ -1,0 +1,16 @@
+// std.testing (spec sections 32 and 35): what `@test_env()` gives a `test` block.
+
+import std.Env;
+
+/// The test harness's environment. Only `std.sys.rt.test_env` builds one.
+pub struct TestEnv {
+    pub env: &Env,
+    /// The clock that `env.clock` reads; it moves only when the test steps it.
+    pub clock: &ManualClock,
+    /// The temporary directory's path, removed after the test.
+    pub dir: []u8,
+    _private: void,
+}
+
+/// The manual clock of a `TestEnv` (spec time.md §4).
+pub struct ManualClock {}

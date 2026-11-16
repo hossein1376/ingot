@@ -530,13 +530,13 @@ impl Checker<'_, '_, '_> {
             }
             "test_env" => {
                 self.arity(e, name, args, 0);
-                match self.std_type("std", "Env") {
+                match self.std_type("std.testing", "TestEnv") {
                     Some(d) => {
                         let t = self.mk(TyKind::Adt(d, Vec::new()));
                         (self.ref_to(Mutability::Shared, t), None)
                     }
                     None => {
-                        self.ni("`@test_env()`: the type `std.Env` is not declared");
+                        self.ni("`@test_env()`: the type `std.testing.TestEnv` is not declared");
                         (poison, None)
                     }
                 }

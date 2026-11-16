@@ -652,19 +652,21 @@ pub enum ParIterand {
 
 #[derive(Clone, Debug)]
 pub struct SelectOp {
-    /// The waitable call of the arm; `None` for `else`.
-    pub call: Option<SelectCall>,
+    /// The prepared operation of the arm; `None` for `else`. The preparation call is
+    /// a `Call` terminator above this one (pipeline §5).
+    pub op: Option<SelectOperation>,
     pub successor: Block,
     pub is_else: bool,
     pub span: Span,
 }
 
 #[derive(Clone, Debug)]
-pub struct SelectCall {
-    pub target: CallTarget,
-    pub args: Vec<Operand>,
-    /// Where the chosen operation writes its result; the arm's pattern binds from it.
-    pub dest: Place,
+pub struct SelectOperation {
+    /// The prepared `Wait` value, moved by the select terminator.
+    pub value: Place,
+    /// Where the chosen arm's `poll` writes the operation's `Output`; the arm's
+    /// pattern binds from it, after `try` if the arm has one.
+    pub result: Place,
 }
 
 #[derive(Clone, Debug)]

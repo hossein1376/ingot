@@ -446,13 +446,15 @@ impl<'a> Cx<'a> {
             }
             Terminator::Select { ops } => {
                 for op in ops {
-                    let Some(call) = &op.call else {
+                    let Some(call) = &op.op else {
                         continue;
                     };
-                    self.use_target(flow, &call.target, op.span);
-                    for a in &call.args {
-                        self.use_operand(flow, a, op.span, defer);
-                    }
+                    self.use_operand(
+                        flow,
+                        &Operand::Place(call.value.clone(), PlaceUse::Move),
+                        op.span,
+                        defer,
+                    );
                 }
             }
         }
@@ -466,8 +468,8 @@ impl<'a> Cx<'a> {
                 .iter()
                 .map(|op| {
                     let mut s = flow.clone();
-                    if let Some(call) = &op.call {
-                        self.init_result(&mut s, &call.dest, op.span);
+                    if let Some(call) = &op.op {
+                        self.init_result(&mut s, &call.result, op.span);
                     }
                     (op.successor, s)
                 })

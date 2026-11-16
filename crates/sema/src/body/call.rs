@@ -1919,6 +1919,8 @@ impl Checker<'_, '_, '_> {
             error,
             error_span: c.error.as_ref().map(|t| t.span),
             kind: CtxKind::Closure,
+            waitable: false,
+            wait_type: None,
             loop_base: self.loops.len(),
             defer_base: self.defer_depth,
         });

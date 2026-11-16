@@ -556,6 +556,9 @@ pub struct Declarations {
     pub not_implemented: Vec<String>,
     /// Types the property computation gave up on (unbounded polymorphic recursion).
     pub gave_up: bool,
+    /// For each `waitable fn` whose body was checked: the `Wait` type every `return`
+    /// gives (03-concurrency §21).
+    pub wait_types: BTreeMap<DefId, TypeId>,
 }
 
 impl Declarations {
@@ -582,6 +585,7 @@ impl Declarations {
             diagnostics: Vec::new(),
             not_implemented: Vec::new(),
             gave_up: false,
+            wait_types: BTreeMap::new(),
         }
     }
 

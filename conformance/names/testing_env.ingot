@@ -1,0 +1,13 @@
+//! expect: accept
+//! section: 32
+
+import std.testing.TestEnv;
+import std.testing.ManualClock;
+
+test "the environment" {
+    let t = @test_env();
+    let _: &TestEnv = t;
+    let _: &ManualClock = t.clock;
+    _ = t.dir;
+    _ = t.env;
+}

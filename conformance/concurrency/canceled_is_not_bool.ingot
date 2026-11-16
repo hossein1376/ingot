@@ -1,0 +1,32 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Service {}
+
+struct Op {}
+
+fn done() -> void {
+    return;
+}
+
+impl Wait for Op {
+    type Output = void;
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?void {
+        _ = cx;
+        return .some(done());
+    }
+}
+
+impl Service {
+    waitable fn canceled(self: &Service) -> void {
+        return Op.{};
+    }
+}
+
+fn f(s: &Service) {
+    if s.canceled() { //~ E0403
+    }
+}

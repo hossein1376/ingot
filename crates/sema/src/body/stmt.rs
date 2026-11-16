@@ -14,7 +14,7 @@ use crate::sigs::{Bound, Tri};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
-use ingot_syntax::ast::{AssignOp, BinOp};
+use ingot_syntax::ast::{AssignOp, BinOp, UnOp};
 
 fn assign_binop(op: AssignOp) -> Option<BinOp> {
     Some(match op {
@@ -292,11 +292,23 @@ impl Checker<'_, '_, '_> {
                 let mut completes = false;
                 for arm in arms {
                     if let Some(call) = arm.call {
+                        // `try call` applies `try` when the arm is chosen (03 §21), but
+                        // the preparation is the call inside; the pattern binds its
+                        // success value.
+                        let (inner, is_try) = match &self.hir.expr(call).kind {
+                            hir::ExprKind::Unary {
+                                op: UnOp::Try,
+                                expr,
+                                ..
+                            } => (*expr, true),
+                            _ => (call, false),
+                        };
                         let t = self.expr(call, None);
                         if !self.is_poison(t) {
-                            self.check_waitable_call(call);
+                            self.check_waitable_call(inner);
                         }
-                        self.pattern(arm.pattern, t);
+                        let bind = if is_try { self.ty_of(call) } else { t };
+                        self.pattern(arm.pattern, bind);
                     }
                     completes |= self.block(arm.body);
                 }
@@ -432,6 +444,122 @@ impl Checker<'_, '_, '_> {
 
     // ---------------------------------------------------------------- jumps
 
+    /// A `return` in a waitable body gives a value of the one `Wait` type, whose
+    /// `Output` is the declared result (03-concurrency §21).
+    fn waitable_return(&mut self, kw: Span, v: Option<ExprId>, ret: TypeId, error: Option<TypeId>) {
+        let Some(e) = v else {
+            self.err(
+                "E1410",
+                "`return` in a `waitable fn` must give a `Wait` operation, not `void`",
+                kw,
+            );
+            return;
+        };
+        let hint = self.fnctx().wait_type;
+        let t = self.expr(e, hint);
+        if self.is_poison(t) || self.is_never(t) {
+            return;
+        }
+        let declared = match error {
+            Some(err) => self.mk(TyKind::Result(ret, err)),
+            None => ret,
+        };
+        if !self.wait_type_ok(e, t, declared) {
+            return;
+        }
+        let first = self.fnctx().wait_type;
+        match first {
+            None => {
+                if let Some(ctx) = self.fns.last_mut() {
+                    ctx.wait_type = Some(t);
+                }
+            }
+            Some(w) if w != t => {
+                let span = self.span_of(e);
+                let (a, b) = (self.name(w), self.name(t));
+                self.err(
+                    "E1410",
+                    format!(
+                        "the `return`s of a `waitable fn` give different `Wait` types, `{a}` and `{b}`"
+                    ),
+                    span,
+                );
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Whether `w` is the one `Wait + Discard` type of a waitable body, with
+    /// `Output` equal to the declared result.
+    fn wait_type_ok(&mut self, e: ExprId, w: TypeId, declared: TypeId) -> bool {
+        let Some(wait) = self.std_type("std.task", "Wait") else {
+            self.ni("`std.task.Wait`, the operation a `waitable fn` prepares");
+            return false;
+        };
+        match self
+            .cx
+            .d
+            .satisfies(w, &crate::sigs::Bound::Interface(wait, Vec::new()))
+        {
+            Tri::Yes => {}
+            Tri::No => {
+                let n = self.name(w);
+                self.err(
+                    "E1410",
+                    format!(
+                        "the body of a `waitable fn` returns `{n}`, which does not implement `Wait`"
+                    ),
+                    self.span_of(e),
+                );
+                return false;
+            }
+            Tri::Unknown => {
+                let n = self.name(w);
+                self.ni(format!("whether `{n}` implements `Wait`"));
+                return false;
+            }
+        }
+        match self.cx.d.props(w).discard() {
+            Tri::Yes => {}
+            Tri::No => {
+                let n = self.name(w);
+                self.err(
+                    "E1410",
+                    format!("the `Wait` type `{n}` of a `waitable fn` is not `Discard`"),
+                    self.span_of(e),
+                );
+                return false;
+            }
+            Tri::Unknown => {
+                let n = self.name(w);
+                self.ni(format!("whether the `Wait` type `{n}` is `Discard`"));
+                return false;
+            }
+        }
+        let assoc = self.cx.d.interface_sig(wait).and_then(|sig| {
+            sig.assoc
+                .iter()
+                .copied()
+                .find(|d| self.cx.sema.def(*d).name == "Output")
+        });
+        let Some(assoc) = assoc else {
+            self.ni("`std.task.Wait.Output`, the associated type of the operation");
+            return false;
+        };
+        let proj = self.mk(TyKind::Projection(w, assoc));
+        let out = self.cx.d.normalize(proj);
+        if out == declared || self.is_poison(out) {
+            return true;
+        }
+        let (a, b) = (self.name(out), self.name(declared));
+        self.err(
+            "E1410",
+            format!("the operation's `Output` is `{a}`, but the `waitable fn` returns `{b}`"),
+            self.span_of(e),
+        );
+        false
+    }
+
     fn return_stmt(&mut self, span: Span, v: Option<ExprId>) {
         let ctx = self.fnctx();
         let kw = Span::new(span.start, span.start + 6);
@@ -449,6 +577,10 @@ impl Checker<'_, '_, '_> {
             self.err("E1408", "`return` inside a `par for` body", kw);
         }
         self.reject_exit_of_consuming_loop(kw);
+        if ctx.waitable {
+            self.waitable_return(kw, v, ctx.ret, ctx.error);
+            return;
+        }
         let void = self.void();
         match v {
             Some(e) => {
@@ -508,6 +640,14 @@ impl Checker<'_, '_, '_> {
         }
         let kw = Span::new(stmt_span.start, stmt_span.start + 4);
         self.reject_exit_of_consuming_loop(kw);
+        // 03 §21: a waitable body leaves only by returning its operation.
+        if ctx.waitable {
+            self.err(
+                "E1410",
+                "a `waitable fn` body leaves only by returning its `Wait` operation; an error is kept in the operation and given by its first `poll`",
+                kw,
+            );
+        }
         if self.kernel {
             self.err("E1511", "a kernel cannot fail", kw);
             self.expr(e, None);

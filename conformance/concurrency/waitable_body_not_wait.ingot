@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 21
+
+struct Service { n: i64 }
+
+impl Service {
+    waitable fn wait(self: &Service) -> i64 {
+        return self.n; //~ E1410
+    }
+}

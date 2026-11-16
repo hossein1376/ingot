@@ -1,0 +1,34 @@
+//! expect: accept
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Service { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = i64;
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.n);
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service) -> i64 {
+        return Op.{ n: self.n };
+    }
+}
+
+fn direct(s: &Service) -> i64 {
+    return s.wait();
+}
+
+fn chosen(s: &Service) -> i64 {
+    select {
+        v = s.wait() => { return v; }
+        else => { return 0; }
+    }
+}

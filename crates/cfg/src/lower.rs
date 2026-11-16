@@ -165,7 +165,12 @@ impl<'a> LowerCx<'a> {
             }
         };
         let (ret, error) = match &kind {
-            None => (body.ret, body.error),
+            // A waitable body returns the `Wait` operation it prepares, not the
+            // declared result; the operation's `Output` is that result.
+            None => match self.decls.wait_types.get(&key.owner).copied() {
+                Some(w) => (w, None),
+                None => (body.ret, body.error),
+            },
             Some(BodySpec::Closure { info, .. }) => (info.sig.ret, info.sig.error),
             Some(BodySpec::ParFor { .. }) => (self.decls.types.void, None),
         };
@@ -2966,10 +2971,25 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let span = self.span(e);
         let op = self.lower_expr(operand)?;
         let temp = self.place_of_operand(op, ot, self.span(operand));
+        let conversion = match self.res(e) {
+            ExprRes::Try(t) => t.conversion.clone(),
+            _ => TryConversion::Identity,
+        };
+        self.lower_try_place(temp, ot, ty, conversion, span)
+    }
+
+    /// Apply `try` to a result already in `temp`, giving its success value.
+    fn lower_try_place(
+        &mut self,
+        temp: Place,
+        enum_ty: TypeId,
+        ty: TypeId,
+        conversion: TryConversion,
+        span: Span,
+    ) -> Option<Operand> {
         let dest = self.new_temp(ty, span);
         let ok_block = self.new_block();
         let err_block = self.new_block();
-        let enum_ty = ot;
         let tag_ty = self.tag_ty(enum_ty);
         let value = self.materialize(Rvalue::Discriminant(temp.clone()), tag_ty, span);
         self.term(Terminator::Switch {
@@ -3002,11 +3022,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.reachable = true;
         self.note_variant(temp.clone(), enum_ty, 1, true);
         self.push_frame(span);
-        let conversion = match self.res(e) {
-            ExprRes::Try(t) => t.conversion.clone(),
-            _ => TryConversion::Identity,
-        };
-        let err_ty = self.error_of_result_type(ot);
+        let err_ty = self.error_of_result_type(enum_ty);
         let epay = temp.clone().payload(1);
         let eread = self.read_payload(epay, err_ty, enum_ty);
         let eread = self.snapshot(eread, err_ty, span);
@@ -4468,6 +4484,17 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let (target, args) = self.call_target(&info, e)?;
         let ty = self.ty(e);
         let span = self.span(e);
+        if self
+            .cx
+            .decls
+            .fn_sig(match &info.callee {
+                Callee::Fn(f) => f.def,
+                _ => DefId(0),
+            })
+            .is_some_and(|s| s.mods.waitable)
+        {
+            return self.lower_waitable_call(&info, target, args, ty, span, e);
+        }
         let dest = if ty == self.cx.decls.types.void {
             None
         } else {
@@ -4487,6 +4514,55 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         match dest {
             Some(p) => Some(self.read_place(p, ty)),
             None => Some(Operand::Const(Const::Unit)),
+        }
+    }
+
+    /// A direct call of a `waitable fn`: prepare into a temporary operation, then one
+    /// `select` over it (pipeline §5).
+    fn lower_waitable_call(
+        &mut self,
+        info: &ingot_sema::typed::CallInfo,
+        target: CallTarget,
+        args: Vec<Operand>,
+        ty: TypeId,
+        span: Span,
+        e: ExprId,
+    ) -> Option<Operand> {
+        let Some(prep_ty) = self.wait_type_of(info) else {
+            self.fail("a call of a waitable function that prepares no operation");
+            return None;
+        };
+        let prep = Place::local(self.new_temp(prep_ty, span));
+        let next = self.new_block();
+        self.term(Terminator::Call {
+            target,
+            args,
+            dest: Some(prep.clone()),
+            next,
+        });
+        self.kill();
+        self.cur = next;
+        self.reachable = true;
+        let result = Place::local(self.new_temp(ty, self.span(e)));
+        let successor = self.new_block();
+        self.term(Terminator::Select {
+            ops: vec![SelectOp {
+                op: Some(SelectOperation {
+                    value: prep,
+                    result: result.clone(),
+                }),
+                successor,
+                is_else: false,
+                span,
+            }],
+        });
+        self.kill();
+        self.cur = successor;
+        self.reachable = true;
+        if ty == self.cx.decls.types.void {
+            Some(Operand::Const(Const::Unit))
+        } else {
+            Some(self.read_place(result, ty))
         }
     }
 
@@ -4696,32 +4772,56 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let mut ops = Vec::new();
         let mut dests: Vec<Option<Local>> = Vec::new();
         let mut successors: Vec<Block> = Vec::new();
+        // The `try` conversion and the declared result of each arm, for the successor.
+        let mut tries: Vec<Option<(TryConversion, TypeId)>> = Vec::new();
+        let mut rets: Vec<Option<TypeId>> = Vec::new();
         for arm in arms {
             let successor = self.new_block();
             successors.push(successor);
             if arm.is_else {
                 ops.push(SelectOp {
-                    call: None,
+                    op: None,
                     successor,
                     is_else: true,
                     span: arm.span,
                 });
                 dests.push(None);
+                tries.push(None);
+                rets.push(None);
                 continue;
             }
-            let call = match arm.call {
+            let outer = match arm.call {
                 Some(c) => c,
                 None => {
                     self.fail("a `select` arm with no call");
                     dests.push(None);
+                    tries.push(None);
+                    rets.push(None);
                     continue;
                 }
+            };
+            // `try` applies when the arm is chosen; the preparation is the call inside.
+            let (call, try_info, pattern_ty) = match &self.pkg.expr(outer).kind {
+                ExprKind::Unary {
+                    op: UnOp::Try,
+                    expr,
+                    ..
+                } => {
+                    let conversion = match self.res(outer) {
+                        ExprRes::Try(t) => t.conversion.clone(),
+                        _ => TryConversion::Identity,
+                    };
+                    (*expr, Some(conversion), self.ty(outer))
+                }
+                _ => (outer, None, self.ty(outer)),
             };
             let info = match self.res(call) {
                 ExprRes::Call(c) => c,
                 _ => {
                     self.fail("a `select` arm that is not a call");
                     dests.push(None);
+                    tries.push(None);
+                    rets.push(None);
                     continue;
                 }
             };
@@ -4729,22 +4829,43 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Some(t) => t,
                 None => {
                     dests.push(None);
+                    tries.push(None);
+                    rets.push(None);
                     continue;
                 }
             };
+            let Some(prep_ty) = self.wait_type_of(&info) else {
+                self.fail("a `select` arm whose waitable function prepares no operation");
+                dests.push(None);
+                tries.push(None);
+                rets.push(None);
+                continue;
+            };
+            let prep = Place::local(self.new_temp(prep_ty, span));
+            let next = self.new_block();
+            self.term(Terminator::Call {
+                target,
+                args,
+                dest: Some(prep.clone()),
+                next,
+            });
+            self.kill();
+            self.cur = next;
+            self.reachable = true;
             let ret = self.ty(call);
-            let dest = self.new_temp(ret, span);
+            let dest = self.new_temp(ret, arm.span);
             ops.push(SelectOp {
-                call: Some(SelectCall {
-                    target,
-                    args,
-                    dest: Place::local(dest),
+                op: Some(SelectOperation {
+                    value: prep,
+                    result: Place::local(dest),
                 }),
                 successor,
                 is_else: false,
                 span: arm.span,
             });
             dests.push(Some(dest));
+            tries.push(try_info.map(|c| (c, pattern_ty)));
+            rets.push(Some(ret));
         }
         let all_dests: Vec<Local> = dests.iter().flatten().copied().collect();
         self.term(Terminator::Select { ops });
@@ -4761,7 +4882,20 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             }
             self.push_frame(arm.span);
             if let Some(Some(d)) = dests.get(i).copied() {
-                self.bind_pattern(arm.pattern, Place::local(d));
+                let place = match (
+                    tries.get(i).cloned().flatten(),
+                    rets.get(i).copied().flatten(),
+                ) {
+                    (Some((conversion, pattern_ty)), Some(ret)) => self
+                        .lower_try_place(Place::local(d), ret, pattern_ty, conversion, arm.span)
+                        .and_then(|op| match op {
+                            Operand::Place(p, _) => Some(p),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| Place::local(d)),
+                    _ => Place::local(d),
+                };
+                self.bind_pattern(arm.pattern, place);
             }
             let falls = self.lower_block(arm.body);
             if falls && self.reachable {
@@ -4777,6 +4911,14 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         if self.reachable {
             self.end_temps(mark);
         }
+    }
+
+    /// The `Wait` type a waitable call prepares, from phase 7.
+    fn wait_type_of(&self, info: &ingot_sema::typed::CallInfo) -> Option<TypeId> {
+        let Callee::Fn(f) = &info.callee else {
+            return None;
+        };
+        self.cx.decls.wait_types.get(&f.def).copied()
     }
 }
 

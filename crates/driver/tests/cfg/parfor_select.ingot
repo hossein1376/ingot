@@ -1,10 +1,23 @@
 // par for over a range and a slice with a capture, and select with and without else
 
+import std.task.Wait;
+import std.task.WaitCx;
+
 struct Sig { v: i64 }
+
+struct Get { v: i64 }
+
+impl Wait for Get {
+    type Output = i64;
+    fn poll(self: &mut Get, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.v);
+    }
+}
 
 impl Sig {
     waitable fn wait(self: &Sig) -> i64 {
-        return self.v;
+        return Get.{ v: self.v };
     }
 }
 

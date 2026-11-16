@@ -1,0 +1,26 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+linear struct Ticket {}
+
+struct Service { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = i64;
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.n);
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service, ticket: Ticket) -> i64 { //~ E1410
+        @forget(ticket);
+        return Op.{ n: self.n };
+    }
+}

@@ -1823,6 +1823,14 @@ impl Checker<'_, '_, '_> {
             }
         };
         let ctx = self.fnctx();
+        // 03 §21: a waitable body leaves only by returning its operation.
+        if ctx.waitable {
+            self.err(
+                "E1410",
+                "a `try` in a `waitable fn` body would leave the body; an error is kept in the operation and given by its first `poll`",
+                op_span,
+            );
+        }
         self.reject_try_in_consuming_loop(Span::new(op_span.start, op_span.start + 3));
         if self.kernel {
             self.err(

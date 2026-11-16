@@ -1,0 +1,9 @@
+//! expect: reject
+//! section: 32
+
+import std.Env;
+
+test "the environment" {
+    let e: &Env = @test_env(); //~ E0401
+    _ = e;
+}

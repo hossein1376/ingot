@@ -52,7 +52,7 @@ fn std_resolves_without_a_diagnostic() {
         analysis.not_implemented
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
-    assert_eq!(analysis.files, 14);
+    assert_eq!(analysis.files, 15);
 }
 
 #[test]
@@ -174,6 +174,7 @@ fn std_has_no_functions_yet_outside_sync() {
         "io.ingot",
         "gpu.ingot",
         "task.ingot",
+        "testing.ingot",
         "exec.ingot",
     ] {
         let (_, ast) = module(file);

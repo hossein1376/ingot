@@ -1,0 +1,31 @@
+//! expect: accept
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+enum AppErr { bad }
+
+struct Service { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = Result[i64, AppErr];
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?Result[i64, AppErr] {
+        _ = cx;
+        return .some(.ok(self.n));
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service) -> i64 ! AppErr {
+        return Op.{ n: self.n };
+    }
+}
+
+fn chosen(s: &Service) -> i64 ! AppErr {
+    select {
+        v = try s.wait() => { return v; }
+    }
+}

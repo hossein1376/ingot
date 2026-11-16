@@ -737,7 +737,26 @@ fn par_for_rejects_fail_and_try() {
 #[test]
 fn a_select_arm_calling_a_waitable_fn_is_accepted() {
     let b = build(
-        "struct Service { n: i64 }\nimpl Service {\n    waitable fn wait(self: &Service) -> i64 { return self.n; }\n}\nfn f(s: &Service) -> i64 {\n    select {\n        x = s.wait() => { return x; }\n    }\n}\n",
+        "import std.task.Wait;\nimport std.task.WaitCx;\n\
+         struct Service { n: i64 }\n\
+         struct Op { n: i64 }\n\
+         impl Wait for Op {\n\
+             type Output = i64;\n\
+             fn poll(self: &mut Op, cx: &mut WaitCx) -> ?i64 {\n\
+                 _ = cx;\n\
+                 return .some(self.n);\n\
+             }\n\
+         }\n\
+         impl Service {\n\
+             waitable fn wait(self: &Service) -> i64 {\n\
+                 return Op.{ n: self.n };\n\
+             }\n\
+         }\n\
+         fn f(s: &Service) -> i64 {\n\
+             select {\n\
+                 x = s.wait() => { return x; }\n\
+             }\n\
+         }\n",
     );
     assert_eq!(b.only_codes(), Vec::<String>::new());
 }

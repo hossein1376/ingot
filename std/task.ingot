@@ -9,3 +9,16 @@ pub struct Scope {}
 pub linear struct Task[R] {
     owner: &Scope,
 }
+
+/// What a `std.task.Wait` operation's `poll` is given (spec sections 21 and 22).
+/// The runtime fills it; safe code cannot make one.
+pub struct WaitCx {}
+
+/// The interface of an operation the scheduler can wait for (section 21).
+pub interface Wait {
+    type Output;
+    /// One attempt. It must not block. `.some(v)` completes the operation with `v`.
+    /// `.none` means it is not ready: nothing was consumed, nothing that another task
+    /// can observe was changed, and `cx` was told what to wait for.
+    fn poll(self: &mut Self, cx: &mut WaitCx) -> ?Self.Output;
+}

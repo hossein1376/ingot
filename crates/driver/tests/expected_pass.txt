@@ -46,6 +46,7 @@ concurrency/atomic_value_owned.ingot
 concurrency/atomic_value_properties.ingot
 concurrency/atomic_value_view_pointer.ingot
 concurrency/bad_waitable_receiver.ingot
+concurrency/canceled_is_not_bool.ingot
 concurrency/cell_interior.ingot
 concurrency/cell_not_sync.ingot
 concurrency/constant_par_for.ingot
@@ -69,6 +70,7 @@ concurrency/scope_handle_escapes.ingot
 concurrency/scope_name_escapes.ingot
 concurrency/scope_stored_escapes.ingot
 concurrency/select_not_waitable.ingot
+concurrency/select_try.ingot
 concurrency/spawn_arg_not_send.ingot
 concurrency/spawn_in_param_scope.ingot
 concurrency/spawn_into_caller_scope.ingot
@@ -83,6 +85,15 @@ concurrency/task_borrows_scope_array.ingot
 concurrency/task_borrows_scope_local.ingot
 concurrency/two_shared_tasks.ingot
 concurrency/two_tasks_one_exclusive.ingot
+concurrency/waitable_body.ingot
+concurrency/waitable_body_not_wait.ingot
+concurrency/waitable_borrow.ingot
+concurrency/waitable_fail.ingot
+concurrency/waitable_fallthrough.ingot
+concurrency/waitable_output_mismatch.ingot
+concurrency/waitable_param_not_discard.ingot
+concurrency/waitable_try.ingot
+concurrency/waitable_two_types.ingot
 concurrency/waitable_without_self.ingot
 consteval/accept_array_length.ingot
 consteval/accept_generic.ingot
@@ -265,6 +276,7 @@ errors/handler_falls_through.ingot
 errors/orelse_not_optional.ingot
 errors/return_of_result.fixed.ingot
 errors/return_of_result.ingot
+errors/select_try_mismatch.ingot
 errors/try_error_mismatch.ingot
 errors/try_not_fallible.ingot
 errors/try_not_result.ingot
@@ -357,7 +369,9 @@ names/pub_pkg/main.ingot
 names/qualify_name/main.ingot
 names/shadowing.ingot
 names/shadowing_nested.ingot
+names/test_env_wrong_type.ingot
 names/test_only.ingot
+names/testing_env.ingot
 names/undefined_label.ingot
 names/undefined_name.ingot
 names/undefined_name_typo.fixed.ingot

@@ -590,13 +590,10 @@ impl<'a> Cx<'a> {
             }
             Terminator::Select { ops } => {
                 for op in ops {
-                    let Some(call) = &op.call else {
+                    let Some(call) = &op.op else {
                         continue;
                     };
-                    self.target_access(types, &call.target, op.span, out);
-                    for a in &call.args {
-                        self.operand_access(types, a, op.span, out);
-                    }
+                    self.place_access(types, &call.value, Kind::Move, op.span, false, out);
                 }
             }
             Terminator::ParFor {
@@ -1273,13 +1270,10 @@ fn term_effect(term: &Terminator, span: Span) -> Effect {
         Terminator::ScopeWait { scope, .. } => uses.push((*scope, span)),
         Terminator::Select { ops } => {
             for op in ops {
-                let Some(call) = &op.call else {
+                let Some(call) = &op.op else {
                     continue;
                 };
-                touch_target(&call.target, op.span, &mut uses);
-                for a in &call.args {
-                    touch_operand(a, op.span, &mut uses);
-                }
+                touch_place(&call.value, op.span, &mut uses);
             }
         }
         Terminator::ParFor {

@@ -551,16 +551,15 @@ impl<'a> Dumper<'a> {
                     if i > 0 {
                         s.push_str("; ");
                     }
-                    match &op.call {
+                    match &op.op {
                         None => {
                             s.push_str(&format!("else -> {}", op.successor));
                         }
                         Some(call) => {
                             s.push_str(&format!(
-                                "{} = {}({}) then {}",
-                                self.place(&call.dest),
-                                self.callee(&call.target),
-                                self.operands(&call.args),
+                                "{} -> {} then {}",
+                                self.place(&call.value),
+                                self.place(&call.result),
                                 op.successor
                             ));
                         }

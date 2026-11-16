@@ -665,11 +665,15 @@ impl<'a> Cx<'a> {
                 .iter()
                 .map(|op| {
                     let mut edge = flow.clone();
-                    if let Some(call) = &op.call {
-                        let saved = self.span;
-                        self.span = op.span;
-                        self.transfer_call(&mut edge, &call.target, &call.args, Some(&call.dest));
-                        self.span = saved;
+                    if let Some(call) = &op.op {
+                        // The arm's result borrows what its prepared operation borrows.
+                        let set = self.eval_operand(
+                            flow,
+                            &Operand::Place(call.value.clone(), PlaceUse::Move),
+                        );
+                        if let Some(root) = call.result.root() {
+                            edge.insert(root, set);
+                        }
                     }
                     (op.successor as usize, edge)
                 })
@@ -849,7 +853,10 @@ impl<'a> Cx<'a> {
                 self.eval_swap(flow, args);
                 OriginSet::new()
             }
-            "forget" | "bits" | "slice_from_raw" | "borrow_from_raw" => OriginSet::new(),
+            // `@test_env` borrows the harness's storage for the test's duration.
+            "forget" | "bits" | "slice_from_raw" | "borrow_from_raw" | "test_env" => {
+                OriginSet::new()
+            }
             "unchecked_slice" => {
                 let Some(BuiltinArg::Place(base)) = args.first() else {
                     return OriginSet::new();

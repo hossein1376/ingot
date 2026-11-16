@@ -268,19 +268,7 @@ impl<'a> Cx<'a> {
                     self.operand_hit(op, Mode::Read, hits);
                 }
             }
-            Terminator::Select { ops } => {
-                for op in ops {
-                    let Some(call) = &op.call else {
-                        continue;
-                    };
-                    if let CallTarget::Value { callee, .. } = &call.target {
-                        self.operand_hit(callee, Mode::Read, hits);
-                    }
-                    for arg in &call.args {
-                        self.operand_hit(arg, Mode::Read, hits);
-                    }
-                }
-            }
+            Terminator::Select { .. } => {}
             Terminator::Goto(_)
             | Terminator::Unreachable
             | Terminator::ScopeWait { .. }

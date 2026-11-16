@@ -1,0 +1,38 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+enum AppErr { bad }
+
+fn check(n: i64) -> i64 ! AppErr {
+    if n < 0 {
+        fail .bad;
+    }
+    return n;
+}
+
+struct S { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = Result[void, AppErr];
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?Result[void, AppErr] {
+        _ = cx;
+        return .some(.ok(done()));
+    }
+}
+
+fn done() -> void {
+    return;
+}
+
+impl S {
+    waitable fn wait(self: &S) -> void ! AppErr {
+        let checked = try check(self.n); //~ E1410
+        _ = checked;
+        return Op.{ n: self.n };
+    }
+}

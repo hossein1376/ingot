@@ -1,0 +1,32 @@
+// `try` in a select arm: the preparation is the call, the try applies on the arm
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+enum AppErr { bad }
+
+struct Sig { v: i64 }
+
+struct Get { v: i64 }
+
+impl Wait for Get {
+    type Output = Result[i64, AppErr];
+    fn poll(self: &mut Get, cx: &mut WaitCx) -> ?Result[i64, AppErr] {
+        _ = cx;
+        return .some(.ok(self.v));
+    }
+}
+
+impl Sig {
+    waitable fn wait(self: &Sig) -> i64 ! AppErr {
+        return Get.{ v: self.v };
+    }
+}
+
+fn try_arm(sig: &Sig) -> i64 ! AppErr {
+    select {
+        v = try sig.wait() => {
+            return v;
+        }
+    }
+}

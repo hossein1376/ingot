@@ -1,0 +1,39 @@
+//! expect: reject
+//! section: 13, 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Ready[T] { v: ?T }
+
+impl[T] Wait for Ready[T] {
+    type Output = T;
+    fn poll(self: &mut Ready[T], cx: &mut WaitCx) -> ?T {
+        _ = cx;
+        return self.v.take();
+    }
+}
+
+struct S { n: i64 }
+
+impl S {
+    waitable fn get(self: &S) -> &i64 from self {
+        return Ready[&i64].{ v: .some(&self.n) };
+    }
+}
+
+fn leak(d: &i64) -> &i64 from d {
+    let s = S.{ n: 1 };
+    return s.get(); //~ E1203
+}
+
+fn leak2(d: &i64) -> &i64 from d {
+    let s = S.{ n: 1 };
+    select {
+        r = s.get() => { return r; } //~ E1203
+    }
+}
+
+fn ok(s: &S) -> &i64 from s {
+    return s.get();
+}

@@ -647,17 +647,6 @@ impl Engine<'_> {
                     }
                 }
             }
-            Terminator::Select { ops } => {
-                for op in ops {
-                    if let Some(call) = &op.call {
-                        for arg in &call.args {
-                            if let Some(place) = two_phase_arg(arg, defs, two_phase) {
-                                activated.push(place);
-                            }
-                        }
-                    }
-                }
-            }
             _ => {}
         }
         for place in &activated {

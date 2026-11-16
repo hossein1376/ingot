@@ -1,0 +1,35 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Service { n: i64 }
+
+struct A { n: i64 }
+struct B { n: i64 }
+
+impl Wait for A {
+    type Output = i64;
+    fn poll(self: &mut A, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.n);
+    }
+}
+
+impl Wait for B {
+    type Output = i64;
+    fn poll(self: &mut B, cx: &mut WaitCx) -> ?i64 {
+        _ = cx;
+        return .some(self.n);
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service, first: bool) -> i64 {
+        if first {
+            return A.{ n: self.n };
+        }
+        return B.{ n: self.n }; //~ E1410
+    }
+}

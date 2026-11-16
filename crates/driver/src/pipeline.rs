@@ -381,12 +381,6 @@ fn has_polymorphic_recursion(decls: &ingot_sema::Declarations, cfgs: &ingot_cfg:
                 Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
                     targets.push(target.clone());
                 }
-                Terminator::Select { ops } => {
-                    targets.extend(
-                        ops.iter()
-                            .filter_map(|op| op.call.as_ref().map(|c| c.target.clone())),
-                    );
-                }
                 _ => {}
             }
         }

@@ -1,0 +1,32 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+enum First { one }
+enum Second { two }
+
+struct Service { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = Result[i64, First];
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?Result[i64, First] {
+        _ = cx;
+        return .some(.ok(self.n));
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service) -> i64 ! First {
+        return Op.{ n: self.n };
+    }
+}
+
+fn chosen(s: &Service) -> i64 ! Second {
+    select {
+        v = try s.wait() => { return v; } //~ E0703
+    }
+}

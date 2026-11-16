@@ -1,0 +1,23 @@
+//! expect: reject
+//! section: 21
+
+import std.task.Wait;
+import std.task.WaitCx;
+
+struct Service { n: i64 }
+
+struct Op { n: i64 }
+
+impl Wait for Op {
+    type Output = bool;
+    fn poll(self: &mut Op, cx: &mut WaitCx) -> ?bool {
+        _ = cx;
+        return .some(true);
+    }
+}
+
+impl Service {
+    waitable fn wait(self: &Service) -> i64 {
+        return Op.{ n: self.n }; //~ E1410
+    }
+}
