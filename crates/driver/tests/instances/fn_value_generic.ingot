@@ -1,0 +1,17 @@
+fn fp[T](x: T) -> T {
+    return x;
+}
+
+fn h1(x: i64) -> i64 {
+    return x;
+}
+
+fn h2(x: u8) -> i64 {
+    return 0;
+}
+
+fn run() -> i64 {
+    let a = fp(h1);
+    let b = fp(h2);
+    return a(1) + b(2);
+}

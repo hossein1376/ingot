@@ -1,0 +1,6 @@
+1	_I1:t1:t10:t.by_bound8:t.Item[]
+0	_I1:t1:t13:t.Item[].name8:t.Item[]
+0	_I1:t1:t15:t.Item[].unused8:t.Item[]
+1	_I1:t1:t31:{method table t.Item[] t.Named}
+0	_I1:t1:t5:t.run
+0	_I1:t1:t8:t.by_dyn

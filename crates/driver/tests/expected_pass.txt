@@ -299,6 +299,7 @@ generics/missing_bound_for_operator.ingot
 generics/negative_generic_argument.ingot
 generics/negative_length_from_argument.ingot
 generics/negative_length_in_body.ingot
+generics/polymorphic_recursion.ingot
 generics/wrong_explicit_argument_count.ingot
 generics/zero_of_type_parameter.ingot
 kernels/at_or_output.ingot

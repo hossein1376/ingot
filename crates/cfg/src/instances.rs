@@ -1,0 +1,1158 @@
+//! Phase 11a: instance discovery, depth and mangled names (pipeline §6a).
+//!
+//! A body is lowered once, uninstantiated. This module walks the CFGs from the roots
+//! of the command, substitutes type and constant arguments at each call, resolves a
+//! call through a bound to the impl's method, and records one [`Instance`] per
+//! `(body, arguments)`. Depths are shortest distances from the roots; a depth above
+//! 64 is E0809. The finished set is sorted by [`Instance::mangled`].
+
+use crate::model::{
+    BodyKey, CallTarget, Cfg, CfgId, Cfgs, Operand, PlaceBase, Terminator, ValueKind,
+};
+use ingot_diag::diagnostic::Diagnostic;
+use ingot_diag::source::{Sources, Span};
+use ingot_sema::defs::{DefId, DefKind, Sema};
+use ingot_sema::sigs::{Declarations, ItemSig};
+use ingot_sema::ty::{ConstArg, ConstValue, GenericArg, Subst, TyKind, TypeId};
+use ingot_sema::typed::{Bodies, ExprRes, FnDynCoercion, FnRef, FnSource, InterfaceVia};
+use std::collections::{BTreeMap, VecDeque};
+
+/// Which command's roots to use (pipeline §6a).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Roots {
+    /// Every non-generic function, test, `const` and `static` of the checked package.
+    #[default]
+    Check,
+    /// `main` and every `export fn` of the root package.
+    Build,
+    /// Every `test` block.
+    Test,
+}
+
+/// The body part of an instance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InstanceBody {
+    /// A function, method or test body.
+    Item,
+    /// A closure body; the owner carries the arguments.
+    Closure(ingot_sema::hir::ExprId),
+    /// A `par for` body; the owner carries the arguments.
+    ParFor(ingot_sema::hir::StmtId),
+    /// A `&dyn I` method table for one type.
+    MethodTable {
+        ty: TypeId,
+        interface: DefId,
+        args: Vec<GenericArg>,
+    },
+    /// A closure's method table for `&dyn Fn…`.
+    DynFnTable {
+        ty: TypeId,
+        kind: ingot_sema::ty::FnKind,
+    },
+    /// A `spawn` thunk: `block.index` in the owner's CFG.
+    SpawnThunk { block: u32, index: u32 },
+}
+
+/// One instance: a body and the substitution of its generic parameters.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InstanceKey {
+    pub owner: DefId,
+    pub body: InstanceBody,
+    pub subst: Subst,
+}
+
+/// A finished instance.
+#[derive(Clone, Debug)]
+pub struct Instance {
+    pub key: InstanceKey,
+    pub depth: usize,
+    pub mangled: String,
+}
+
+/// What phase 11a found.
+#[derive(Clone, Debug, Default)]
+pub struct Instances {
+    /// The finished set, sorted by `mangled`.
+    pub instances: Vec<Instance>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub not_implemented: Vec<String>,
+}
+
+/// Discover the instances of the checked package.
+pub fn discover(
+    sources: &Sources,
+    sema: &Sema,
+    decls: &mut Declarations,
+    bodies: &Bodies,
+    packages: &[ingot_sema::hir::Package],
+    cfgs: &Cfgs,
+    roots: Roots,
+) -> Instances {
+    let mut d = Discovery {
+        sources,
+        sema,
+        decls,
+        bodies,
+        packages,
+        cfgs,
+        index: cfgs.iter().map(|(id, cfg)| (cfg.key, id)).collect(),
+        depth: BTreeMap::new(),
+        parent: BTreeMap::new(),
+        overflow: BTreeMap::new(),
+        queue: VecDeque::new(),
+        edge_cache: BTreeMap::new(),
+        extra_cfgs: BTreeMap::new(),
+        table_spans: BTreeMap::new(),
+        not_implemented: Vec::new(),
+    };
+    d.add_roots(roots);
+    d.run();
+    d.finish()
+}
+
+/// A resolved function reference: the body's definition, its source, the impl's
+/// arguments, the concrete `Self`, and the interface's own arguments.
+type ResolvedFn = (DefId, FnSource, Vec<GenericArg>, TypeId, Vec<GenericArg>);
+
+struct Discovery<'a> {
+    sources: &'a Sources,
+    sema: &'a Sema,
+    decls: &'a mut Declarations,
+    bodies: &'a Bodies,
+    cfgs: &'a Cfgs,
+    packages: &'a [ingot_sema::hir::Package],
+    index: BTreeMap<crate::model::CfgKey, CfgId>,
+    depth: BTreeMap<InstanceKey, usize>,
+    /// The use that gave an instance its depth: (parent, span in the parent).
+    parent: BTreeMap<InstanceKey, (InstanceKey, Span)>,
+    /// Instances first reached at depth 65; reported only if no shorter chain exists.
+    overflow: BTreeMap<InstanceKey, (InstanceKey, Span)>,
+    queue: VecDeque<InstanceKey>,
+    /// Edges of one instance, computed on demand.
+    edge_cache: BTreeMap<InstanceKey, Vec<(InstanceKey, Span)>>,
+    /// CFGs lowered on demand for a `const` or `static` root.
+    extra_cfgs: BTreeMap<crate::model::CfgKey, Cfg>,
+    /// The source span of a method table, for its methods' `instantiation` labels.
+    table_spans: BTreeMap<InstanceKey, Span>,
+    not_implemented: Vec<String>,
+}
+
+impl<'a> Discovery<'a> {
+    fn empty(&self) -> Subst {
+        Subst::new()
+    }
+
+    /// Whether a body has generic parameters of its own or of its impl. `Self` of a
+    /// concrete impl is fixed and does not make the body generic.
+    fn body_is_generic(&self, owner: DefId) -> bool {
+        let mut generic = !self.decls.generics_of(owner).is_empty();
+        if let Some(parent) = self.sema.def(owner).parent
+            && self.sema.def(parent).kind == DefKind::Impl
+        {
+            generic |= !self.decls.generics_of(parent).is_empty();
+        }
+        generic
+    }
+
+    /// The root's `Self` binding, when an impl or interface fixes it.
+    fn root_subst(&self, owner: DefId) -> Subst {
+        let mut subst = Subst::new();
+        if let Some(parent) = self.sema.def(owner).parent
+            && self.sema.def(parent).kind == DefKind::Impl
+            && let Some(sig) = self.decls.impl_sig(parent)
+        {
+            subst.insert(sig.self_def, GenericArg::Ty(sig.target));
+        }
+        subst
+    }
+
+    fn add_roots(&mut self, roots: Roots) {
+        if roots == Roots::Check {
+            for body in self.bodies.bodies.values() {
+                if matches!(
+                    body.kind,
+                    ingot_sema::typed::BodyKind::Const | ingot_sema::typed::BodyKind::Static
+                ) {
+                    self.insert_root(InstanceKey {
+                        owner: body.owner,
+                        body: InstanceBody::Item,
+                        subst: self.empty(),
+                    });
+                }
+            }
+        }
+        for (_, cfg) in self.cfgs.iter() {
+            if cfg.key.body != BodyKey::Item {
+                continue;
+            }
+            let owner = cfg.key.owner;
+            if self.body_is_generic(owner) {
+                continue;
+            }
+            let kind = self.sema.def(owner).kind;
+            let sig = self.decls.fn_sig(owner);
+            let yes = match roots {
+                Roots::Check => matches!(kind, DefKind::Fn | DefKind::Test { .. }),
+                Roots::Build => {
+                    matches!(kind, DefKind::Fn)
+                        && (sig.is_some_and(|s| s.mods.export)
+                            || self.sema.def(owner).name == "main")
+                }
+                Roots::Test => matches!(kind, DefKind::Test { .. }),
+            };
+            if yes {
+                let key = InstanceKey {
+                    owner,
+                    body: InstanceBody::Item,
+                    subst: self.root_subst(owner),
+                };
+                self.insert_root(key);
+            }
+        }
+    }
+
+    fn insert_root(&mut self, key: InstanceKey) {
+        if self.depth.contains_key(&key) {
+            return;
+        }
+        self.depth.insert(key.clone(), 0);
+        self.queue.push_back(key);
+    }
+
+    fn run(&mut self) {
+        while let Some(key) = self.queue.pop_front() {
+            let depth = self.depth[&key];
+            if depth > 64 {
+                continue;
+            }
+            let edges = self.edges(&key);
+            for (child, span) in edges {
+                let nd = depth + 1;
+                if nd > 64 {
+                    self.overflow.entry(child).or_insert((key.clone(), span));
+                    continue;
+                }
+                match self.depth.get(&child).copied() {
+                    None => {
+                        self.depth.insert(child.clone(), nd);
+                        self.parent.insert(child.clone(), (key.clone(), span));
+                        self.queue.push_back(child);
+                    }
+                    Some(old) if nd < old => {
+                        self.depth.insert(child.clone(), nd);
+                        self.parent.insert(child.clone(), (key.clone(), span));
+                        self.queue.push_back(child);
+                    }
+                    Some(old) if nd == old => {
+                        let better = self.parent.get(&child).is_none_or(|(p, _)| key < *p);
+                        if better {
+                            self.parent.insert(child, (key.clone(), span));
+                        }
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+
+    fn finish(mut self) -> Instances {
+        let mut diagnostics = Vec::new();
+        // E0809 for an instance that only ever appeared at depth 65.
+        for (child, (parent, span)) in std::mem::take(&mut self.overflow) {
+            if self.depth.contains_key(&child) {
+                continue;
+            }
+            let source = self.sources.get(self.file_of(parent.owner));
+            let mut d = Diagnostic::new(
+                "E0809",
+                "this instance is more than 64 instantiations deep".to_string(),
+                source,
+                span,
+            );
+            self.add_chain(&mut d, &parent, span);
+            diagnostics.push(d);
+        }
+        let mut instances: Vec<Instance> = self
+            .depth
+            .iter()
+            .map(|(key, depth)| Instance {
+                key: key.clone(),
+                depth: *depth,
+                mangled: self.mangle(key),
+            })
+            .collect();
+        instances.sort_by(|a, b| a.mangled.cmp(&b.mangled));
+        Instances {
+            instances,
+            diagnostics,
+            not_implemented: self.not_implemented,
+        }
+    }
+
+    /// The `instantiation` labels of the shortest chain, innermost first.
+    fn add_chain(&self, d: &mut Diagnostic, parent: &InstanceKey, span: Span) {
+        let mut labels = Vec::new();
+        let mut cur = Some(parent.clone());
+        let mut at = span;
+        while let Some(key) = cur {
+            labels.push((self.file_of(key.owner), at));
+            let Some((p, s)) = self.parent.get(&key) else {
+                break;
+            };
+            cur = Some(p.clone());
+            at = *s;
+        }
+        // `labels` starts with the innermost use, as diagnostics.md §1 asks.
+        for (file, span) in labels {
+            let source = self.sources.get(file);
+            d.relate_in("instantiation", &source.path, span);
+        }
+    }
+
+    fn file_of(&self, def: DefId) -> usize {
+        self.sema.def(def).file.unwrap_or(0)
+    }
+
+    /// The generic parameters of a body, in written order: an impl's or interface's
+    /// parameters and `Self`, then the function's own.
+    fn body_params(&self, owner: DefId) -> Vec<DefId> {
+        let mut out = Vec::new();
+        if let Some(parent) = self.sema.def(owner).parent {
+            match self.sema.def(parent).kind {
+                DefKind::Impl => {
+                    out.extend(self.decls.generics_of(parent).iter().map(|g| g.def));
+                    if let Some(sig) = self.decls.impl_sig(parent) {
+                        out.push(sig.self_def);
+                    }
+                }
+                DefKind::Interface => {
+                    out.extend(self.decls.generics_of(parent).iter().map(|g| g.def));
+                    if let Some(sig) = self.decls.interface_sig(parent) {
+                        out.push(sig.self_def);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.extend(self.decls.generics_of(owner).iter().map(|g| g.def));
+        out
+    }
+
+    /// The CFG key and CFG of one instance body, when it has one.
+    fn cfg_of(&self, key: &InstanceKey) -> Option<(crate::model::CfgKey, CfgId, &Cfg)> {
+        let body = match key.body {
+            InstanceBody::Item => BodyKey::Item,
+            InstanceBody::Closure(e) => BodyKey::Closure(e),
+            InstanceBody::ParFor(s) => BodyKey::ParFor(s),
+            _ => return None,
+        };
+        let k = crate::model::CfgKey {
+            owner: key.owner,
+            body,
+        };
+        if let Some(id) = self.index.get(&k).copied() {
+            return Some((k, id, self.cfgs.get(id)));
+        }
+        self.extra_cfgs.get(&k).map(|c| (k, CfgId(u32::MAX), c))
+    }
+
+    fn edges(&mut self, key: &InstanceKey) -> Vec<(InstanceKey, Span)> {
+        if let Some(edges) = self.edge_cache.get(key) {
+            return edges.clone();
+        }
+        let mut edges = Vec::new();
+        if let InstanceBody::MethodTable {
+            ty,
+            interface,
+            args,
+        } = &key.body
+        {
+            let span = self.table_spans.get(key).copied().unwrap_or_default();
+            self.method_table_edges(*ty, *interface, args, span, &mut edges);
+            self.edge_cache.insert(key.clone(), edges.clone());
+            return edges;
+        }
+        if self.cfg_of(key).is_none() {
+            self.lower_extra(key.owner);
+        }
+        let Some((_, _, cfg)) = self.cfg_of(key).map(|(k, id, c)| (k, id, c.clone())) else {
+            return edges;
+        };
+        let subst = key.subst.clone();
+        for (block_index, block) in cfg.blocks.iter().enumerate() {
+            let span = block.term_span;
+            match &block.term {
+                Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
+                    self.call_edges(key.owner, &cfg, &subst, target, span, &mut edges);
+                    if let Terminator::Spawn { target, .. } = &block.term
+                        && self.spawn_needs_thunk(target)
+                    {
+                        edges.push((
+                            InstanceKey {
+                                owner: key.owner,
+                                body: InstanceBody::SpawnThunk {
+                                    block: block_index as u32,
+                                    index: 0,
+                                },
+                                subst: subst.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                }
+                Terminator::ParFor { body, .. } => {
+                    let Some((_, _, child_cfg)) = self.cfg_by_id(*body) else {
+                        continue;
+                    };
+                    edges.push((
+                        InstanceKey {
+                            owner: key.owner,
+                            body: match child_cfg.key.body {
+                                BodyKey::Closure(e) => InstanceBody::Closure(e),
+                                BodyKey::ParFor(s) => InstanceBody::ParFor(s),
+                                BodyKey::Item => InstanceBody::Item,
+                            },
+                            subst: subst.clone(),
+                        },
+                        span,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        // Coercions, function values and closure method tables in this body.
+        let Some(body) = self.bodies.bodies.get(&key.owner).cloned() else {
+            self.edge_cache.insert(key.clone(), edges.clone());
+            return edges;
+        };
+        for (e, info) in &body.exprs {
+            let span = self.body_expr_span(&body, *e);
+            if let Some(c) = &info.coerce {
+                let ty = self.decls.instantiate(c.self_ty, &subst);
+                let args: Vec<GenericArg> = c
+                    .interface_args
+                    .iter()
+                    .map(|a| self.decls.types.subst_arg(a, &subst))
+                    .collect();
+                let table = InstanceKey {
+                    owner: c.interface,
+                    body: InstanceBody::MethodTable {
+                        ty,
+                        interface: c.interface,
+                        args,
+                    },
+                    subst: Subst::new(),
+                };
+                self.table_spans.insert(table.clone(), span);
+                edges.push((table, span));
+            }
+            if let Some(fd) = &info.fn_dyn {
+                self.closure_and_fn_table(key.owner, fd, &subst, span, &mut edges);
+            }
+            if let ExprRes::Fn(fn_ref) = &info.res
+                && let Some((child, _)) = self.callee(fn_ref, &subst)
+            {
+                edges.push((child, span));
+            }
+        }
+        self.edge_cache.insert(key.clone(), edges.clone());
+        edges
+    }
+
+    fn body_expr_span(
+        &self,
+        body: &ingot_sema::typed::TypedBody,
+        e: ingot_sema::hir::ExprId,
+    ) -> Span {
+        self.packages
+            .get(body.package)
+            .and_then(|pkg| pkg.exprs.get(e.0 as usize).map(|x| x.span))
+            .unwrap_or_default()
+    }
+
+    /// The type of a value operand in a CFG, before substitution.
+    fn operand_type(&self, cfg: &Cfg, op: &Operand) -> Option<TypeId> {
+        let Operand::Place(p, _) = op else {
+            return None;
+        };
+        match &p.base {
+            PlaceBase::Local(l) => cfg.locals.get(*l as usize).map(|l| l.ty),
+            PlaceBase::Static(d) => match self.decls.items.get(d) {
+                Some(ItemSig::Static(s)) => Some(s.ty),
+                _ => None,
+            },
+        }
+    }
+
+    /// A closure instance from a `Closure(owner, index, args)` type.
+    fn closure_instance(&self, ty: TypeId) -> Option<InstanceKey> {
+        let TyKind::Closure(owner, index, args) = self.decls.types.kind(ty).clone() else {
+            if let TyKind::Ref(_, inner) = self.decls.types.kind(ty) {
+                return self.closure_instance(*inner);
+            }
+            return None;
+        };
+        let params = self.body_params(owner);
+        let mut subst = Subst::new();
+        for (p, a) in params.into_iter().zip(args) {
+            subst.insert(p, a);
+        }
+        Some(InstanceKey {
+            owner,
+            body: InstanceBody::Closure(ingot_sema::hir::ExprId(index)),
+            subst,
+        })
+    }
+
+    fn closure_and_fn_table(
+        &mut self,
+        owner: DefId,
+        fd: &FnDynCoercion,
+        subst: &Subst,
+        span: Span,
+        out: &mut Vec<(InstanceKey, Span)>,
+    ) {
+        let ty = self.decls.instantiate(fd.self_ty, subst);
+        if let Some(child) = self.closure_instance(ty) {
+            out.push((child, span));
+        }
+        let key = InstanceKey {
+            owner,
+            body: InstanceBody::DynFnTable { ty, kind: fd.kind },
+            subst: Subst::new(),
+        };
+        out.push((key, span));
+    }
+
+    /// The method bodies a `&dyn I` table refers to, as instances.
+    fn method_table_edges(
+        &mut self,
+        ty: TypeId,
+        interface: DefId,
+        args: &[GenericArg],
+        span: Span,
+        out: &mut Vec<(InstanceKey, Span)>,
+    ) {
+        let Some(sig) = self.decls.interface_sig(interface).cloned() else {
+            return;
+        };
+        let Some((_, _, matched)) = self
+            .decls
+            .interface_impls(ty)
+            .into_iter()
+            .find(|(i, _, _)| *i == interface)
+        else {
+            return;
+        };
+        let Some(impl_sig) = self.decls.impl_sig(matched.impl_def).cloned() else {
+            return;
+        };
+        let mut base = Subst::new();
+        for g in self.decls.generics_of(matched.impl_def) {
+            if let Some(a) = matched.subst.get(g.def) {
+                base.insert(g.def, a.clone());
+            }
+        }
+        base.insert(impl_sig.self_def, GenericArg::Ty(ty));
+        let iface_params: Vec<DefId> = self
+            .decls
+            .generics_of(interface)
+            .iter()
+            .map(|g| g.def)
+            .collect();
+        for (p, a) in iface_params.into_iter().zip(args.iter().cloned()) {
+            base.insert(p, a);
+        }
+        if let Some(iface_sig) = self.decls.interface_sig(interface) {
+            base.insert(iface_sig.self_def, GenericArg::Ty(ty));
+        }
+        for method in &sig.methods {
+            let name = self.sema.def(*method).name.clone();
+            let def = impl_sig.methods.get(&name).copied().unwrap_or(*method);
+            out.push((
+                InstanceKey {
+                    owner: def,
+                    body: InstanceBody::Item,
+                    subst: self.canonical_subst(def, &base),
+                },
+                span,
+            ));
+        }
+    }
+
+    fn lower_extra(&mut self, owner: DefId) {
+        if self.extra_cfgs.keys().any(|k| k.owner == owner) {
+            return;
+        }
+        let Some(body) = self.bodies.bodies.get(&owner).cloned() else {
+            return;
+        };
+        if !matches!(
+            body.kind,
+            ingot_sema::typed::BodyKind::Const | ingot_sema::typed::BodyKind::Static
+        ) {
+            return;
+        }
+        if let Ok(cfgs) =
+            crate::lower_for_eval(self.sources, self.sema, self.packages, self.decls, &body)
+        {
+            for (_, cfg) in cfgs.iter() {
+                self.extra_cfgs.insert(cfg.key, cfg.clone());
+            }
+        }
+    }
+
+    fn cfg_by_id(&self, id: CfgId) -> Option<(crate::model::CfgKey, CfgId, &Cfg)> {
+        self.cfgs
+            .has(id)
+            .then(|| (self.cfgs.get(id).key, id, self.cfgs.get(id)))
+    }
+
+    fn spawn_needs_thunk(&self, target: &CallTarget) -> bool {
+        match target {
+            CallTarget::Fn { fn_ref, .. } => !fn_ref.args.is_empty(),
+            CallTarget::Value { kind, .. } => matches!(kind, ValueKind::Closure(_)),
+        }
+    }
+
+    fn call_edges(
+        &mut self,
+        owner: DefId,
+        cfg: &Cfg,
+        caller: &Subst,
+        target: &CallTarget,
+        span: Span,
+        out: &mut Vec<(InstanceKey, Span)>,
+    ) {
+        match target {
+            CallTarget::Fn { fn_ref, .. } => {
+                if let Some((key, _)) = self.callee(fn_ref, caller) {
+                    out.push((key, span));
+                }
+            }
+            CallTarget::Value { kind, callee, .. } => {
+                if let ValueKind::Closure(e) = kind {
+                    // The closure body uses its owner's arguments.
+                    out.push((
+                        InstanceKey {
+                            owner,
+                            body: InstanceBody::Closure(*e),
+                            subst: caller.clone(),
+                        },
+                        span,
+                    ));
+                } else if let Some(ty) = self.operand_type(cfg, callee) {
+                    // A call through `F: Fn`: the actual value is a closure type.
+                    let ty = self.decls.instantiate(ty, caller);
+                    if let Some(child) = self.closure_instance(ty) {
+                        out.push((child, span));
+                    }
+                }
+            }
+        }
+    }
+
+    fn callee(&mut self, fn_ref: &FnRef, caller: &Subst) -> Option<(InstanceKey, Span)> {
+        let (def, source, impl_args, _self_ty, _iface_args) = self.resolve_fn(fn_ref, caller)?;
+        let mut subst = Subst::new();
+        // The source supplies the impl's or interface's arguments; the method's own
+        // arguments are in `fn_ref.args`.
+        match &source {
+            FnSource::Inherent { impl_def, .. } => {
+                if let Some(sig) = self.decls.impl_sig(*impl_def).cloned() {
+                    let impl_params: Vec<DefId> = self
+                        .decls
+                        .generics_of(*impl_def)
+                        .iter()
+                        .map(|g| g.def)
+                        .collect();
+                    let mapped: Vec<GenericArg> = impl_args
+                        .iter()
+                        .map(|a| self.decls.types.subst_arg(a, caller))
+                        .collect();
+                    for (p, a) in impl_params.into_iter().zip(mapped) {
+                        subst.insert(p, a);
+                    }
+                    let base = subst.clone();
+                    let target = self.decls.instantiate(sig.target, &base);
+                    subst.insert(sig.self_def, GenericArg::Ty(target));
+                }
+            }
+            FnSource::Interface {
+                interface,
+                interface_args,
+                self_ty,
+                via,
+            } => {
+                let self_ty = self.decls.instantiate(*self_ty, caller);
+                let iface_params: Vec<DefId> = self
+                    .decls
+                    .generics_of(*interface)
+                    .iter()
+                    .map(|g| g.def)
+                    .collect();
+                let mapped: Vec<GenericArg> = interface_args
+                    .iter()
+                    .map(|a| self.decls.types.subst_arg(a, caller))
+                    .collect();
+                for (p, a) in iface_params.into_iter().zip(mapped) {
+                    subst.insert(p, a);
+                }
+                if let Some(self_def) = self.decls.interface_sig(*interface).map(|sig| sig.self_def)
+                {
+                    subst.insert(self_def, GenericArg::Ty(self_ty));
+                }
+                if let InterfaceVia::Impl { impl_def, .. } = via
+                    && let Some(sig) = self.decls.impl_sig(*impl_def).cloned()
+                {
+                    let impl_params: Vec<DefId> = self
+                        .decls
+                        .generics_of(*impl_def)
+                        .iter()
+                        .map(|g| g.def)
+                        .collect();
+                    let mapped: Vec<GenericArg> = impl_args
+                        .iter()
+                        .map(|a| self.decls.types.subst_arg(a, caller))
+                        .collect();
+                    for (p, a) in impl_params.into_iter().zip(mapped) {
+                        subst.insert(p, a);
+                    }
+                    let base = subst.clone();
+                    let target = self.decls.instantiate(sig.target, &base);
+                    subst.insert(sig.self_def, GenericArg::Ty(target));
+                }
+            }
+            FnSource::Free => {}
+        }
+        let method_mapped: Vec<GenericArg> = fn_ref
+            .args
+            .iter()
+            .map(|a| self.decls.types.subst_arg(a, caller))
+            .collect();
+        let env = subst.clone();
+        let method_params: Vec<DefId> = self.decls.generics_of(def).iter().map(|g| g.def).collect();
+        for (p, a) in method_params.into_iter().zip(method_mapped) {
+            let a = match a {
+                GenericArg::Ty(t) => GenericArg::Ty(self.decls.types.subst(t, &env)),
+                GenericArg::Const(c) => GenericArg::Const(subst_const(c, &env)),
+            };
+            subst.insert(p, a);
+        }
+        let key = InstanceKey {
+            owner: def,
+            body: InstanceBody::Item,
+            subst: self.canonical_subst(def, &subst),
+        };
+        Some((key, Span::empty(0)))
+    }
+
+    /// The body and its bindings for a function or method reference, resolving a
+    /// `Bound` or `Dyn` interface method to the impl's.
+    fn resolve_fn(&mut self, fn_ref: &FnRef, caller: &Subst) -> Option<ResolvedFn> {
+        match &fn_ref.source {
+            FnSource::Interface {
+                interface,
+                interface_args,
+                self_ty,
+                via: InterfaceVia::Bound | InterfaceVia::Dyn,
+            } => {
+                let self_ty = self.decls.instantiate(*self_ty, caller);
+                let name = self.sema.def(fn_ref.def).name.clone();
+                let mut found = None;
+                for imp in self
+                    .decls
+                    .impls
+                    .by_interface
+                    .get(interface)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let Some(sig) = self.decls.impl_sig(imp).cloned() else {
+                        continue;
+                    };
+                    let Some(m) = self.decls.match_impl(imp, self_ty) else {
+                        continue;
+                    };
+                    if self.decls.impl_bounds_hold(&m) == ingot_sema::sigs::Tri::No {
+                        continue;
+                    }
+                    let method = sig.methods.get(&name).copied().unwrap_or(fn_ref.def);
+                    let impl_args = self.args_for(imp, &m.subst);
+                    found = Some((method, impl_args, self_ty, interface_args.clone()));
+                    break;
+                }
+                let (def, impl_args, self_ty, interface_args) = found?;
+                Some((
+                    def,
+                    FnSource::Interface {
+                        interface: *interface,
+                        interface_args,
+                        self_ty,
+                        via: InterfaceVia::Impl {
+                            impl_def: self.decls.fn_sig(def)?.parent?,
+                            impl_args: impl_args.clone(),
+                        },
+                    },
+                    impl_args,
+                    self_ty,
+                    Vec::new(),
+                ))
+            }
+            FnSource::Inherent {
+                impl_def,
+                impl_args,
+            } => Some((
+                fn_ref.def,
+                fn_ref.source.clone(),
+                impl_args.clone(),
+                self.decls
+                    .impl_sig(*impl_def)
+                    .map(|s| s.target)
+                    .unwrap_or(self.decls.types.void),
+                Vec::new(),
+            )),
+            FnSource::Interface {
+                interface: _,
+                interface_args,
+                self_ty,
+                via: InterfaceVia::Impl { impl_args, .. },
+            } => Some((
+                fn_ref.def,
+                fn_ref.source.clone(),
+                impl_args.clone(),
+                *self_ty,
+                interface_args.clone(),
+            )),
+            FnSource::Free => Some((
+                fn_ref.def,
+                fn_ref.source.clone(),
+                Vec::new(),
+                self.decls.types.void,
+                Vec::new(),
+            )),
+            _ => Some((
+                fn_ref.def,
+                fn_ref.source.clone(),
+                Vec::new(),
+                self.decls.types.void,
+                Vec::new(),
+            )),
+        }
+    }
+
+    fn args_for(&self, owner: DefId, subst: &Subst) -> Vec<GenericArg> {
+        self.decls
+            .generics_of(owner)
+            .iter()
+            .map(|g| {
+                subst
+                    .get(g.def)
+                    .cloned()
+                    .unwrap_or(GenericArg::Const(ConstArg::Poison))
+            })
+            .collect()
+    }
+
+    /// Keep only the parameters the body can name, so one body with one set of
+    /// effective arguments has one key whichever call path reached it.
+    fn canonical_subst(&self, owner: DefId, subst: &Subst) -> Subst {
+        let mut out = Subst::new();
+        for p in self.body_params(owner) {
+            if let Some(a) = subst.get(p) {
+                out.insert(p, a.clone());
+            }
+        }
+        out
+    }
+
+    fn mangle(&self, key: &InstanceKey) -> String {
+        let def = self.sema.def(key.owner);
+        let module = self.sema.module(def.module);
+        let package = self
+            .sema
+            .packages
+            .get(module.package.0 as usize)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let mut out = String::from("_I");
+        out.push_str(&seg(&package));
+        out.push_str(&seg(&module.path));
+        let mut item = item_path(self.sema, self.decls, key.owner);
+        match &key.body {
+            InstanceBody::Item => {}
+            InstanceBody::Closure(e) => item.push_str(&format!(".{{closure {}}}", e.0)),
+            InstanceBody::ParFor(s) => item.push_str(&format!(".{{par for {}}}", s.0)),
+            InstanceBody::MethodTable {
+                ty,
+                interface,
+                args,
+            } => {
+                item = format!(
+                    "{{method table {} {}{}}}",
+                    spell_type(self.decls, self.sema, *ty),
+                    item_path(self.sema, self.decls, *interface),
+                    spell_args(self.decls, self.sema, args)
+                );
+            }
+            InstanceBody::DynFnTable { ty, kind } => {
+                item = format!(
+                    "{{fn table {} {:?}}}",
+                    spell_type(self.decls, self.sema, *ty),
+                    kind
+                );
+            }
+            InstanceBody::SpawnThunk { block, index } => {
+                item.push_str(&format!(".{{spawn {block}.{index}}}"));
+            }
+        }
+        out.push_str(&seg(&item));
+        for arg in key.subst.map.values() {
+            out.push_str(&seg(&spell_arg(self.decls, self.sema, arg)));
+        }
+        out
+    }
+}
+
+/// The mangled spelling of a type, for the one-to-one test below.
+pub fn mangled_type(decls: &Declarations, sema: &Sema, ty: TypeId) -> String {
+    spell_type(decls, sema, ty)
+}
+
+fn seg(s: &str) -> String {
+    format!("{}:{}", s.len(), s)
+}
+
+fn item_path(sema: &Sema, decls: &Declarations, def: DefId) -> String {
+    let d = sema.def(def);
+    if matches!(d.kind, DefKind::GenericParam { .. } | DefKind::SelfTy) {
+        return sema.qualified_name(def);
+    }
+    if let Some(parent) = d.parent {
+        if sema.def(parent).kind == DefKind::Impl
+            && let Some(sig) = decls.impl_sig(parent)
+        {
+            return format!("{}.{}", spell_type(decls, sema, sig.target), d.name);
+        }
+        if sema.def(parent).kind == DefKind::Interface {
+            return format!("{}.{}", item_path(sema, decls, parent), d.name);
+        }
+    }
+    sema.qualified_name(def)
+}
+
+fn spell_args(decls: &Declarations, sema: &Sema, args: &[GenericArg]) -> String {
+    let mut out = String::new();
+    for a in args {
+        out.push('[');
+        out.push_str(&spell_arg(decls, sema, a));
+        out.push(']');
+    }
+    out
+}
+
+fn spell_arg(decls: &Declarations, sema: &Sema, arg: &GenericArg) -> String {
+    match arg {
+        GenericArg::Ty(t) => spell_type(decls, sema, *t),
+        GenericArg::Const(ConstArg::Value(v)) => match v {
+            ConstValue::Int { ty, value } => format!("c{}{}", ty.name(), value),
+            ConstValue::Bool(b) => format!("cbool{}", u8::from(*b)),
+        },
+        GenericArg::Const(ConstArg::Param(p)) => format!("cp{}", sema.def(*p).name),
+        GenericArg::Const(ConstArg::Poison) => "cp?".to_string(),
+    }
+}
+
+fn spell_type(decls: &Declarations, sema: &Sema, ty: TypeId) -> String {
+    match decls.types.kind(ty) {
+        TyKind::Int(i) => i.name().to_string(),
+        TyKind::Float(f) => f.name().to_string(),
+        TyKind::Bool => "bool".to_string(),
+        TyKind::Void => "void".to_string(),
+        TyKind::Never => "never".to_string(),
+        TyKind::Array(t, n) => format!(
+            "a[{}][{}]",
+            spell_const(decls, sema, n),
+            spell_type(decls, sema, *t)
+        ),
+        TyKind::Tuple(ts) => {
+            let mut out = format!("t{}", ts.len());
+            for t in ts {
+                out.push_str(&spell_type(decls, sema, *t));
+            }
+            out
+        }
+        TyKind::Adt(d, args) => format!(
+            "{}[{}]",
+            item_path(sema, decls, *d),
+            spell_args(decls, sema, args)
+        ),
+        TyKind::Optional(t) => format!("o[{}]", spell_type(decls, sema, *t)),
+        TyKind::Result(a, b) => format!(
+            "r[{}][{}]",
+            spell_type(decls, sema, *a),
+            spell_type(decls, sema, *b)
+        ),
+        TyKind::Ref(m, t) => format!(
+            "{}[{}]",
+            if *m == ingot_sema::ty::Mutability::Mut {
+                "bm"
+            } else {
+                "b"
+            },
+            spell_type(decls, sema, *t)
+        ),
+        TyKind::Slice(m, t) => format!(
+            "{}[{}]",
+            if *m == ingot_sema::ty::Mutability::Mut {
+                "sm"
+            } else {
+                "s"
+            },
+            spell_type(decls, sema, *t)
+        ),
+        TyKind::RawPtr(m, t) => format!(
+            "{}[{}]",
+            if *m == ingot_sema::ty::Mutability::Mut {
+                "pm"
+            } else {
+                "p"
+            },
+            spell_type(decls, sema, *t)
+        ),
+        TyKind::FnPtr(sig) => spell_sig("f", sig, decls, sema),
+        TyKind::Dyn(_, d, args) => format!(
+            "d[{}][{}]",
+            item_path(sema, decls, *d),
+            spell_args(decls, sema, args)
+        ),
+        TyKind::DynFn(m, k, sig) => format!(
+            "{}[{:?}]{}",
+            if *m == ingot_sema::ty::Mutability::Mut {
+                "dfm"
+            } else {
+                "df"
+            },
+            k,
+            spell_sig("", sig, decls, sema)
+        ),
+        TyKind::Vector(l, n) => format!("v[{}][{}]", l.name(), n),
+        TyKind::Mask(n) => format!("m[{n}]"),
+        TyKind::Param(p) => format!("g[{}]", item_path(sema, decls, *p)),
+        TyKind::Projection(t, d) => {
+            format!("x[{}][{}]", spell_type(decls, sema, *t), sema.def(*d).name)
+        }
+        TyKind::Closure(d, i, args) => format!(
+            "c[{}][{}][{}]",
+            item_path(sema, decls, *d),
+            i,
+            spell_args(decls, sema, args)
+        ),
+        TyKind::Poison => "?".to_string(),
+    }
+}
+
+fn spell_sig(
+    prefix: &str,
+    sig: &ingot_sema::ty::FnPtrSig,
+    decls: &Declarations,
+    sema: &Sema,
+) -> String {
+    let mut out = format!("{}[{}]", prefix, if sig.ext { "x" } else { "c" });
+    out.push_str(&format!("[{}]", sig.params.len()));
+    for p in &sig.params {
+        out.push('[');
+        out.push_str(&spell_type(decls, sema, *p));
+        out.push(']');
+    }
+    out.push('[');
+    out.push_str(&spell_type(decls, sema, sig.ret));
+    out.push(']');
+    out.push('[');
+    out.push_str(
+        &sig.error
+            .map(|e| spell_type(decls, sema, e))
+            .unwrap_or_else(|| "n".to_string()),
+    );
+    out.push(']');
+    out
+}
+
+fn spell_const(decls: &Declarations, sema: &Sema, c: &ConstArg) -> String {
+    match c {
+        ConstArg::Value(ConstValue::Int { ty, value }) => format!("{}{}", ty.name(), value),
+        ConstArg::Value(ConstValue::Bool(b)) => format!("bool{}", u8::from(*b)),
+        ConstArg::Param(p) => format!("g[{}]", item_path(sema, decls, *p)),
+        ConstArg::Poison => "?".to_string(),
+    }
+}
+
+fn subst_const(c: ConstArg, subst: &Subst) -> ConstArg {
+    match c {
+        ConstArg::Param(p) => match subst.get(p) {
+            Some(GenericArg::Const(v)) => *v,
+            _ => c,
+        },
+        _ => c,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ingot_sema::ty::{ConstValue, FnPtrSig, IntTy, Mutability, TyKind};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn type_spellings_are_one_to_one() {
+        let mut decls = Declarations::new();
+        let sema = Sema::new();
+        let i64_ = decls.types.int(IntTy::I64);
+        let u8_ = decls.types.int(IntTy::U8);
+        let f_i64 = decls.types.intern(TyKind::FnPtr(FnPtrSig {
+            ext: false,
+            params: vec![i64_],
+            ret: i64_,
+            error: None,
+        }));
+        let f_u8 = decls.types.intern(TyKind::FnPtr(FnPtrSig {
+            ext: false,
+            params: vec![u8_],
+            ret: i64_,
+            error: None,
+        }));
+        let f_ext = decls.types.intern(TyKind::FnPtr(FnPtrSig {
+            ext: true,
+            params: vec![i64_],
+            ret: i64_,
+            error: None,
+        }));
+        let r = decls.types.intern(TyKind::Ref(Mutability::Shared, i64_));
+        let rm = decls.types.intern(TyKind::Ref(Mutability::Mut, i64_));
+        let s = decls.types.intern(TyKind::Slice(Mutability::Shared, i64_));
+        let sm = decls.types.intern(TyKind::Slice(Mutability::Mut, i64_));
+        let t1 = decls.types.intern(TyKind::Tuple(vec![i64_, i64_]));
+        let inner = decls.types.intern(TyKind::Tuple(vec![i64_, i64_]));
+        let t2 = decls.types.intern(TyKind::Tuple(vec![i64_, inner]));
+        let a64 = decls.types.intern(TyKind::Array(
+            i64_,
+            ConstArg::Value(ConstValue::Int {
+                ty: IntTy::I64,
+                value: 2,
+            }),
+        ));
+        let a8 = decls.types.intern(TyKind::Array(
+            u8_,
+            ConstArg::Value(ConstValue::Int {
+                ty: IntTy::U8,
+                value: 2,
+            }),
+        ));
+        let all = [i64_, u8_, f_i64, f_u8, f_ext, r, rm, s, sm, t1, t2, a64, a8];
+        let names: BTreeSet<String> = all
+            .iter()
+            .map(|t| mangled_type(&decls, &sema, *t))
+            .collect();
+        assert_eq!(names.len(), all.len());
+    }
+}

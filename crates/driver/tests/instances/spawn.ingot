@@ -1,0 +1,9 @@
+fn work[T](x: T) -> void {
+    @forget(x);
+}
+
+fn run() -> void {
+    scope s {
+        spawn work(1) in s;
+    }
+}

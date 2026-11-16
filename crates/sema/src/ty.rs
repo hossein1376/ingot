@@ -246,15 +246,25 @@ pub enum TyKind {
     /// constant, or test) whose body contains it, and the index of the closure's
     /// expression in that package's arena. Its signature and captures are in the typed
     /// body (`typed::ClosureInfo`).
-    Closure(DefId, u32),
+    Closure(DefId, u32, Vec<GenericArg>),
     /// The type of something that failed to type-check. Reports nothing downstream.
     Poison,
 }
 
 /// A mapping from generic parameters to arguments.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subst {
     pub map: BTreeMap<DefId, GenericArg>,
+}
+
+fn subst_const(c: ConstArg, s: &Subst) -> ConstArg {
+    match c {
+        ConstArg::Param(p) => match s.get(p) {
+            Some(GenericArg::Const(v)) => *v,
+            _ => c,
+        },
+        _ => c,
+    }
 }
 
 impl Subst {
@@ -362,7 +372,9 @@ impl TypeTable {
             | TyKind::RawPtr(_, t)
             | TyKind::Projection(t, _) => out.push(*t),
             TyKind::Tuple(ts) => out.extend(ts.iter().copied()),
-            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) => args(&mut out, a),
+            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) | TyKind::Closure(_, _, a) => {
+                args(&mut out, a)
+            }
             TyKind::Result(a, b) => {
                 out.push(*a);
                 out.push(*b);
@@ -383,7 +395,7 @@ impl TypeTable {
         self.any(id, &mut seen, &mut |k| match k {
             TyKind::Poison => true,
             TyKind::Array(_, ConstArg::Poison) => true,
-            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) => a
+            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) | TyKind::Closure(_, _, a) => a
                 .iter()
                 .any(|g| matches!(g, GenericArg::Const(ConstArg::Poison))),
             _ => false,
@@ -396,7 +408,7 @@ impl TypeTable {
         self.any(id, &mut seen, &mut |k| match k {
             TyKind::Param(_) => true,
             TyKind::Array(_, ConstArg::Param(_)) => true,
-            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) => a
+            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) | TyKind::Closure(_, _, a) => a
                 .iter()
                 .any(|g| matches!(g, GenericArg::Const(ConstArg::Param(_)))),
             _ => false,
@@ -444,6 +456,10 @@ impl TypeTable {
             TyKind::Dyn(m, d, a) => {
                 let a = self.fold_args(a, f);
                 TyKind::Dyn(m, d, a)
+            }
+            TyKind::Closure(d, i, a) => {
+                let a = self.fold_args(a, f);
+                TyKind::Closure(d, i, a)
             }
             TyKind::Projection(t, d) => TyKind::Projection(self.fold(t, f), d),
             other => other,
@@ -523,6 +539,16 @@ impl TypeTable {
             TyKind::RawPtr(m, t) => TyKind::RawPtr(m, self.subst_consts(t, s)),
             TyKind::FnPtr(sig) => TyKind::FnPtr(self.subst_sig_consts(sig, s)),
             TyKind::DynFn(m, k, sig) => TyKind::DynFn(m, k, self.subst_sig_consts(sig, s)),
+            TyKind::Closure(d, i, args) => TyKind::Closure(
+                d,
+                i,
+                args.into_iter()
+                    .map(|a| match a {
+                        GenericArg::Ty(t) => GenericArg::Ty(self.subst(t, s)),
+                        GenericArg::Const(c) => GenericArg::Const(subst_const(c, s)),
+                    })
+                    .collect(),
+            ),
             TyKind::Projection(t, d) => TyKind::Projection(self.subst_consts(t, s), d),
             other => other,
         };

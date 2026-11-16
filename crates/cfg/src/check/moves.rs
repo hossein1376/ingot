@@ -1490,7 +1490,7 @@ impl<'a> Cx<'a> {
 
     fn children(&mut self, ty: TypeId) -> Vec<(Step, TypeId)> {
         match self.kind(ty) {
-            TyKind::Closure(_, _) if self.cfg.closure_ty == Some(ty) => self
+            TyKind::Closure(..) if self.cfg.closure_ty == Some(ty) => self
                 .cfg
                 .closure_fields
                 .iter()

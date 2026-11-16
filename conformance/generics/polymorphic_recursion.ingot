@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 11
+
+fn grow[T](x: T) -> i64 {
+    return grow((x, 1)); //~ E0809
+}
+
+fn run() -> i64 {
+    return grow(1);
+}

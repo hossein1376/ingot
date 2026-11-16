@@ -61,7 +61,7 @@ impl Checker<'_, '_, '_> {
             if source_m != target_m {
                 return None;
             }
-            let TyKind::Closure(_, idx) = self.kind(inner) else {
+            let TyKind::Closure(_, idx, _) = self.kind(inner) else {
                 return None;
             };
             let c = self.out.closures.get(&ExprId(idx)).cloned()?;

@@ -1,0 +1,11 @@
+fn make[T: Copy + Discard](x: T) -> i64 {
+    let f = fn [x]() -> i64 {
+        _ = x;
+        return 1;
+    };
+    return f();
+}
+
+fn run() -> i64 {
+    return make(7);
+}

@@ -1,0 +1,16 @@
+fn a[T](x: T) -> i64 {
+    return b(x);
+}
+
+fn b[T](x: T) -> i64 {
+    return c(x);
+}
+
+fn c[T](x: T) -> i64 {
+    @forget(x);
+    return 1;
+}
+
+fn run() -> i64 {
+    return a(1);
+}

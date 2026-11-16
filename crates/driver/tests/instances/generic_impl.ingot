@@ -1,0 +1,31 @@
+interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+struct Box[T] { v: T }
+
+impl[T: Copy + Discard] Named for Box[T] {
+    fn name(self: &Box[T]) -> i64 {
+        return 1;
+    }
+}
+
+fn by_bound[T: Named](x: &T) -> i64 {
+    return x.name();
+}
+
+fn by_dyn(x: &dyn Named) -> i64 {
+    return x.name();
+}
+
+fn run() -> i64 {
+    let a = Box[i64].{ v: 1 };
+    let b = Box[bool].{ v: true };
+    let d1 = a.name();
+    let d2 = by_bound(&a);
+    let d3 = by_dyn(&a);
+    let d4 = b.name();
+    let d5 = by_bound(&b);
+    let d6 = by_dyn(&b);
+    return d1 + d2 + d3 + d4 + d5 + d6;
+}

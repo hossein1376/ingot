@@ -1123,7 +1123,7 @@ impl<'a> Evaluator<'a> {
             TyKind::Slice(..) | TyKind::Dyn(..) => 16,
             TyKind::Ref(..) | TyKind::RawPtr(..) | TyKind::FnPtr(_) => 8,
             TyKind::Void | TyKind::Never => 0,
-            TyKind::Closure(owner, expr) => self.closure_size(host, owner, ExprId(expr)),
+            TyKind::Closure(owner, expr, _) => self.closure_size(host, owner, ExprId(expr)),
             _ => {
                 self.context(host);
                 host.layout(ty).map(|l| l.size).unwrap_or(0)

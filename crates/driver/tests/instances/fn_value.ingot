@@ -1,0 +1,15 @@
+fn apply[F: Fn() -> i64](f: F) -> i64 {
+    return f();
+}
+
+fn make[T: Copy + Discard](x: T) -> i64 {
+    return apply(fn [x]() -> i64 {
+        _ = x;
+        return 1;
+    });
+}
+
+fn run() -> i64 {
+    let a = make(1);
+    return a + make(true);
+}

@@ -1,0 +1,11 @@
+fn bump[T](x: T, xs: []mut i64) -> void {
+    @forget(x);
+    par for v in xs {
+        v.* += 1;
+    }
+}
+
+fn run() -> void {
+    var a = [2]i64.{ 1, 2 };
+    bump(0, &mut a[..]);
+}

@@ -20,6 +20,7 @@
 pub mod check;
 pub mod dump;
 pub mod eval;
+pub mod instances;
 mod lower;
 pub mod model;
 pub mod removal;

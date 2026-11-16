@@ -1,0 +1,20 @@
+interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+struct Item { n: i64 }
+
+impl Named for Item {
+    fn name(self: &Item) -> i64 {
+        return self.n;
+    }
+}
+
+fn call[T: Named](x: &T) -> i64 {
+    return x.name();
+}
+
+fn run() -> i64 {
+    let item = Item.{ n: 3 };
+    return call(&item);
+}

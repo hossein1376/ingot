@@ -1,0 +1,17 @@
+fn leaf[T](x: T) -> i64 {
+    @forget(x);
+    return 1;
+}
+
+fn long[T](x: T) -> i64 {
+    return leaf(x);
+}
+
+fn short[T](x: T) -> i64 {
+    return leaf(x);
+}
+
+fn run() -> i64 {
+    let a = long(1);
+    return short(a);
+}

@@ -1,0 +1,7 @@
+fn run() -> i64 {
+    let f = fn []() -> i64 {
+        return 1;
+    };
+    let g: &dyn Fn() -> i64 = &f;
+    return g();
+}

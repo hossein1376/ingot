@@ -1,0 +1,8 @@
+1	_I1:t1:t10:t.by_bound12:t.Box[[i64]]
+1	_I1:t1:t10:t.by_bound13:t.Box[[bool]]
+1	_I1:t1:t25:t.Box[[g[t.impl.T]]].name3:i6412:t.Box[[i64]]
+1	_I1:t1:t25:t.Box[[g[t.impl.T]]].name4:bool13:t.Box[[bool]]
+1	_I1:t1:t35:{method table t.Box[[i64]] t.Named}
+1	_I1:t1:t36:{method table t.Box[[bool]] t.Named}
+0	_I1:t1:t5:t.run
+0	_I1:t1:t8:t.by_dyn

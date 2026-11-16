@@ -1,0 +1,10 @@
+fn make[T](x: T) -> i64 {
+    @forget(x);
+    return 1;
+}
+
+const answer: i64 = make(42);
+
+fn run() -> i64 {
+    return answer;
+}

@@ -1,0 +1,14 @@
+fn twice[T](x: T) -> T {
+    return x;
+}
+
+fn pair[T, U](a: T, b: U) -> T {
+    @forget(b);
+    return a;
+}
+
+fn run() -> i64 {
+    let a = twice(1);
+    let b = pair(a, true);
+    return b;
+}

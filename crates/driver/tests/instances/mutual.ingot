@@ -1,0 +1,14 @@
+fn f[T: Copy + Discard](x: T, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    return g(x, n - 1);
+}
+
+fn g[U: Copy + Discard](y: U, n: i64) -> i64 {
+    return f(y, n);
+}
+
+fn run() -> i64 {
+    return f(1, 3);
+}

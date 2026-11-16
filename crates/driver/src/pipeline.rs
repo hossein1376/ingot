@@ -16,11 +16,9 @@ use crate::files::{self, Files};
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
 use ingot_diag::source::{Source, Sources};
-use ingot_sema::ty::{ConstArg, GenericArg, TyKind};
 use ingot_sema::{ModuleInput, PackageInput, Target};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::{check_operator_mixing, parse};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::Path;
 
@@ -33,6 +31,8 @@ pub struct Options {
     /// One of the three targets of spec section 24.
     pub target: String,
     pub load: LoadOptions,
+    /// The roots phase 11a uses (pipeline §6a).
+    pub roots: ingot_cfg::instances::Roots,
 }
 
 impl Default for Options {
@@ -40,6 +40,7 @@ impl Default for Options {
         Options {
             target: DEFAULT_TARGET.to_string(),
             load: LoadOptions::default(),
+            roots: ingot_cfg::instances::Roots::Check,
         }
     }
 }
@@ -81,6 +82,8 @@ pub struct Analysis {
     pub only_file: Option<String>,
     /// The front end, kept when phases 5 to 7 ran.
     pub front_end: Option<FrontEnd>,
+    /// Phase 11a: the instances of the checked package, sorted by mangled name.
+    pub instances: Vec<ingot_cfg::instances::Instance>,
 }
 
 impl Analysis {
@@ -191,6 +194,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     let mut removed_cfgs = ingot_cfg::Cfgs::default();
     let mut cost = Vec::new();
     let mut front_end = None;
+    let mut instances = Vec::new();
     // With dependencies the imports of their packages cannot be resolved, and
     // reporting every one of them as unresolved would be wrong: stop at what is known.
     if !package.manifest_failed && package.not_implemented.is_empty() {
@@ -260,12 +264,20 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         not_implemented.extend(removal.not_implemented);
         removed_cfgs = removal.cfgs;
         cost = removal.items;
-        // E0809 is a phase-11 diagnostic: a generic body is analysed uninstantiated.
-        // Polymorphic recursion is recorded as the phase-11 entry instead of being
-        // accepted silently.
-        if has_polymorphic_recursion(&bodies.declarations, &cfgs) {
-            not_implemented.push(ingot_sema::PER_INSTANCE_CHECKS.to_string());
-        }
+        // Phase 11a: instance discovery, depth (E0809) and mangled names. Later
+        // per-instance checks run on this set (part 2).
+        let discovered = ingot_cfg::instances::discover(
+            &all,
+            &output.sema,
+            &mut bodies.declarations,
+            &bodies.bodies,
+            &output.packages,
+            &cfgs,
+            options.roots,
+        );
+        diagnostics.extend(discovered.diagnostics);
+        not_implemented.extend(discovered.not_implemented);
+        instances = discovered.instances;
         front_end = Some(FrontEnd {
             resolved: output,
             declarations: bodies.declarations,
@@ -291,6 +303,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         cost,
         only_file: None,
         front_end,
+        instances,
     })
 }
 
@@ -357,155 +370,4 @@ fn package_relative(path: &Path, root: &Path) -> Option<String> {
 /// A source for a diagnostic that has no file: the command line.
 pub fn command_line_source(text: &str) -> Source {
     Source::new("<command line>", text)
-}
-
-/// Whether a package has a call cycle between generic functions that passes a type or
-/// constant argument other than the callee's own parameter unchanged. That is E0809
-/// (instantiation nests more than 64 deep), which only instantiation can decide.
-fn has_polymorphic_recursion(decls: &ingot_sema::Declarations, cfgs: &ingot_cfg::Cfgs) -> bool {
-    use ingot_cfg::model::{CallTarget, Terminator};
-    use ingot_sema::defs::DefId;
-
-    let mut edges: BTreeMap<DefId, BTreeSet<DefId>> = BTreeMap::new();
-    let mut growing_edges: BTreeSet<(DefId, DefId)> = BTreeSet::new();
-    for (_, cfg) in cfgs.iter() {
-        let from = cfg.key.owner;
-        if decls.generics_of(from).is_empty() {
-            continue;
-        }
-        let caller_params: BTreeSet<DefId> =
-            decls.generics_of(from).iter().map(|g| g.def).collect();
-        let mut targets = Vec::new();
-        for block in &cfg.blocks {
-            match &block.term {
-                Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
-                    targets.push(target.clone());
-                }
-                _ => {}
-            }
-        }
-        for target in targets {
-            let CallTarget::Fn { fn_ref, .. } = target else {
-                continue;
-            };
-            let to = fn_ref.def;
-            if decls.generics_of(to).is_empty() {
-                continue;
-            }
-            edges.entry(from).or_default().insert(to);
-            if fn_ref
-                .args
-                .iter()
-                .any(|arg| growing_arg(decls, &caller_params, arg))
-            {
-                growing_edges.insert((from, to));
-            }
-        }
-    }
-    for (from, to) in &growing_edges {
-        let mut seen = BTreeSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(*to);
-        while let Some(node) = queue.pop_front() {
-            if node == *from {
-                return true;
-            }
-            if !seen.insert(node) {
-                continue;
-            }
-            if let Some(next) = edges.get(&node) {
-                queue.extend(next.iter().copied());
-            }
-        }
-    }
-    false
-}
-
-/// An argument is growing when it is not a bare parameter of the caller: a type that
-/// contains one inside another type (`List[T]`, `[n]T`, `&T`), or a constant
-/// expression over one. A concrete argument is not growing.
-fn growing_arg(
-    decls: &ingot_sema::Declarations,
-    caller: &BTreeSet<ingot_sema::defs::DefId>,
-    arg: &ingot_sema::ty::GenericArg,
-) -> bool {
-    match arg {
-        GenericArg::Ty(ty) => {
-            if matches!(decls.types.kind(*ty), TyKind::Param(p) if caller.contains(p)) {
-                return false;
-            }
-            type_mentions_param(decls, *ty, caller, &mut BTreeSet::new())
-        }
-        GenericArg::Const(ConstArg::Param(_)) => false,
-        GenericArg::Const(ConstArg::Value(_)) => false,
-        GenericArg::Const(ConstArg::Poison) => true,
-    }
-}
-
-fn type_mentions_param(
-    decls: &ingot_sema::Declarations,
-    ty: ingot_sema::ty::TypeId,
-    caller: &BTreeSet<ingot_sema::defs::DefId>,
-    seen: &mut BTreeSet<ingot_sema::ty::TypeId>,
-) -> bool {
-    use ingot_sema::ty::{ConstArg, GenericArg, TyKind, TypeId};
-    if !seen.insert(ty) {
-        return false;
-    }
-    let arg_mentions = |arg: &GenericArg, seen: &mut BTreeSet<TypeId>| match arg {
-        GenericArg::Ty(t) => type_mentions_param(decls, *t, caller, seen),
-        GenericArg::Const(ConstArg::Param(p)) => caller.contains(p),
-        GenericArg::Const(_) => false,
-    };
-    match decls.types.kind(ty) {
-        TyKind::Param(p) => caller.contains(p),
-        TyKind::Array(element, length) => {
-            type_mentions_param(decls, *element, caller, seen)
-                || matches!(length, ConstArg::Param(p) if caller.contains(p))
-        }
-        TyKind::Tuple(fields) => fields
-            .iter()
-            .any(|f| type_mentions_param(decls, *f, caller, seen)),
-        TyKind::Adt(_, args) | TyKind::Dyn(_, _, args) => {
-            args.iter().any(|a| arg_mentions(a, seen))
-        }
-        TyKind::Optional(inner)
-        | TyKind::Ref(_, inner)
-        | TyKind::Slice(_, inner)
-        | TyKind::RawPtr(_, inner)
-        | TyKind::Projection(inner, _) => type_mentions_param(decls, *inner, caller, seen),
-        TyKind::Result(a, b) => {
-            type_mentions_param(decls, *a, caller, seen)
-                || type_mentions_param(decls, *b, caller, seen)
-        }
-        TyKind::FnPtr(sig) => {
-            sig.params
-                .iter()
-                .any(|p| type_mentions_param(decls, *p, caller, seen))
-                || type_mentions_param(decls, sig.ret, caller, seen)
-                || sig
-                    .error
-                    .is_some_and(|e| type_mentions_param(decls, e, caller, seen))
-        }
-        TyKind::DynFn(_, _, sig) => {
-            sig.params
-                .iter()
-                .any(|p| type_mentions_param(decls, *p, caller, seen))
-                || type_mentions_param(decls, sig.ret, caller, seen)
-                || sig
-                    .error
-                    .is_some_and(|e| type_mentions_param(decls, e, caller, seen))
-        }
-        // A closure type names a body, not its captures, but instantiating it with
-        // the caller's environment makes a new type at every level.
-        TyKind::Closure(_, _) => true,
-        TyKind::Int(_)
-        | TyKind::Float(_)
-        | TyKind::Bool
-        | TyKind::Void
-        | TyKind::Never
-        | TyKind::Vector(_, _)
-        | TyKind::Mask(_)
-        | TyKind::Poison => false,
-    }
 }

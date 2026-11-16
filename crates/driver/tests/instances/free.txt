@@ -1,0 +1,3 @@
+0	_I1:t1:t5:t.run
+1	_I1:t1:t6:t.pair3:i644:bool
+1	_I1:t1:t7:t.twice3:i64

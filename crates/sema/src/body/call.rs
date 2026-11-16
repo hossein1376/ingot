@@ -665,7 +665,9 @@ impl Checker<'_, '_, '_> {
     /// `&dyn Fn`, or a type parameter with an `Fn` bound.
     pub(crate) fn fn_sig_of(&mut self, ty: TypeId) -> Option<FnPtrSig> {
         match self.kind(ty) {
-            TyKind::Closure(_, idx) => self.out.closures.get(&ExprId(idx)).map(|c| c.sig.clone()),
+            TyKind::Closure(_, idx, _) => {
+                self.out.closures.get(&ExprId(idx)).map(|c| c.sig.clone())
+            }
             TyKind::FnPtr(s) | TyKind::DynFn(_, _, s) => Some(FnPtrSig { ext: false, ..s }),
             TyKind::Param(p) => self
                 .cx
@@ -686,7 +688,7 @@ impl Checker<'_, '_, '_> {
     pub(crate) fn satisfies_ext(&mut self, ty: TypeId, b: &Bound) -> Tri {
         if let Bound::Fn(kind, sig) = b {
             let found: Option<FnPtrSig> = match self.kind(ty) {
-                TyKind::Closure(_, idx) => {
+                TyKind::Closure(_, idx, _) => {
                     let Some(c) = self.out.closures.get(&ExprId(idx)) else {
                         return Tri::Unknown;
                     };
@@ -731,7 +733,7 @@ impl Checker<'_, '_, '_> {
                 }
                 Some((s, ValueCall::FnPtr))
             }
-            TyKind::Closure(_, idx) => self
+            TyKind::Closure(_, idx, _) => self
                 .out
                 .closures
                 .get(&ExprId(idx))
@@ -1843,7 +1845,8 @@ impl Checker<'_, '_, '_> {
             ret,
             error,
         };
-        let ty = self.mk(TyKind::Closure(self.owner, e.0));
+        let owner_args = self.closure_owner_args();
+        let ty = self.mk(TyKind::Closure(self.owner, e.0, owner_args));
         // The captures: the name inside the body has the captured type.
         let mut caps = Vec::new();
         let mut part_tys = Vec::new();
@@ -1979,6 +1982,38 @@ impl Checker<'_, '_, '_> {
         let mut p = self.cx.d.props(tuple);
         p.copy = Tri::No;
         self.cx.d.props.insert(ty, p);
+    }
+
+    /// The owner's generic arguments, as parameters, for a closure type (pipeline
+    /// §6a: a closure body has its owner's arguments).
+    fn closure_owner_args(&mut self) -> Vec<GenericArg> {
+        let mut defs = Vec::new();
+        if let Some(parent) = self.cx.sema.def(self.owner).parent {
+            match self.cx.sema.def(parent).kind {
+                crate::defs::DefKind::Impl => {
+                    defs.extend(self.cx.d.generics_of(parent).iter().map(|g| g.def));
+                    if let Some(sig) = self.cx.d.impl_sig(parent) {
+                        defs.push(sig.self_def);
+                    }
+                }
+                crate::defs::DefKind::Interface => {
+                    defs.extend(self.cx.d.generics_of(parent).iter().map(|g| g.def));
+                    if let Some(sig) = self.cx.d.interface_sig(parent) {
+                        defs.push(sig.self_def);
+                    }
+                }
+                _ => {}
+            }
+        }
+        defs.extend(self.cx.d.generics_of(self.owner).iter().map(|g| g.def));
+        defs.into_iter()
+            .map(|p| match self.cx.sema.def(p).kind {
+                crate::defs::DefKind::GenericParam { is_const: true } => {
+                    GenericArg::Const(ConstArg::Param(p))
+                }
+                _ => GenericArg::Ty(self.mk(TyKind::Param(p))),
+            })
+            .collect()
     }
 
     // ------------------------------------------------- spawn, dispatch (typed)
