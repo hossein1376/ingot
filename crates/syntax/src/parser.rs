@@ -40,6 +40,7 @@ struct Unit {
 #[derive(Clone, Copy, Default)]
 struct Modifiers {
     public: bool,
+    pkg: bool,
     pub_span: Option<Span>,
     inline: bool,
     noinline: bool,
@@ -102,6 +103,24 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    /// The `(pkg)` of `pub(pkg)`, after the `pub`. `pkg` is contextual (01-core §2).
+    fn pkg_suffix(&mut self) -> bool {
+        if !self.at(LParen) {
+            return false;
+        }
+        self.bump();
+        match self.kind().clone() {
+            TokenKind::Ident(name) if name == "pkg" => {
+                self.bump();
+            }
+            _ => {
+                self.report_unexpected();
+            }
+        }
+        self.expect(RParen);
+        true
     }
 
     fn eat_kw(&mut self, k: Kw) -> bool {
@@ -615,6 +634,9 @@ impl<'a> Parser<'a> {
                 mods.public = true;
                 mods.pub_span = Some(self.span());
                 self.bump();
+                if !mods.pkg {
+                    mods.pkg = self.pkg_suffix();
+                }
                 continue;
             }
             let flag = match self.kind() {
@@ -649,26 +671,27 @@ impl<'a> Parser<'a> {
             );
         }
         let start = start.min(self.span().start);
+        let public = mods.public && !mods.pkg;
         match self.kind().clone() {
             TokenKind::Keyword(Kw::Fn) => Item::Fn(self.fn_decl(mods, start)),
             TokenKind::Keyword(Kw::Struct) => {
                 if mods.export || mods.kernel || mods.waitable || mods.unsafe_ {
                     self.diag("E0213", "modifier is not allowed on a struct", self.span());
                 }
-                Item::Struct(self.struct_decl(StructKind::Plain, mods.public, start))
+                Item::Struct(self.struct_decl(StructKind::Plain, public, mods.pkg, start))
             }
             TokenKind::Keyword(Kw::Enum) => {
                 if mods.export || mods.kernel || mods.waitable || mods.unsafe_ {
                     self.diag("E0213", "modifier is not allowed on an enum", self.span());
                 }
-                Item::Enum(self.enum_decl(false, mods.public, start))
+                Item::Enum(self.enum_decl(false, public, mods.pkg, start))
             }
             TokenKind::Keyword(Kw::Copy) => {
                 let copy_span = self.bump().span;
                 if self.at_kw(Kw::Struct) {
-                    Item::Struct(self.struct_decl(StructKind::Copy, mods.public, start))
+                    Item::Struct(self.struct_decl(StructKind::Copy, public, mods.pkg, start))
                 } else if self.at_kw(Kw::Enum) {
-                    Item::Enum(self.enum_decl(true, mods.public, start))
+                    Item::Enum(self.enum_decl(true, public, mods.pkg, start))
                 } else {
                     self.diag(
                         "E0201",
@@ -682,7 +705,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Kw::Linear) => {
                 let span = self.bump().span;
                 if self.at_kw(Kw::Struct) {
-                    Item::Struct(self.struct_decl(StructKind::Linear, mods.public, start))
+                    Item::Struct(self.struct_decl(StructKind::Linear, public, mods.pkg, start))
                 } else {
                     self.diag("E0201", "`linear` must be followed by `struct`", span);
                     self.skip_junk_item();
@@ -690,7 +713,7 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::Keyword(Kw::Interface) => {
-                Item::Interface(self.interface_decl(mods.public, start))
+                Item::Interface(self.interface_decl(public, mods.pkg, start))
             }
             TokenKind::Keyword(Kw::Impl) => {
                 if let Some(span) = mods.pub_span {
@@ -698,14 +721,18 @@ impl<'a> Parser<'a> {
                 }
                 Item::Impl(self.impl_decl(mods.unsafe_, start))
             }
-            TokenKind::Keyword(Kw::Const) => Item::Const(self.const_decl(mods.public, start)),
-            TokenKind::Keyword(Kw::Static) => Item::Static(self.static_decl(mods.public, start)),
-            TokenKind::Keyword(Kw::Type) => Item::TypeAlias(self.type_alias(mods.public, start)),
+            TokenKind::Keyword(Kw::Const) => Item::Const(self.const_decl(public, mods.pkg, start)),
+            TokenKind::Keyword(Kw::Static) => {
+                Item::Static(self.static_decl(public, mods.pkg, start))
+            }
+            TokenKind::Keyword(Kw::Type) => {
+                Item::TypeAlias(self.type_alias(public, mods.pkg, start))
+            }
             TokenKind::Keyword(Kw::Extern) => {
                 if let Some(span) = mods.pub_span {
                     self.diag("E0210", "`pub` is not allowed on an `extern` block", span);
                 }
-                Item::Extern(self.extern_block(mods.public, start))
+                Item::Extern(self.extern_block(public, mods.pkg, start))
             }
             TokenKind::Keyword(Kw::Test) | TokenKind::Keyword(Kw::Bench) => {
                 if let Some(span) = mods.pub_span {
@@ -750,7 +777,8 @@ impl<'a> Parser<'a> {
             reduce,
             reduce_span,
             mods: FnMods {
-                public: mods.public,
+                public: mods.public && !mods.pkg,
+                pkg: mods.pkg,
                 inline: mods.inline,
                 noinline: mods.noinline,
                 unsafe_: mods.unsafe_,
@@ -973,7 +1001,13 @@ impl<'a> Parser<'a> {
         (ret, error, from, reduce, reduce_span)
     }
 
-    fn struct_decl(&mut self, kind: StructKind, public: bool, start: usize) -> StructDecl {
+    fn struct_decl(
+        &mut self,
+        kind: StructKind,
+        public: bool,
+        pkg: bool,
+        start: usize,
+    ) -> StructDecl {
         self.bump(); // struct
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -987,6 +1021,8 @@ impl<'a> Parser<'a> {
         while !self.at(RBrace) && !self.at_eof() {
             let fstart = self.span().start;
             let public = self.eat_kw(Kw::Pub);
+            let pkg = public && self.pkg_suffix();
+            let public = public && !pkg;
             let (fname, fspan) = self.expect_ident();
             self.expect(Colon);
             let ty = self.ty();
@@ -1000,6 +1036,7 @@ impl<'a> Parser<'a> {
                 name: fname,
                 name_span: fspan,
                 public,
+                pkg,
                 ty,
                 align,
                 span: Span::new(fstart, end),
@@ -1013,6 +1050,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             kind,
             generics,
             fields,
@@ -1029,7 +1067,7 @@ impl<'a> Parser<'a> {
         e
     }
 
-    fn enum_decl(&mut self, copy: bool, public: bool, start: usize) -> EnumDecl {
+    fn enum_decl(&mut self, copy: bool, public: bool, pkg: bool, start: usize) -> EnumDecl {
         self.bump(); // enum
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -1072,6 +1110,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             copy,
             tag,
             generics,
@@ -1086,6 +1125,9 @@ impl<'a> Parser<'a> {
             if self.eat_kw(Kw::Pub) {
                 mods.public = true;
                 mods.pub_span = Some(self.tokens[self.pos - 1].span);
+                if !mods.pkg {
+                    mods.pkg = self.pkg_suffix();
+                }
             } else if self.eat_kw(Kw::Inline) {
                 mods.inline = true;
             } else if self.eat_kw(Kw::Noinline) {
@@ -1105,7 +1147,7 @@ impl<'a> Parser<'a> {
         mods
     }
 
-    fn interface_decl(&mut self, public: bool, start: usize) -> InterfaceDecl {
+    fn interface_decl(&mut self, public: bool, pkg: bool, start: usize) -> InterfaceDecl {
         self.bump();
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -1130,7 +1172,8 @@ impl<'a> Parser<'a> {
                 members.push(Item::TypeAlias(TypeAlias {
                     name: n,
                     name_span: sp,
-                    public: mods.public,
+                    public: mods.public && !mods.pkg,
+                    pkg: mods.pkg,
                     generics: Vec::new(),
                     ty: Ty::Poison(sp),
                     span: Span::new(sp.start, end),
@@ -1150,6 +1193,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             generics,
             bounds,
             members,
@@ -1198,12 +1242,18 @@ impl<'a> Parser<'a> {
                     members.push(Item::Fn(self.fn_decl(mods, self.span().start)));
                 }
                 TokenKind::Keyword(Kw::Const) => {
-                    members.push(Item::Const(self.const_decl(mods.public, self.span().start)));
+                    members.push(Item::Const(self.const_decl(
+                        mods.public && !mods.pkg,
+                        mods.pkg,
+                        self.span().start,
+                    )));
                 }
                 TokenKind::Keyword(Kw::Type) => {
-                    members.push(Item::TypeAlias(
-                        self.type_alias(mods.public, self.span().start),
-                    ));
+                    members.push(Item::TypeAlias(self.type_alias(
+                        mods.public && !mods.pkg,
+                        mods.pkg,
+                        self.span().start,
+                    )));
                 }
                 _ => self.unexpected_item(),
             }
@@ -1223,7 +1273,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn const_decl(&mut self, public: bool, start: usize) -> ConstDecl {
+    fn const_decl(&mut self, public: bool, pkg: bool, start: usize) -> ConstDecl {
         self.bump();
         let (name, name_span) = self.expect_ident();
         self.expect(Colon);
@@ -1235,13 +1285,14 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             ty,
             value,
             span: Span::new(start, end),
         }
     }
 
-    fn static_decl(&mut self, public: bool, start: usize) -> StaticDecl {
+    fn static_decl(&mut self, public: bool, pkg: bool, start: usize) -> StaticDecl {
         self.bump();
         let (name, name_span) = self.expect_ident();
         self.expect(Colon);
@@ -1258,6 +1309,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             ty,
             align,
             value,
@@ -1265,7 +1317,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn type_alias(&mut self, public: bool, start: usize) -> TypeAlias {
+    fn type_alias(&mut self, public: bool, pkg: bool, start: usize) -> TypeAlias {
         self.bump();
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
@@ -1276,13 +1328,14 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             public,
+            pkg,
             generics,
             ty,
             span: Span::new(start, end),
         }
     }
 
-    fn extern_block(&mut self, public: bool, start: usize) -> ExternBlock {
+    fn extern_block(&mut self, public: bool, pkg: bool, start: usize) -> ExternBlock {
         self.bump();
         let mut abi = String::new();
         let mut abi_span = self.span();
@@ -1311,6 +1364,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(RBrace);
         ExternBlock {
             public,
+            pkg,
             abi,
             abi_span,
             functions,

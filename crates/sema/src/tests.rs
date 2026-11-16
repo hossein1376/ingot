@@ -1124,6 +1124,36 @@ fn a_statement_when_with_an_undecidable_condition_checks_nothing_in_either_branc
 }
 
 #[test]
+fn pub_pkg_is_visible_in_the_package_and_not_outside_it() {
+    let same = run(&[(
+        "app",
+        &[
+            (
+                "",
+                "import app.lib;\nfn f() -> i64 { return lib.secret(); }\n",
+            ),
+            ("lib", "pub(pkg) fn secret() -> i64 { return 1; }\n"),
+        ],
+    )]);
+    assert!(same.codes().is_empty(), "{:?}", same.codes());
+
+    let other = run(&[
+        (
+            "lib",
+            &[("", "pub(pkg) fn secret() -> i64 { return 1; }\n")],
+        ),
+        (
+            "app",
+            &[(
+                "",
+                "import lib.secret;\nfn f() -> i64 { return secret(); }\n",
+            )],
+        ),
+    ]);
+    assert_eq!(other.codes(), vec![("E0306".to_string(), 1)]);
+}
+
+#[test]
 fn the_ids_of_the_hir_point_at_nodes_with_spans() {
     let src = "fn f(a: i64) -> i64 { return a + 1; }\n";
     let r = one(src);

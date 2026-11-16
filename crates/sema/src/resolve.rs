@@ -222,7 +222,7 @@ impl<'a> Resolver<'a> {
         span: Span,
         file: usize,
         module: ModuleId,
-        public: bool,
+        vis: Vis,
         parent: Option<DefId>,
     ) -> DefId {
         let id = self.sema.add_def(Def {
@@ -231,7 +231,7 @@ impl<'a> Resolver<'a> {
             span,
             file: Some(file),
             module,
-            vis: if public { Vis::Pub } else { Vis::Private },
+            vis,
             parent,
         });
         self.decl_at.insert((file, span.start), id);
@@ -248,9 +248,9 @@ impl<'a> Resolver<'a> {
         kind: DefKind,
         name: &str,
         name_span: Span,
-        public: bool,
+        vis: Vis,
     ) -> DefId {
-        let id = self.new_def(kind, name, name_span, file, module, public, None);
+        let id = self.new_def(kind, name, name_span, file, module, vis, None);
         let ns = kind
             .namespace()
             .expect("module-level definitions are named");
@@ -328,7 +328,7 @@ impl<'a> Resolver<'a> {
                 g.name_span,
                 file,
                 module,
-                false,
+                Vis::Private,
                 Some(parent),
             );
             self.check_unique(file, &mut seen, "generic parameter", &g.name, g.name_span);
@@ -341,7 +341,7 @@ impl<'a> Resolver<'a> {
         file: usize,
         parent: DefId,
         f: &ast::FnDecl,
-        public: bool,
+        vis: Vis,
     ) -> DefId {
         let id = self.new_def(
             DefKind::Fn,
@@ -349,7 +349,7 @@ impl<'a> Resolver<'a> {
             f.name_span,
             file,
             module,
-            public,
+            vis,
             Some(parent),
         );
         self.declare_fn_parts(module, file, id, f);
@@ -376,7 +376,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Fn,
                         &f.name,
                         f.name_span,
-                        f.mods.public,
+                        vis(f.mods.public, f.mods.pkg),
                     );
                     self.declare_fn_parts(module, file, id, f);
                 }
@@ -387,7 +387,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Struct,
                         &s.name,
                         s.name_span,
-                        s.public,
+                        vis(s.public, s.pkg),
                     );
                     self.declare_generics(module, file, id, &s.generics);
                     let mut seen = BTreeMap::new();
@@ -398,7 +398,7 @@ impl<'a> Resolver<'a> {
                             f.name_span,
                             file,
                             module,
-                            f.public,
+                            vis(f.public, f.pkg),
                             Some(id),
                         );
                         self.check_unique(file, &mut seen, "field", &f.name, f.name_span);
@@ -411,7 +411,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Enum,
                         &e.name,
                         e.name_span,
-                        e.public,
+                        vis(e.public, e.pkg),
                     );
                     self.declare_generics(module, file, id, &e.generics);
                     let mut seen = BTreeMap::new();
@@ -423,7 +423,7 @@ impl<'a> Resolver<'a> {
                             v.name_span,
                             file,
                             module,
-                            e.public,
+                            vis(e.public, e.pkg),
                             Some(id),
                         );
                         self.check_unique(file, &mut seen, "variant", &v.name, v.name_span);
@@ -436,7 +436,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Interface,
                         &i.name,
                         i.name_span,
-                        i.public,
+                        vis(i.public, i.pkg),
                     );
                     self.declare_generics(module, file, id, &i.generics);
                     let self_def = self.sema.add_def(Def {
@@ -462,7 +462,7 @@ impl<'a> Resolver<'a> {
                                     f.name_span,
                                 );
                                 // Interface methods are as visible as the interface.
-                                self.declare_fn_members(module, file, id, f, i.public);
+                                self.declare_fn_members(module, file, id, f, vis(i.public, i.pkg));
                             }
                             ast::Item::TypeAlias(t) => {
                                 self.check_unique(
@@ -478,7 +478,7 @@ impl<'a> Resolver<'a> {
                                     t.name_span,
                                     file,
                                     module,
-                                    i.public,
+                                    vis(i.public, i.pkg),
                                     Some(id),
                                 );
                             }
@@ -493,7 +493,7 @@ impl<'a> Resolver<'a> {
                         Span::new(i.span.start, i.span.start),
                         file,
                         module,
-                        false,
+                        Vis::Private,
                         None,
                     );
                     self.sema.module_mut(module).items.push(id);
@@ -520,7 +520,13 @@ impl<'a> Resolver<'a> {
                                     &f.name,
                                     f.name_span,
                                 );
-                                self.declare_fn_members(module, file, id, f, f.mods.public);
+                                self.declare_fn_members(
+                                    module,
+                                    file,
+                                    id,
+                                    f,
+                                    vis(f.mods.public, f.mods.pkg),
+                                );
                             }
                             ast::Item::Const(c) => {
                                 self.check_unique(
@@ -536,7 +542,7 @@ impl<'a> Resolver<'a> {
                                     c.name_span,
                                     file,
                                     module,
-                                    c.public,
+                                    vis(c.public, c.pkg),
                                     Some(id),
                                 );
                             }
@@ -554,7 +560,7 @@ impl<'a> Resolver<'a> {
                                     t.name_span,
                                     file,
                                     module,
-                                    t.public,
+                                    vis(t.public, t.pkg),
                                     Some(id),
                                 );
                                 self.declare_generics(module, file, a, &t.generics);
@@ -570,7 +576,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Const,
                         &c.name,
                         c.name_span,
-                        c.public,
+                        vis(c.public, c.pkg),
                     );
                 }
                 ast::Item::Static(s) => {
@@ -580,7 +586,7 @@ impl<'a> Resolver<'a> {
                         DefKind::Static,
                         &s.name,
                         s.name_span,
-                        s.public,
+                        vis(s.public, s.pkg),
                     );
                 }
                 ast::Item::TypeAlias(t) => {
@@ -590,7 +596,7 @@ impl<'a> Resolver<'a> {
                         DefKind::TypeAlias,
                         &t.name,
                         t.name_span,
-                        t.public,
+                        vis(t.public, t.pkg),
                     );
                     self.declare_generics(module, file, id, &t.generics);
                 }
@@ -602,7 +608,7 @@ impl<'a> Resolver<'a> {
                             DefKind::ExternFn,
                             &f.name,
                             f.name_span,
-                            x.public,
+                            vis(x.public, x.pkg),
                         );
                         self.declare_fn_parts(module, file, id, f);
                     }
@@ -614,7 +620,7 @@ impl<'a> Resolver<'a> {
                         Span::new(t.span.start, t.span.start),
                         file,
                         module,
-                        false,
+                        Vis::Private,
                         None,
                     );
                     self.sema.module_mut(module).items.push(id);
@@ -789,13 +795,15 @@ impl<'a> Resolver<'a> {
                     let declared = self.sema.def(d).span;
                     let dfile = self.sema.def(d).file.unwrap_or(file);
                     let dpath = self.sources.get(dfile).path.clone();
-                    self.diag(
-                        "E0306",
-                        format!("`{}` is private to its module", last.0),
-                        file,
-                        last.1,
-                    )
-                    .relate_in("declared", &dpath, declared);
+                    let message = match self.sema.def(d).vis {
+                        Vis::Pkg => format!(
+                            "`{}` is `pub(pkg)`: it is not visible outside its package",
+                            last.0
+                        ),
+                        _ => format!("`{}` is private to its module", last.0),
+                    };
+                    self.diag("E0306", message, file, last.1)
+                        .relate_in("declared", &dpath, declared);
                     None
                 }
                 ItemLookup::Poison => Some(Imported::Poison),
@@ -919,9 +927,9 @@ impl<'a> Resolver<'a> {
                 Ns::Value => t.values.get(name),
                 Ns::Type => t.types.get(name),
             };
-            if let Some(&d) = found
+            if found.is_some()
                 && !t.import_names.contains_key(&(ns, name.to_string()))
-                && self.sema.def(d).vis == Vis::Pub
+                && self.sema.may_name_item(target, module, ns, name).is_some()
             {
                 owners.push(imp.name.clone());
             }
@@ -959,4 +967,8 @@ fn header_span(source: &Source, span: Span) -> Span {
         .unwrap_or(span.end)
         .max(span.start);
     Span::new(span.start, end)
+}
+
+fn vis(public: bool, pkg: bool) -> Vis {
+    Vis::from_flags(public, pkg)
 }

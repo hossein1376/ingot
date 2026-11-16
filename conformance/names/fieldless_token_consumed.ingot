@@ -1,0 +1,12 @@
+//! expect: accept
+//! section: 4.2, 10
+
+linear struct Tok {}
+
+fn eat(t: Tok) {
+    let Tok.{} = t;
+}
+
+fn eat_rest(t: Tok) {
+    let Tok.{ .. } = t;
+}

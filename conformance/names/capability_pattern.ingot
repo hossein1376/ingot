@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 2, 4.2
+
+import std.fs.Fs;
+
+fn take(fs: Fs) {
+    let Fs.{ .. } = fs; //~ E0307
+}

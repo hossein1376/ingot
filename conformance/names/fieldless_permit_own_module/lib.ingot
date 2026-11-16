@@ -1,0 +1,5 @@
+pub linear struct Permit {}
+
+pub fn take(p: Permit) {
+    let Permit.{} = p;
+}

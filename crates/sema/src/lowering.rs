@@ -426,6 +426,7 @@ impl<'a, 'i> Cx<'a, 'i> {
                 name: f.name.clone(),
                 name_span: f.name_span,
                 public: f.public,
+                pkg: f.pkg,
                 ty: self.lower_ty(&f.ty),
                 ty_span: f.ty.span,
                 align: f.align.and_then(|e| self.align_attr(e)),

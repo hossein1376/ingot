@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 4.2, 10
+
+import fieldless_permit_own_module.lib;
+
+fn give(p: lib.Permit) {
+    lib.take(p);
+}

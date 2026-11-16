@@ -1,0 +1,23 @@
+//! expect: accept
+//! section: 2
+
+import pub_pkg.lib;
+
+fn f(s: &lib.S) -> i64 {
+    return lib.helper() + s.x + lib.Has.value(s);
+}
+
+fn build() -> lib.S {
+    var s = lib.S.{ x: 3 };
+    s.x = 4;
+    return s;
+}
+
+fn g() -> i64 {
+    let s = build();
+    return s.x;
+}
+
+fn kind() -> lib.Kind {
+    return lib.Kind.one;
+}

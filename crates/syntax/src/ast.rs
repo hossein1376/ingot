@@ -92,6 +92,8 @@ impl Item {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FnMods {
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub inline: bool,
     pub noinline: bool,
     pub unsafe_: bool,
@@ -165,6 +167,8 @@ pub struct StructDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub kind: StructKind,
     pub generics: Vec<GenericParam>,
     pub fields: Vec<FieldDecl>,
@@ -177,6 +181,8 @@ pub struct FieldDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub ty: Ty,
     pub align: Option<Expr>,
     pub span: Span,
@@ -187,6 +193,8 @@ pub struct EnumDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub copy: bool,
     pub tag: Option<Ty>,
     pub generics: Vec<GenericParam>,
@@ -209,6 +217,8 @@ pub struct InterfaceDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub generics: Vec<GenericParam>,
     pub bounds: Vec<PathTy>,
     pub members: Vec<Item>,
@@ -230,6 +240,8 @@ pub struct ConstDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub ty: Ty,
     pub value: Expr,
     pub span: Span,
@@ -240,6 +252,8 @@ pub struct StaticDecl {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub ty: Ty,
     pub align: Option<Expr>,
     pub value: Expr,
@@ -251,6 +265,8 @@ pub struct TypeAlias {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub generics: Vec<GenericParam>,
     pub ty: Ty,
     pub span: Span,
@@ -259,6 +275,8 @@ pub struct TypeAlias {
 #[derive(Clone, Debug)]
 pub struct ExternBlock {
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the package.
+    pub pkg: bool,
     pub abi: String,
     pub abi_span: Span,
     pub functions: Vec<FnDecl>,

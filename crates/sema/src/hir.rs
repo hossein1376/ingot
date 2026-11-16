@@ -603,6 +603,7 @@ pub struct FieldItem {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    pub pkg: bool,
     pub ty: Ty,
     pub align: Option<ExprId>,
     pub span: Span,

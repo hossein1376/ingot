@@ -1070,6 +1070,12 @@ impl<'a> Context<'a> {
             return None;
         }
         let source = self.sources.get(info.file);
+        let vis = self.sema.def(def).vis;
+        let vis_name = match vis {
+            Vis::Pub => "pub",
+            Vis::Pkg => "pkg",
+            Vis::Private => "private",
+        };
         Some(object(vec![
             ("type", Json::String("symbol".to_string())),
             ("path", Json::String(path)),
@@ -1079,7 +1085,8 @@ impl<'a> Context<'a> {
                 "extent",
                 span_json(self.sources, &source.path, info.extent.unwrap_or(info.name)),
             ),
-            ("pub", Json::Bool(self.sema.def(def).vis == Vis::Pub)),
+            ("pub", Json::Bool(vis == Vis::Pub)),
+            ("vis", Json::String(vis_name.to_string())),
         ]))
     }
 
@@ -2365,7 +2372,11 @@ impl Context<'_> {
                     .map(|sig| {
                         sig.fields
                             .iter()
-                            .filter(|field| field.public || self.sema.def(def).module == module)
+                            .filter(|field| {
+                                let declared = self.sema.def(def).module;
+                                self.sema
+                                    .field_visible(declared, module, field.public, field.pkg)
+                            })
                             .map(|field| field.def)
                             .collect()
                     })

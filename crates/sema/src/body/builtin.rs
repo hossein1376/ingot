@@ -988,7 +988,10 @@ impl Checker<'_, '_, '_> {
             TyKind::Adt(d, args) => match self.cx.d.items.get(&d).cloned() {
                 Some(ItemSig::Struct(sig)) => {
                     let foreign = self.cx.sema.def(d).module != self.module;
-                    if foreign && (sig.fields.is_empty() || sig.fields.iter().any(|f| !f.public)) {
+                    if foreign
+                        && (sig.fields.is_empty()
+                            || sig.fields.iter().any(|f| !self.field_visible(d, f)))
+                    {
                         return Zero::Private(d);
                     }
                     let s = self.cx.d.subst_for(d, &args);
@@ -1154,7 +1157,8 @@ impl Checker<'_, '_, '_> {
                     Some(ItemSig::Struct(sig)) => {
                         let foreign = self.cx.sema.def(d).module != self.module;
                         if foreign
-                            && (sig.fields.is_empty() || sig.fields.iter().any(|f| !f.public))
+                            && (sig.fields.is_empty()
+                                || sig.fields.iter().any(|f| !self.field_visible(d, f)))
                         {
                             return Some(d);
                         }

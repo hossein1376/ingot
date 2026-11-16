@@ -1,0 +1,3 @@
+pub interface Allocator {
+    fn size(self: &Self) -> i64;
+}

@@ -121,13 +121,12 @@ impl Declarations {
             }
             TyKind::Optional(inner) => {
                 let l = self.layout_inner(inner, stack)?;
-                // `?&T`, `?&mut T`, `?[]T` and `?fn(...)` use the null pointer for
-                // `.none` (section 25). No other niche is guaranteed.
-                let niche = match self.types.kind(inner) {
-                    TyKind::Ref(..) | TyKind::Slice(..) => true,
-                    TyKind::FnPtr(sig) => !sig.ext,
-                    _ => false,
-                };
+                // `?&T`, `?&mut T`, `?[]T`, `?fn(...)` and `?extern fn(...)` use the
+                // null pointer for `.none` (section 25). No other niche is guaranteed.
+                let niche = matches!(
+                    self.types.kind(inner),
+                    TyKind::Ref(..) | TyKind::Slice(..) | TyKind::FnPtr(_)
+                );
                 if niche {
                     return Ok(Layout {
                         size: l.size,

@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 4.4
+
+interface I {
+    fn m(self: &Self) -> i64;
+}
+
+impl[T] I for &T { //~ E0508
+    fn m(self: & &T) -> i64 {
+        return 0;
+    }
+}

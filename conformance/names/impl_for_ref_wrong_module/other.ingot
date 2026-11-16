@@ -1,0 +1,3 @@
+pub struct U {
+    pub n: i64,
+}

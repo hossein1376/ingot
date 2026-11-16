@@ -18,8 +18,34 @@ pub const BUILTIN_MODULE: ModuleId = ModuleId(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Vis {
-    Pub,
     Private,
+    /// `pub(pkg)`: every module of the declaring package (01-core §2).
+    Pkg,
+    Pub,
+}
+
+impl Vis {
+    pub fn from_flags(public: bool, pkg: bool) -> Vis {
+        if pkg {
+            Vis::Pkg
+        } else if public {
+            Vis::Pub
+        } else {
+            Vis::Private
+        }
+    }
+
+    pub fn is_pub(self) -> bool {
+        self == Vis::Pub
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Vis::Private => "private",
+            Vis::Pkg => "pub(pkg)",
+            Vis::Pub => "pub",
+        }
+    }
 }
 
 /// The two namespaces of pipeline section 4.3.
@@ -327,6 +353,24 @@ impl Sema {
         &mut self.modules[id.0 as usize]
     }
 
+    /// 01-core §2 and §4.2: whether a field declared in `declared` is visible from
+    /// `from`. `pub(pkg)` is visible in the declaring package; a private field only
+    /// in its module.
+    pub fn field_visible(
+        &self,
+        declared: ModuleId,
+        from: ModuleId,
+        public: bool,
+        pkg: bool,
+    ) -> bool {
+        declared == from
+            || if pkg {
+                self.module(declared).package == self.module(from).package
+            } else {
+                public
+            }
+    }
+
     /// Phase 5's rule for `target.name` as seen from `from`: the name is an item of
     /// `target` (not an import bound there) and `from` may name it. Completion reads
     /// this; `resolve::Resolver::lookup_item_in` keeps the same rule.
@@ -346,7 +390,13 @@ impl Sema {
             Ns::Type => t.types.get(name),
         };
         let def = *found?;
-        (target == from || self.def(def).vis == Vis::Pub).then_some(def)
+        let visible = target == from
+            || match self.def(def).vis {
+                Vis::Pub => true,
+                Vis::Pkg => self.module(target).package == self.module(from).package,
+                Vis::Private => false,
+            };
+        visible.then_some(def)
     }
 
     /// The pre-made definition of a scalar type name.

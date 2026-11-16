@@ -912,8 +912,8 @@ fn optional_layout_uses_the_null_niche_only_where_section_25_says() {
     check("d", 8, 8, true);
     check("e", 16, 8, true);
     check("f", 8, 8, true);
-    // The C-ABI pointer is not in the list: no niche.
-    check("g", 16, 8, false);
+    // 04 §25 lists `?extern fn(...)`: the nullable C pointer uses the null niche.
+    check("g", 8, 8, true);
     // `??&T`: the outer option has no niche to use.
     check("h", 16, 8, false);
     check("i", 16, 8, false);

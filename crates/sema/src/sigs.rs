@@ -151,6 +151,8 @@ pub struct FieldSig {
     pub name: String,
     pub name_span: Span,
     pub public: bool,
+    /// `pub(pkg)`: visible in every module of the declaring package.
+    pub pkg: bool,
     pub ty: TypeId,
     pub ty_span: Span,
     /// The argument of `align(...)` on the field.

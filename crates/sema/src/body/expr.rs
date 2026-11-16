@@ -820,14 +820,20 @@ impl Checker<'_, '_, '_> {
                     return (self.poison(), ExprRes::None);
                 };
                 let f = f.clone();
-                if !f.public && self.cx.sema.def(def).module != self.module {
+                if !self.field_visible(def, &f) {
                     let fpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
-                    self.err(
-                        "E0307",
-                        format!("the field `{name}` is private to its module"),
-                        name_span,
-                    )
-                    .relate_in("declared", &fpath, f.name_span);
+                    let message = if f.pkg {
+                        format!(
+                            "the field `{name}` is `pub(pkg)`: it is not visible outside its package"
+                        )
+                    } else {
+                        format!("the field `{name}` is private to its module")
+                    };
+                    self.err("E0307", message, name_span).relate_in(
+                        "declared",
+                        &fpath,
+                        f.name_span,
+                    );
                     return (self.poison(), ExprRes::None);
                 }
                 let s = self.cx.d.subst_for(def, &args);
@@ -1507,11 +1513,11 @@ impl Checker<'_, '_, '_> {
         };
         // E0315: construction respects privacy (section 4.2).
         let foreign = self.cx.sema.def(def).module != self.module;
-        let private_field = sig.fields.iter().find(|f| !f.public);
-        let hidden = foreign && (sig.fields.is_empty() || private_field.is_some());
+        let hidden_field = sig.fields.iter().find(|f| !self.field_visible(def, f));
+        let hidden = foreign && (sig.fields.is_empty() || hidden_field.is_some());
         if hidden {
             let name = self.name(t);
-            let at = private_field.map(|f| f.name_span).unwrap_or(sig.span);
+            let at = hidden_field.map(|f| f.name_span).unwrap_or(sig.span);
             let dpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
             self.err(
                 "E0315",
@@ -1562,7 +1568,7 @@ impl Checker<'_, '_, '_> {
             .filter(|(i, _)| !seen.contains(i))
             .map(|(_, f)| f.name.clone())
             .collect();
-        if !missing.is_empty() {
+        if !hidden && !missing.is_empty() {
             self.err(
                 "E0503",
                 format!("the literal omits the field(s) {}", missing.join(", ")),

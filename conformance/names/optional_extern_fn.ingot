@@ -1,0 +1,15 @@
+//! expect: accept
+//! section: 25, 29
+
+extern "c" {
+    fn qsort(base: *mut u8, n: i64, cmp: ?extern fn(*u8, *u8) -> i32);
+}
+
+export fn get() -> ?extern fn(i64) -> i64 {
+    return .none;
+}
+
+fn f(p: ?extern fn(i64) -> i64) {
+    @static_assert(@sizeof(?extern fn(i64) -> i64) == 8, "null niche");
+    _ = p;
+}

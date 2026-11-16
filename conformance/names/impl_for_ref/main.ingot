@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 4.4
+
+import impl_for_ref.lib;
+
+pub struct Arena {
+    pub n: i64,
+}
+
+impl lib.Allocator for &Arena {
+    fn size(self: & &Arena) -> i64 {
+        return self.*.n;
+    }
+}
+
+fn f(a: &Arena) -> i64 {
+    return lib.Allocator.size(&a);
+}

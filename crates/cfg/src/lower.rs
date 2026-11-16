@@ -3541,9 +3541,6 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         if derefs != 0 || !self.counts_linear(ty) {
             return;
         }
-        if moved.is_empty() {
-            return;
-        }
         let mut dropped_linear = false;
         for (i, was_moved) in moved.iter().enumerate() {
             if *was_moved {

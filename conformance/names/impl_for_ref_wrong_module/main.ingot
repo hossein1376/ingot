@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 4.4
+
+import impl_for_ref_wrong_module.lib;
+import impl_for_ref_wrong_module.other;
+
+impl lib.I for &other.U { //~ E0506
+    fn m(self: & &other.U) -> i64 {
+        return self.*.n;
+    }
+}

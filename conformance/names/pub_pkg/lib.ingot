@@ -1,0 +1,21 @@
+pub(pkg) fn helper() -> i64 {
+    return 1;
+}
+
+pub struct S {
+    pub(pkg) x: i64,
+}
+
+pub(pkg) interface Has {
+    fn value(self: &Self) -> i64;
+}
+
+impl Has for S {
+    fn value(self: &S) -> i64 {
+        return self.x;
+    }
+}
+
+pub(pkg) enum Kind {
+    one,
+}

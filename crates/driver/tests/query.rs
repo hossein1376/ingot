@@ -1088,6 +1088,33 @@ fn completion_works_among_the_items_of_a_module() {
 }
 
 #[test]
+fn symbols_report_the_visibility_level() {
+    let dir = package(
+        "visibility",
+        &[
+            ("ingot.toml", "name = \"app\"\n"),
+            (
+                "main.ingot",
+                "pub fn open() {}\npub(pkg) fn inside() {}\nfn local() {}\n",
+            ),
+        ],
+    );
+    let lines = symbols(&[&dir.to_string_lossy()]);
+    for (name, vis, pub_) in [
+        ("open", "pub", true),
+        ("inside", "pkg", false),
+        ("local", "private", false),
+    ] {
+        let symbol = lines
+            .iter()
+            .find(|s| text_field(s, "path") == format!("app.{name}"))
+            .unwrap_or_else(|| panic!("{name} is a symbol"));
+        assert_eq!(text_field(symbol, "vis"), vis, "{name}");
+        assert_eq!(field(symbol, "pub").as_bool(), Some(pub_), "{name}");
+    }
+}
+
+#[test]
 fn completion_in_a_file_with_another_syntax_error_gives_no_lines() {
     let (_dir, main) = complete_package("complete-error");
     let text = "import app.lib;\nfn run(t: lib.Ticket) -> i64 {\n    let x = t.;\n    return x;\n}\nfn broken( {\n";

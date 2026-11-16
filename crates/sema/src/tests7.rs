@@ -1393,6 +1393,80 @@ fn an_interface_call_types_each_argument_once() {
 }
 
 #[test]
+fn pub_pkg_fields_are_not_visible_from_another_package() {
+    let mut sources = Sources::default();
+    let add = |name: &str, modules: &[(&str, &str)], sources: &mut Sources| {
+        let mut mods = Vec::new();
+        for (rel, text) in modules {
+            let path = if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name}.{rel}")
+            };
+            let file = sources.add(Source::new(format!("{path}.ingot"), *text));
+            let source = sources.get(file);
+            let (tokens, mut diags) = lex(source);
+            let (ast, parse_diags) = parse(source, tokens);
+            diags.extend(parse_diags);
+            assert!(diags.is_empty(), "{path} must parse: {diags:?}");
+            mods.push(ModuleInput {
+                path,
+                file,
+                ast: Some(ast),
+            });
+        }
+        PackageInput {
+            name: name.to_string(),
+            modules: mods,
+        }
+    };
+    let inputs = vec![
+        add("std", &STD, &mut sources),
+        add(
+            "lib",
+            &[("", "pub struct S { pub(pkg) x: i64 }\n")],
+            &mut sources,
+        ),
+        add(
+            "app",
+            &[(
+                "",
+                "import lib.S;\n\
+                 fn read(s: &S) -> i64 { return s.x; }\n\
+                 fn write(s: &mut S) { s.x = 1; }\n\
+                 fn literal() -> S { return S.{ x: 1 }; }\n",
+            )],
+            &mut sources,
+        ),
+    ];
+    let target = Target::by_name("aarch64-macos-m4").expect("a target");
+    let out = resolve(&mut sources, inputs, &target);
+    let decls = check_declarations(&sources, &out, &target, 2, None);
+    let bodies = check_bodies(&sources, &out, decls, &target, 2, None);
+    let mut codes: Vec<(String, u32)> = bodies
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let line = sources
+                .iter()
+                .find(|s| s.path == d.file)
+                .map(|s| s.position(d.span.start).line)
+                .unwrap_or(0);
+            (d.code.to_string(), line)
+        })
+        .collect();
+    codes.sort();
+    assert_eq!(
+        codes,
+        vec![
+            ("E0307".to_string(), 2),
+            ("E0307".to_string(), 3),
+            ("E0315".to_string(), 4)
+        ]
+    );
+}
+
+#[test]
 fn a_math_builtin_on_a_type_parameter_is_not_implemented() {
     let b = build("fn f[T: Float](x: T) -> T { return @sqrt(x); }\n");
     assert_eq!(b.only_codes(), Vec::<String>::new());

@@ -526,6 +526,7 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                 name: f.name.clone(),
                 name_span: f.name_span,
                 public: f.public,
+                pkg: f.pkg,
                 ty: self.lower_ty(&f.ty),
                 align: f.align.as_ref().map(|e| self.lower_expr(e)),
                 span: f.span,
@@ -632,6 +633,15 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                     members.push(d);
                 }
                 _ => {}
+            }
+        }
+        // 01-core §2: a function in `impl I for T` is as visible as `I`.
+        if let Some(path) = &interface
+            && let Res::Def(iface) = path.res
+        {
+            let vis = self.r.sema.def(iface).vis;
+            for member in &members {
+                self.r.sema.defs[member.0 as usize].vis = vis;
             }
         }
         self.self_ty = None;

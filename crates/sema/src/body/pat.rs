@@ -332,6 +332,19 @@ impl Checker<'_, '_, '_> {
             self.record(p, t, derefs, PatRes::None);
             return;
         };
+        // 01-core §4.2: a struct with no fields counts as having a private one, so it
+        // cannot be taken apart outside its module (E0307).
+        if sig.fields.is_empty() && self.cx.sema.def(def).module != self.module {
+            self.failed_pats.insert(p);
+            let at = rest_span.unwrap_or(self.hir.pat(p).span);
+            let dpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
+            self.err(
+                "E0307",
+                "a struct with no fields cannot be taken apart outside its module",
+                at,
+            )
+            .relate_in("declared", &dpath, sig.span);
+        }
         let s = self.cx.d.subst_for(def, &args);
         let mut order = Vec::new();
         for f in fields {
@@ -348,16 +361,20 @@ impl Checker<'_, '_, '_> {
                 continue;
             }
             let field = &sig.fields[i];
-            if !field.public && self.cx.sema.def(def).module != self.module {
+            if !self.field_visible(def, field) {
                 self.failed_pats.insert(p);
                 let fpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
                 let decl = field.name_span;
-                self.err(
-                    "E0307",
-                    format!("the field `{}` is private to its module", f.name),
-                    f.name_span,
-                )
-                .relate_in("declared", &fpath, decl);
+                let message = if field.pkg {
+                    format!(
+                        "the field `{}` is `pub(pkg)`: it is not visible outside its package",
+                        f.name
+                    )
+                } else {
+                    format!("the field `{}` is private to its module", f.name)
+                };
+                self.err("E0307", message, f.name_span)
+                    .relate_in("declared", &fpath, decl);
                 self.pat_blind(f.pattern);
                 continue;
             }
@@ -389,21 +406,27 @@ impl Checker<'_, '_, '_> {
         // another module with a private field (E0307), even when no private field is
         // written in the pattern.
         if rest
-            && self.cx.sema.def(def).module != self.module
-            && let Some(i) = omitted.iter().find(|i| !sig.fields[**i].public)
+            && let Some(i) = omitted
+                .iter()
+                .find(|i| !self.field_visible(def, &sig.fields[**i]))
         {
             self.failed_pats.insert(p);
             let field = &sig.fields[*i];
             let fpath = self.cx.sources.get(self.cx.file_of(def)).path.clone();
-            self.err(
-                "E0307",
+            let message = if field.pkg {
+                format!(
+                    "`..` would match the field `{}`, which is `pub(pkg)` and not visible \
+                     outside its package",
+                    field.name
+                )
+            } else {
                 format!(
                     "`..` would match the field `{}`, which is private to its module",
                     field.name
-                ),
-                rest_span.expect("a rest pattern"),
-            )
-            .relate_in("declared", &fpath, field.name_span);
+                )
+            };
+            self.err("E0307", message, rest_span.expect("a rest pattern"))
+                .relate_in("declared", &fpath, field.name_span);
         }
         self.record(
             p,

@@ -41,6 +41,15 @@ pub(crate) enum Use {
 }
 
 impl Checker<'_, '_, '_> {
+    /// 01-core §2: a field is visible if it is `pub`, or `pub(pkg)` in the same
+    /// package, or wherever its own module can see it.
+    pub(crate) fn field_visible(&self, def: DefId, field: &crate::sigs::FieldSig) -> bool {
+        let declared = self.cx.sema.def(def).module;
+        self.cx
+            .sema
+            .field_visible(declared, self.module, field.public, field.pkg)
+    }
+
     /// The place `e` denotes, or `None` if it is not a place (a value).
     pub(crate) fn place(&self, e: ExprId) -> Option<PlaceInfo> {
         let e = self.unparen(e);

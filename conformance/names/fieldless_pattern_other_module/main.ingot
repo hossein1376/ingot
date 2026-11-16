@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 4.2
+
+import fieldless_pattern_other_module.lib.Permit;
+
+fn hollow(p: Permit) {
+    let Permit.{} = p; //~ E0307
+}
+
+fn rest(p: Permit) {
+    let Permit.{ .. } = p; //~ E0307
+}

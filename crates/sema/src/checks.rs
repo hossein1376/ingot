@@ -231,6 +231,19 @@ impl Cx<'_, '_> {
         }
     }
 
+    /// 01-core §4.4: `impl I for T` and `impl I for &T` may be in the module that
+    /// declares the named type `T`.
+    fn module_of_impl_target(&self, ty: TypeId) -> Option<crate::defs::ModuleId> {
+        match self.d.types.kind(ty) {
+            TyKind::Adt(d, _) => {
+                let def = self.sema.def(*d);
+                matches!(def.kind, DefKind::Struct | DefKind::Enum).then_some(def.module)
+            }
+            TyKind::Ref(_, inner) => self.module_of_head(*inner),
+            _ => None,
+        }
+    }
+
     pub(crate) fn ensure_impl_tables(&mut self) {
         if self.impl_tables_ready || self.impl_tables_building {
             return;
@@ -267,7 +280,11 @@ impl Cx<'_, '_> {
                 continue;
             };
             let file = self.file_of(*def);
-            let target_is_param = matches!(self.d.types.kind(sig.target), TyKind::Param(_));
+            let target_is_param = match self.d.types.kind(sig.target) {
+                TyKind::Param(_) => true,
+                TyKind::Ref(_, inner) => matches!(self.d.types.kind(*inner), TyKind::Param(_)),
+                _ => false,
+            };
             if target_is_param {
                 self.error(
                     "E0508",
@@ -280,7 +297,7 @@ impl Cx<'_, '_> {
             }
             if sig.of != ImplOf::Inherent {
                 let here = self.sema.def(*def).module;
-                let target_module = self.module_of_head(sig.target);
+                let target_module = self.module_of_impl_target(sig.target);
                 let iface_module = match &sig.of {
                     ImplOf::Interface(i, _) if self.sema.def(*i).kind == DefKind::Interface => {
                         Some(self.sema.def(*i).module)
@@ -1503,6 +1520,11 @@ impl Cx<'_, '_> {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::RawPtr(..) => true,
             TyKind::Void => result,
             TyKind::FnPtr(sig) => sig.ext,
+            // 04 §25/§29: a nullable C function pointer crosses the C ABI.
+            TyKind::Optional(inner) => match self.d.types.kind(inner) {
+                TyKind::FnPtr(sig) => sig.ext,
+                _ => false,
+            },
             TyKind::Adt(d, args) => {
                 let Some(ItemSig::Struct(st)) = self.d.items.get(&d).cloned() else {
                     return false;
