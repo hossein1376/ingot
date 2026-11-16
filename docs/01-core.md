@@ -67,8 +67,16 @@ warnings.
   resolved for the whole package at once and no code runs at load time (section 4.5),
   so there is no initialization order to get wrong. Packages form a directed acyclic
   graph.
-* An item is private to its module unless it is marked `pub`. Struct fields are private
-  unless marked `pub`. Enum variants and interface methods are as visible as their type.
+* An item is private to its module unless it is marked. `pub(pkg)` makes it visible in
+  every module of its package, and `pub` everywhere. A struct field is marked the same
+  way. Enum variants and interface methods are as visible as their type. A function in
+  an `impl T` has its own mark, and a function in an `impl I for T` is as visible as
+  `I`. `pkg` is not a keyword: it means something only between those parentheses.
+* There are no re-exports: an item has one path, the one tools print. A signature may
+  mention a type less visible than itself. The value can then be used where the type
+  cannot be named, which is a way to make a token.
+* Code the compiler generates (the language items of pipeline.md section 8) is not
+  subject to visibility.
 * A program is compiled whole. There are no separately compiled Ingot libraries.
 
 ## 3. Types
@@ -177,10 +185,10 @@ linear struct File { fd: i32 }                  // must be consumed exactly once
 * Destructuring: `let Vec3.{ x, y, z } = v;`. A struct pattern may end in `..` to
   leave the remaining fields out: `let Vec3.{ x, .. } = v;`. A field left out of a pattern
   that moves the value is dropped, so its type must be `Discard`; leaving out a linear
-  field is error E1003. Destructuring a struct with private fields is only possible
-  inside its module. This is how a linear struct is finally taken apart.
+  field is error E1003. Destructuring a struct is only possible where every field is
+  visible. This is how a linear struct is finally taken apart.
 * **Construction respects privacy.** Outside a struct's module, a value of it can be
-  made from nothing only if every field is `pub`. This covers a literal, `@zero` and
+  made from nothing only if every field is visible there. This covers a literal, `@zero` and
   `@bits` alike, and a struct with no fields counts as having a private one. A type
   with a private field is therefore only ever produced by its own module's functions.
   That is what lets a module keep an invariant (a `List` whose pointer and length
@@ -256,7 +264,8 @@ impl Length for Vec3 {
   If `I` has supertraits (`interface Ord: Eq`), `T` must implement each of them as well,
   by an `impl` or as a built-in type.
   A type implements an interface at most once. `T` is a named type, possibly generic
-  (`impl[K: Hash] Hash for Pair[K, K]`), never a bare type parameter, so two
+  (`impl[K: Hash] Hash for Pair[K, K]`), or a shared borrow of a named type declared in
+  the same module (`impl Allocator for &Arena`), never a bare type parameter, so two
   implementations can never overlap.
 * `value.name(args)` looks in `impl T` first and then in the interfaces `T` implements.
   If two interfaces supply the name, the call is written `I.name(value, args)`. A
@@ -707,8 +716,9 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   bound is an error in the generic, not in some instantiation.
 * Each distinct instantiation is compiled as its own copy. Checking the generic once is
   the whole check: an instantiation can fail only because a constant expression that
-  depends on an argument traps, because instantiation nests too deep, or because a
-  kernel is dispatched on an executor that lacks one of its types.
+  depends on an argument traps or is out of range (a length, an alignment, a lane
+  index), because instantiation nests too deep, or because a kernel is dispatched on an
+  executor that lacks one of its types.
 * `@zero` and `@bits` on a type parameter need a bound that grants them. `Num` and its
   relatives grant `@zero`. Nothing grants `@bits`, which needs concrete types.
 * **Builtin names** need no import, because the compiler itself gives them meaning:

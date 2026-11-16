@@ -224,24 +224,52 @@ loop {
             try process(msg);
         }
         _ = stop.wait() => { break; }
-        _ = clock.after_ms(250) => { try flush(out); }
+        _ = try clock.after_ms(250) => { try flush(out); }
     }
 }
 ```
 
-* Each arm is `pattern = waitable_call => block`. Exactly one arm's operation completes
-  and only its block runs. The other operations have no effect. The pattern binds the
-  operation's result as it is, so a `T ! E` is still handled inside the block.
-* An optional last arm `else => block` is taken when nothing is ready, which makes the
-  `select` non-blocking.
-* A `waitable fn` takes its receiver by shared borrow, so an arm that is not chosen
-  consumes nothing.
-* Before it waits, `select` evaluates the receiver and arguments of every arm's call, arm
-  by arm from the first, each left to right (section 5.1). Only the chosen arm's
-  operation then takes effect.
-* If several operations are ready, one is picked uniformly at random.
-* The waitable functions in the standard library are `Chan.recv`, `Task.wait` (then
-  `join()` returns at once), `Clock.after_ms` and `Scope.canceled`.
+**Operations.** `std.task.Wait` is the interface of an operation the scheduler can
+wait for:
+
+```ingot
+pub interface Wait {
+    type Output;
+    /// One attempt. It must not block. `.some(v)` completes the operation with `v`.
+    /// `.none` means it is not ready: nothing was consumed, nothing that another task
+    /// can observe was changed, and `cx` was told what to wait for.
+    fn poll(self: &mut Self, cx: &mut WaitCx) -> ?Self.Output;
+}
+```
+
+A `waitable fn` declared `-> R` has a body that **prepares** an operation: every
+`return` gives a value of one type `W`, where `W: Wait + Discard` and `W.Output` is `R`.
+The preparation runs once, must not block, and changes nothing another task can
+observe. Its receiver is a shared borrow and its other parameters are `Discard`, so an
+operation that is not chosen is simply dropped (E1410 otherwise).
+
+* A direct call `x.f(args)` of a `waitable fn` runs the preparation, waits until the
+  operation completes, and has type `R`.
+* Each arm of a `select` is `pattern = call => block`, and the call may be written under
+  `try`. `select` runs the preparation of every arm, arm by arm from the first, each
+  left to right (section 5.1). Then it polls the operations, in a random order each
+  time, until one completes. That arm's block runs, with the pattern bound to the
+  result; the other operations are dropped, having had no effect. So a losing
+  `Chan.recv` consumes nothing, and if several operations are ready, one is picked
+  uniformly at random.
+* Under `try`, the arm's call applies `try` to the result when the arm is chosen, as it
+  would in a `let`: the pattern binds the success value, and an error leaves the
+  function as any propagating `try` does.
+* An optional last arm `else => block` is taken when no operation completes on the
+  first round of polls, which makes the `select` non-blocking.
+* `cx.canceled()` is true when the scope of the waiting task is canceled. An operation
+  that observes cancellation (section 22) then completes with its `.canceled` error;
+  one that does not is unaffected.
+* The waitable functions of the standard library are `Chan.recv`, `Task.wait` (then
+  `join()` returns at once), `Clock.after`, `Clock.after_ms` and `Scope.canceled`, which
+  completes when the scope is canceled. `Scope.is_canceled()` reads the flag without
+  waiting. The runtime half (`WaitCx`, wait queues, the `select` entry) is `std`'s and
+  is not language.
 * I/O operations are not waitable. Two of the three systems complete I/O instead of
   reporting readiness, and a started read cannot always be withdrawn without losing
   data. Code that must wait for I/O or something else gives the I/O to a child task and
@@ -254,7 +282,7 @@ loop {
   a failing function (section 18).
 * Cancellation is cooperative and is delivered as an error value. In a canceled scope
   these operations fail with their module's `.canceled` error instead of blocking: I/O,
-  `Chan.send` and `Chan.recv`, timers and sleeps, on their own or as a `select` arm.
+  `Chan.send` and `Chan.recv`, and timers, on their own or as a `select` arm.
   CPU-bound code polls `task.canceled()`.
 * `Mutex.lock`, `Task.join` and the wait at the end of a scope do not observe
   cancellation. Each waits for something that is itself bound to finish.
@@ -281,7 +309,10 @@ This section is normative only where it says "must".
 * **Task memory.** `spawn` is not a fallible operation. If the runtime cannot get
   memory for a task record or a stack, the program traps (section 16.1), in the same
   class as stack exhaustion. A program that must bound its memory bounds the number of
-  tasks it starts.
+  tasks it starts *at once*: a task's record is recycled when the task has finished
+  and nothing can join it (a statement-form `spawn`), or at its `join`, not at the end
+  of the scope, so a long-lived scope that keeps spawning (a server's accept loop) does
+  not grow.
 * **Stacks.** A stolen or parked task runs on a stack taken from a per-worker cache.
   Stacks are fixed-size regions of reserved address space with a guard page, committed
   on demand: by first touch on macOS and Linux, and on Windows by a guard page that the
@@ -299,9 +330,15 @@ This section is normative only where it says "must".
   `extern "c-bigstack"`, which switches to the worker's own stack first. A foreign call
   that blocks in the kernel blocks its worker. Declaring it `extern "c-blocking"` tells
   the runtime to hand the worker's queue to a spare thread first.
-* **Calls from foreign code.** An `export fn` called on a thread the runtime did not
-  create runs outside any task. It may not block, `spawn` or use `par for`; doing so
-  traps.
+* **Calls from foreign code.** The body of an `export fn` runs outside any task,
+  whichever thread calls it, including a worker that is running foreign code. Outside
+  a task, entering a `scope`, `spawn`, `par for`, `select` and every operation that
+  would park trap (T17), whether or not anything would be spawned. `task.run(f)` is the
+  way in: it runs `f` as a task and blocks the calling thread until `f` returns. A
+  `Task` or a `&Scope` cannot cross the boundary: neither is an FFI type.
+* **Assembly in std.** The stack switch is a short assembly file per target in
+  `std.sys`, named by `std`'s manifest (`[link.<target>] asm`, section 33). No other
+  package may list assembly sources.
 * **No preemption.** A task runs until it blocks or returns. The OS still preempts
   worker threads, but a task that spins never yields to its siblings. `task.yield()`
   exists for the rare loop that needs it.
@@ -309,5 +346,6 @@ This section is normative only where it says "must".
   pending, the runtime
   traps with the list of parked tasks and what each waits for.
 * **Thread-bound foreign state.** A task may resume on a different worker after it
-  parks. Foreign libraries that require one OS thread are used from `thread.scope`,
-  which gives structured, dedicated OS threads with the same borrowing rules.
+  parks. Foreign libraries that require one OS thread are used from a dedicated OS
+  thread: `thread.spawn(s, f)` runs `f` on its own thread as a child of scope `s`, with
+  the borrowing rules of `spawn` (`f` is stored `into s`) and the scope's wait.

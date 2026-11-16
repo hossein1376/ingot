@@ -250,7 +250,11 @@ report for the author, then profile-guided optimization; post-link layout optimi
 grid kernels (`Idx2`, `Idx3`, `Grid`); a compiler-provided structural `Eq`, `Ord` and
 `Hash` for a plain struct, on request, if writing `std` shows the need, rather than a
 general derive mechanism; `@config.name` values from `ingot.toml` for `when`, which
-cannot name a constant.
+cannot name a constant; a C-callable static library as a second build output (its
+roots are the `export fn`s, and foreign threads enter through `task.run`; it needs a
+decision on who starts the runtime and a generated header); dev-dependencies, until a
+package is hurt by the lack; conversions between raw pointers and `extern fn` pointers,
+for `dlsym` and GPU function tables, with the GPU step.
 
 ## 13. Where this design is most likely to be wrong
 

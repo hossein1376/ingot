@@ -87,8 +87,9 @@ object format.
   sharing is avoided. The argument is a constant power of two, no smaller than the
   natural alignment of what it applies to and no larger than 65536.
 * **Enums** store the tag first, then the payload at the alignment of the most aligned
-  payload. `?&T`, `?&mut T`, `?[]T` and `?fn(...)` use a null pointer for
-  `.none` and are the size of the type without `?`. No other niche is guaranteed. An
+  payload. `?&T`, `?&mut T`, `?[]T`, `?fn(...)` and `?extern fn(...)` use a null pointer
+  for `.none` and are the size of the type without `?`. There is no other niche: layout
+  is visible through `@sizeof` and `ingot layout`, so it is not a compiler's choice. An
   enum with no variants has size 0 and alignment 1.
 * **Vectors** are as large as their width (16, 32 or 64 bytes) and aligned to their
   size. A **mask** `boolxN` in memory is `N` bytes, one per lane holding 0 or 1, aligned
@@ -133,7 +134,7 @@ Vectors are `Copy` values. They are passed and returned in registers.
 | `& \| ^ ~`, `<< >>` by a scalar count | integer vectors |
 | `== != < <= > >=` | lane-wise, result `boolxN` |
 | `& \| ^ !` on masks | |
-| `v[k]` with constant `k` | read one lane. `@insert(v, k, x)` gives a copy with lane `k` replaced |
+| `v[k]` with constant `k` | read one lane. `@insert(v, k, x)` gives a copy with lane `k` replaced. `k` may depend on a constant generic parameter, checked per instance |
 | `@splat(V, x)`, `@iota(V)` | broadcast; `0, 1, 2, ...` |
 | `@lanes(V)` | the lane count of vector type `V`, a constant |
 | `@select(mask, a, b)` | per-lane choice |
@@ -380,8 +381,17 @@ export fn ingot_checksum(data: *u8, len: i64) -> u32 {
 * **The platform C ABI** is the target's: Apple arm64 on macOS, System V AMD64 on Linux,
   Microsoft x64 on Windows. The compiler implements all three, including their different
   rules for variadic calls and for structs passed by value.
-* FFI types: integers, floats, `bool`, raw pointers, `extern fn(...)` pointers, and
-  `copy struct`s of FFI types, passed by value according to the platform ABI.
+* FFI types: integers, floats, `bool`, raw pointers, `extern fn(...)` pointers,
+  `?extern fn(...)` (a nullable C function pointer, with the null niche), and
+  `copy struct`s of FFI types with no raised alignment, passed and returned by each
+  system's rule for a C struct of the same layout. Other optionals, `T ! E` and enums do
+  not cross; a payload-free enum is converted in the source with `as` and `@enum`.
+* `bool` is one byte holding 0 or 1, C's `_Bool`. A foreign function that returns
+  anything else has produced an invalid value (section 16.2); C code that uses `int` as
+  a truth value is declared with `i32`.
+* Ingot has no unwinding. Every function is marked as not unwinding, and unwind tables
+  are still emitted on all three systems, for the system's own exception dispatch and
+  for debuggers and profilers.
 * A declaration states exact widths. C's `long` is 64 bits on macOS and Linux and 32 on
   Windows, so a function with `long` in its C prototype is declared once per system,
   under `when`. The same goes for any function that exists on one system only, such as

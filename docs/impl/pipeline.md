@@ -28,13 +28,13 @@ code generation. "Must" marks a requirement. Everything else is advice.
 | 8 | Lower | typed tree | one CFG per function, checks explicit | none |
 | 9 | Ownership | CFG | the same CFG, verified | E10xx, E11xx, E12xx, E1401 to E1403, E1407 |
 | 10 | Check removal | CFG | CFG without the checks §31 requires gone, and the cost items | E0806 (rule 5 of section 6) |
-| 11 | Instantiate | generic CFGs, roots | one CFG per concrete instance | E0806, E0809, E0810, E1514 only |
+| 11 | Instantiate | generic CFGs, roots | 11a: the set of instances; 11b: one CFG per instance | E0806, E0809, E0810, E1514, and E0521, E0515, E1502, E1504 for a value from a constant generic argument, only (section 6a) |
 | 12 | Optimize | CFGs | CFGs or back-end IR | none |
 | 13 | Emit | | object code, kernel shaders | none |
 | 14 | Link | | executable | linker failures, reported as the compiler's own exit status 2 |
 
-`ingot check` runs phases 1 to 10 and, for the post-instantiation codes, as much
-of phase 11 as is needed to find them. It needs no `main` and no linker.
+`ingot check` runs phases 1 to 10 and phase 11a (section 6a), and nothing else of
+phase 11. It needs no `main` and no linker.
 
 ### Requirements on the order
 
@@ -56,11 +56,14 @@ of phase 11 as is needed to find them. It needs no `main` and no linker.
   expression calls goes through phases 7 and 8 when the constant is evaluated (§4.6).
 * **Generic bodies go through phases 7 to 10 once, uninstantiated**, with type
   parameters as opaque types that have exactly the properties their bounds grant.
-  Phase 11 must not be able to produce any diagnostic except E0806 (a constant
+  Phase 11 reports only what depends on the value of a constant generic argument, on
+  the depth of instantiation, or on the executor of a `dispatch`: E0806 (a constant
   expression that depends on a generic argument traps), E0810 (an `@static_assert`
-  whose condition depends on a generic argument is false), E0809 and E1514 (a kernel type
-  the chosen executor lacks). If an implementation finds another error only after
-  instantiation, the bound system in the specification has a hole: fix it there.
+  whose condition depends on one is false), E0521, E0515, E1502 and E1504 (a length, an
+  alignment or a lane index computed from one is out of range), E0809 (depth) and E1514
+  (a kernel type the chosen executor lacks). If an implementation finds another error
+  only after instantiation, the bound system in the specification has a hole: fix it
+  there.
 * **Phase 9 never changes the program.** It accepts or rejects.
 * **Phase 10 is required in every build mode**, including `--fast`, because the
   specification promises those removals and `ingot cost` reports them.
@@ -377,6 +380,32 @@ expression. Because phase 10 is the same in both pipelines, so is that part of t
 report. The optimizer may delete more checks afterwards. Those are not reflected in
 `ingot cost`: the report states what is guaranteed, not what happened to be optimized.
 
+## 6a. Instance discovery (phase 11a)
+
+* **Strategy.** Every instance reachable from the roots is compiled as its own copy.
+  There is no drop glue, since the language has no destructors: an instance is only its
+  body.
+* **Roots.** For `build`: `main` and every `export fn` of the root package. For `test`:
+  every `test` block. For `check`: every non-generic function, test, `const` and
+  `static` of the packages being checked.
+* **An instance** is a body and its arguments after substitution: a function or method
+  with type and constant arguments; a closure or `par for` body with its owner's
+  arguments; a method table for each `(type, interface)` pair that is converted to
+  `&dyn`; a `spawn` thunk. A call through a bound is resolved to the impl's method here.
+* **Order and depth.** A worklist from the roots, in canonical order (section 2). The
+  depth of a root is 0, and of any other instance one more than the smallest depth of
+  an instance that uses it, so depth does not depend on the order of discovery. A depth
+  above 64 is E0809. The finished set is sorted by mangled name. A diagnostic carries
+  the `instantiation` label of the shortest chain, the first in canonical order among
+  equals.
+* **Per-instance codes.** E0806 and E0810 by running the constant interpreter (§4.6)
+  with the instance's arguments; E1514 at a `dispatch`; E0521, E0515, E1502 and E1504
+  for a length, an alignment or a lane index computed from a constant generic argument.
+  Any argument that must be a constant expression may be an expression over constant
+  generic parameters, except a format string and the number of `@shuffle` indices,
+  which stay syntactic. An author who wants the error at the call site writes
+  `@static_assert` at the top of the body.
+
 ## 7. Code generation requirements
 
 These hold for any back end. With LLVM they translate as noted.
@@ -393,9 +422,17 @@ These hold for any back end. With LLVM they translate as noted.
   fast-math flags; emit `llvm.fma` only for `@fma`.) Float-to-integer conversion goes
   through the semantics of `@narrow` or `@sat`, never through an operation that is
   undefined out of range.
-* **Traps** call one cold, non-returning runtime function with the trap code and a
-  pointer to a static record holding the position and any operands. Check failures
-  branch to an out-of-line block, so the hot path is a compare and a not-taken branch.
+* **Traps** call one cold, non-returning runtime function with a pointer to a static
+  **trap site** and up to three run-time operands. The site holds the trap's code, the
+  position and the fixed text of the message (the operator, the type name, the source
+  text of an assertion). The operands are the values the catalog's text prints (`{i}`,
+  `{len}`, `{lo}`, `{hi}`, `{n}`). Check failures branch to an out-of-line block, so
+  the hot path is a compare and a not-taken branch.
+* **No undefined behavior in the back end's terms.** The generated code for a safe
+  function has no behavior that the back end's intermediate form leaves undefined. (LLVM:
+  no `nsw`/`nuw` unless the check is present or phase 10 removed it, no `inbounds` on
+  `@offset`, no fast-math flags.) Check removal, `inline fn` and kernel vectorization
+  must not depend on the back end's optimizer, since both pipelines promise them.
 * **Cold paths need no profile.** Trap blocks are marked cold. The error arm of a `try`,
   and a `catch` or `orelse` handler that leaves the function, are laid out as unlikely
   by default. A handler that only supplies a value gets no hint.
@@ -403,8 +440,10 @@ These hold for any back end. With LLVM they translate as noted.
   optimizer. A shared borrow of a type without interior mutability may be marked
   read-only. A shared borrow of a type with interior mutability must not be.
 * **Atomics.** Each atomic builtin (§15) is one atomic instruction with the given
-  ordering, never split, widened or removed. (LLVM: `load atomic`, `store atomic`,
-  `atomicrmw`, `cmpxchg`, `fence`.)
+  ordering, never split, widened or removed. An order that is not a constant after
+  `inline` expansion becomes a branch over its values, each arm one instruction, in
+  both pipelines. (LLVM: `load atomic`, `store atomic`, `atomicrmw`, `cmpxchg`,
+  `fence`.)
 * **Uninitialized values do not exist** in the generated code for safe functions:
   padding bytes are unspecified but every field is written before any read.
 * **Layout** follows §25 exactly. The compiler's own calling convention is free, except
@@ -422,16 +461,16 @@ These hold for any back end. With LLVM they translate as noted.
 
 The runtime is ordinary Ingot code in `std`, built with the program. The compiler
 depends on a small set of entry points in `std.sys.rt`. Their exact signatures belong
-to the runtime's own design document, which is not written yet. The compiler needs:
+to the runtime's design document (`docs/std/rt.md`). The compiler needs:
 
 | Need | Used by |
 |---|---|
-| process entry: build `Env`, call `main`, map its result to an exit status | every executable |
-| `trap(code, record) -> never` | every check |
+| process entry: the compiler generates `entry: fn(&Env) -> i32` for the root package (for `ingot test`, a wrapper that runs the one test named on the command line) and emits the target's process entry symbol, which calls `rt.start`, or `rt.start_tasks` when any scheduler entry is reachable, with it. `start` builds `Env`, calls `entry` and exits with its status | every executable |
+| `trap(site: &TrapSite, a: i64, b: i64, c: i64) -> never`, with the code, position and fixed text in the static `TrapSite` (§7) | every check |
 | scope enter, spawn (function pointer plus an argument record), handle join, scope wait, scope cancel | `scope`, `spawn` |
 | split-and-run over a range with a body function and a captures record | `par for`, `exec.par` |
 | park and wake | `std.sync`, `std.io` |
-| select over a fixed list of waitable operations | `select` |
+| select over the arms' operations: for each arm the operation, a generated poll function for its type and the place for its result, plus whether there is an `else` arm; gives the chosen arm's index | `select` |
 | stack probe target and guard-page handler | function entry |
 
 A program that uses none of the concurrency entry points must not link the scheduler.
@@ -446,17 +485,21 @@ importing them.
 
 | Item | What the compiler assumes |
 |---|---|
-| `std.Env` | the parameter type of `main` and of `@test_env()` (§33.1) |
+| `std.Env` | the parameter type of `main` (§33.1) |
+| `std.testing.TestEnv` | what `@test_env()` gives a `test` block, by `&` (§32): `env: &Env`, the manual clock and the temporary directory |
 | `std.task.Scope` | the type behind `scope s`: `s` is a `&Scope`, and a scope parameter carries `Self(s)` origins (checker §2) |
 | `std.task.Task` | the result `Task[R]` of an expression-form `spawn`; linear, a view of its scope; `join` consumes it |
+| `std.task.Wait`, `std.task.WaitCx` | the operation a `waitable fn` prepares, and what its `poll` is given (§21). `select` and a direct call of a `waitable fn` poll through `Wait` |
 | `std.par.Split` | what a `par for` may iterate besides ranges and slices (§19); its item is `Self.Item` |
 | `std.exec.seq`, `.simd`, `.par` | the CPU executors of §27.2, which support `i64 u64 f64` |
 | `std.gpu.Queue`, `std.gpu.Buffer` | the GPU executor and its storage (§28) |
 | `std.hash.Hasher`, `std.fmt.Formatter` | the parameter types of `Hash.hash` and `Format.format` (§4.4) |
 | `std.sync.Cell` | the cell of §13.6: a type that contains one by value has interior mutability |
-| `std.sync.AtomicOrder` | the type of every `order` argument of the atomic builtins (§15) |
+| `std.sync.LoadOrder`, `std.sync.StoreOrder`, `std.sync.AtomicOrder` | the types of the `order` arguments of the atomic builtins (§15) |
 | `std.sync.Atomic` | maps its operations to single instructions; contains a `Cell` |
-| `std.mem.Allocator` | what "a call that may allocate" means for `ingot cost` |
+| `std.sync.Mutex.lock`, `try_lock`, `std.sync.RwLock.read`, `write`, `try_read`, `try_write` | the `lock` cost item (§31) |
+| `std.mem.AllocErr` | the `alloc` cost item: a call whose error type is `AllocErr` or converts to it by `from` (§31) |
+| `std.mem.Allocator` | the `allocator` of an `alloc` cost item: the static type of the callee's one generic argument bound by `Allocator` |
 
 ## 9. Tools
 

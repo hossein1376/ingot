@@ -148,7 +148,8 @@ the counters.
 ### `ingot api [PATH]`
 
 `PATH` is a package, a module (`std.mem`) or an item (`std.mem.Arena`). One line per
-public item, in source order:
+`pub` item, in source order; `--pkg` adds the `pub(pkg)` items, for work inside the
+package, with `"pub(pkg)"` in `modifiers`:
 
 ```json
 {"type":"api","path":"std.mem.Arena.alloc_slice","item":"fn",
@@ -227,7 +228,10 @@ An enum has `tag` (`type`, `offset`, `size`) and `variants`, each with its paylo
 
 ### `ingot targets`
 
-One `{"type":"target","name":N,"host":B}` per target the compiler supports.
+One `{"type":"target","name":N,"host":B,"build":K,"missing":[...]}` per target the
+compiler supports. `build` is true when everything a build for that target needs was
+found (the pinned `clang`, the system's linker inputs, a sysroot for another system),
+and `missing` names what was not.
 
 ### `ingot asm FILE --fn NAME`
 
@@ -350,8 +354,9 @@ This is the question behind most E11xx and E12xx diagnostics.
 
 ### `ingot query symbols [PATH] [--match TEXT]`
 
-One `{"type":"symbol","path":P,"item":K,"span":S,"extent":E,"pub":B}` per item, public
-or not, in source order. `--match` keeps items whose path contains the text. The items
+One `{"type":"symbol","path":P,"item":K,"span":S,"extent":E,"pub":B,"vis":V}` per item,
+public or not, in source order. `vis` is `"pub"`, `"pkg"` or `"private"`; `pub` is true
+for `"pub"` only. `--match` keeps items whose path contains the text. The items
 are the declarations of the package's files: functions, `extern` functions, structs and
 their fields, enums and their variants, interfaces and their members, the members of
 impls (an impl itself is not a symbol), constants, statics, aliases and tests. Modules,

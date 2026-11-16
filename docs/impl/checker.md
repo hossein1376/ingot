@@ -446,7 +446,14 @@ that are in fact safe.
 * **Widening through shared origins is too strict.** One set per value mixes where a
   slice lives with what its elements borrow, so storing into `words[i]` of a slice that
   also holds `Inner(req)`, for a `req: &Request`, is reported although nothing can be
-  stored through `req`. The fix is for widening to skip `Param(p)` and `Inner(p)` when
-  `p` is a shared borrow or shared slice of a type without interior mutability, and to
-  skip a shared loan on such a local. Interior mutability is now defined (§13.6, the
-  cell), so the fix can be made; until it is, the rule stays as written.
+  stored through `req`. "No `Cell` by value" is not enough to skip it: a type can reach
+  an arena through a borrow field (`struct W { a: &Arena }`), and a store through what
+  the arena hands out would be lost. The fix that is sound uses a stronger property. A
+  type is **frozen** when no `Cell`, no raw pointer, no `dyn` and no type parameter occurs
+  in it at any depth: in its fields, payloads and elements, through borrows, and in
+  generic arguments. Widening may skip `Param(p)` and `Inner(p)` when the type of `p` is
+  a shared borrow or a shared slice of a frozen type, and skip a shared loan on a local
+  of a frozen type. This covers a `req: &Request` of slices and scalars, and not one
+  that holds a `List`; the precise fix is two origin sets per value (where a view
+  points, and what its target holds), which is not planned. Until the frozen rule is
+  built, the rule stays as written.

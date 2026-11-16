@@ -113,8 +113,8 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0303 | `package_cycle` | packages depend on each other in a cycle | the import that closes it | — |
 | E0304 | `undefined_name` | a value identifier resolves to nothing | the name | if exactly one imported module exports the name, qualify it; else if one name in scope is within edit distance 2, replace |
 | E0305 | `undefined_type` | a type identifier resolves to nothing | the name | as E0304 |
-| E0306 | `private_item` | a non-`pub` item is named from another module | the name (`declared`) | — |
-| E0307 | `private_field` | a non-`pub` field is read, written or matched from another module; a struct pattern ending in `..` matches every field it leaves out, so it cannot take apart a struct with a private field there (§4.2) | the field name (`declared`) | — |
+| E0306 | `private_item` | an item is named where it is not visible: a private item from another module, or a `pub(pkg)` item from another package. The message names the level | the name (`declared`) | — |
+| E0307 | `private_field` | a field is read, written or matched where it is not visible (private: another module; `pub(pkg)`: another package); a struct pattern ending in `..` matches every field it leaves out, so it cannot take apart a struct with a private field there (§4.2) | the field name (`declared`) | — |
 | E0308 | `duplicate_definition` | two items, fields, variants, parameters, generic parameters or labels with one name in one scope, or an item and an import of one name in one module. The fields, variants, methods, associated functions and associated constants of one type share one namespace. Function overloading is this error | the second, or the item (`previous`: the import) | — |
 | E0309 | `shadowing` | a local or pattern binding has the name of a local or parameter in scope, or of a `const` or `static` visible in its module | the new binding (`previous`) | — |
 | E0310 | `unused_import` | an imported name is never used. A use inside any branch of a `when`, taken on this target or not, counts | the import | delete the import line |
@@ -152,7 +152,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0420 | `array_slice_needs_borrow` | `a[lo..hi]` on an array place without `&` or `&mut` | the expression | insert `&` before it |
 | E0421 | `value_in_void_return` | `return expr;` in a function without a result, or `return;` in one with a result | the `return` | — |
 | E0422 | `bad_format_string` | a format string of `@format` or `@debug` (§35) with a malformed placeholder, a spec the argument's type does not support, or a placeholder count that differs from the argument count | the placeholder inside the literal, or the first extra argument | — |
-| E0423 | `bad_atomic` | an atomic builtin (§15) on a type that is not `AtomicValue` (or not `Int` for `@atomic_add` and the other arithmetic ones), an `order` that is not a constant, or an `order` the operation does not allow | the offending argument | — |
+| E0423 | `bad_atomic` | an atomic builtin (§15) on a type that is not `AtomicValue`, or not `Int` for `@atomic_add` and the other arithmetic ones. (An order is typed, so a wrong one is an ordinary type error) | the offending argument | — |
 
 ## 6. Declarations (E05xx)
 
@@ -172,7 +172,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0512 | `initializer_not_constant` | **retired**: a non-constant initializer is E0807 | — | — |
 | E0513 | `static_borrows_non_static` | **retired**: at item level the only borrowable places are statics and literals; a borrow of a `const` is E0607 | — | — |
 | E0514 | `bad_main` | the root module's `main` is missing `pub`, has parameters other than `env: &Env`, or returns something other than `void` or `u8`, optionally fallible | the signature | — |
-| E0515 | `bad_align` | `align(n)` where `n` is not a constant power of two, is below the natural alignment, or is above 65536 | the argument | — |
+| E0515 | `bad_align` | `align(n)` where `n` is not a constant power of two, is below the natural alignment, or is above 65536; per instance when `n` depends on a constant generic argument | the argument (`instantiation` per instance) | — |
 | E0516 | `infinite_type` | a struct or enum contains itself by value | the field's type | — |
 | E0517 | `bad_self_type` | a parameter named `self` whose type is not the implementing type, `&` of it or `&mut` of it; or `self` outside an `impl` or interface | the type | — |
 | E0518 | `missing_body` | a function without a body outside an interface or `extern` block, or with one inside an `extern` block | the function name | — |
@@ -229,7 +229,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0806 | `constant_evaluation_trapped` | a constant expression traps, or an operation in a body whose operands are all constants traps (pipeline §6, rule 5: for a bounds check, a constant index against a constant length), unless only an untaken branch on a constant condition reaches it. The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
 | E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function, or runs `spawn`, `par for`, `select` or `dispatch` (pipeline §4.6) | the operation (`call` as for E0806) | — |
 | E0808 | `evaluation_limit` | constant evaluation takes more than 2^24 steps, nests calls more than 1024 deep, or holds more than 2^24 bytes of values at once (pipeline §4.6) | the outermost call | — |
-| E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
+| E0809 | `instantiation_depth` | an instance's depth (pipeline §6a: one more than the smallest depth of an instance that uses it) is above 64 | the innermost use (`instantiation`) | — |
 | E0810 | `static_assert_failed` | `@static_assert(cond, msg)` with a false `cond`. A `cond` that depends on a generic parameter is checked for each instance (phase 11) | the builtin call | — |
 | E0811 | `layout_depends_on_parameter` | `@bits` or `@zero` on a type parameter with no bound that grants it | the builtin call | — |
 | E0812 | `constant_cycle` | the value of a constant depends on itself, also through the signature or body of a function its evaluation calls, or (for a constant in an impl header that needs a call) through the impl tables (pipeline §4.6) | the constant's name | — |
@@ -294,7 +294,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1407 | `par_for_outer_mutation` | a `par for` body assigns to, moves or exclusively borrows something declared outside the loop | the operation (`declared`) | — |
 | E1408 | `par_for_exit` | `break`, a `continue` of an outer loop, `return`, `fail` or `try` inside a `par for` body | the statement | — |
 | E1409 | `not_waitable` | a `select` arm's operation is not a call of a `waitable fn` | the call (`callee`) | — |
-| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow, or that has no `self` parameter | the `self` parameter, or the function's name when it has none | — |
+| E1410 | `bad_waitable` | a `waitable fn` whose receiver is not a shared borrow, that has no `self` parameter, that has a parameter that is not `Discard`, or whose body does not return one `Wait + Discard` type whose `Output` is the declared result (§21) | the `self` parameter, or the function's name when it has none | — |
 
 A task that would use the same data twice is not a separate code: it is E1102 or E1103
 with a `spawn` related span.
@@ -304,9 +304,9 @@ with a `spawn` related span.
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
 | E1501 | `bad_vector_type` | a vector type whose total width is not 128, 256 or 512 bits, or a `boolxN` with `N` not in 2, 4, 8, 16, 32, 64 | the type | — |
-| E1502 | `bad_lane_index` | `v[k]` or `@insert(v, k, x)` with `k` not a constant in range | the index | — |
+| E1502 | `bad_lane_index` | `v[k]` or `@insert(v, k, x)` with `k` not a constant in range; per instance when `k` depends on a constant generic argument | the index (`instantiation` per instance) | — |
 | E1503 | `vector_shape_mismatch` | operands, a mask or a conversion with different lane counts, or `@bits` with different sizes where either type is a vector or a mask | the operation | — |
-| E1504 | `bad_shuffle` | `@shuffle` indices that are not constant or out of range | the index array | — |
+| E1504 | `bad_shuffle` | `@shuffle` indices that are not constant or out of range; per instance when they depend on a constant generic argument | the index array (`instantiation` per instance) | — |
 | E1510 | `bad_kernel_signature` | a kernel (§27.1) with a parameter after the index that is not a uniform, input or output, a result without `reduce`, or an error type; a kernel helper with a parameter or result that is not a uniform type, or an error type; generic parameters on a kernel or helper; an index type anywhere but inside a kernel | the parameter, the result type, the generic parameters, or the type that names the index | — |
 | E1511 | `forbidden_in_kernel` | a kernel or kernel helper body does something §27.1 does not allow: allocates, borrows (`&`, `&mut`), calls an ordinary function, calls through a function value, closure, `&dyn` or interface bound, writes a closure, spawns or opens a `scope`, uses `par for`, `dispatch` or `select`, blocks, fails, uses `defer` or `unsafe`, loops with `for` over a non-constant range, matches on an enum with payloads, or has a local or value of a type that is not an element or uniform type; or helpers call each other in a cycle | the construct, or the call that closes the cycle | — |
 | E1512 | `trapping_op_in_kernel` | integer `+ - * / %` or unary `-`, a shift by a non-constant count, `@assert`, `@panic`, `@unreachable` or `@narrow` in a kernel or kernel helper | the operation | — (the message names the wrapping, saturating and masking forms) |
@@ -342,6 +342,10 @@ Their `file` is `ingot.toml` or the file concerned.
 | E1705 | `bad_module_name` | a file or directory name that is not a value identifier | 1:1 of the file | — |
 | E1706 | `test_only` | `@test_env()` outside a `test` block | the builtin | — |
 | E1707 | `duplicate_test_name` | two `test` blocks, or two `bench` blocks, with one name in a module | the second (`previous`) | — |
+| E1708 | `conflicting_package` | the dependency graph reaches two different contents under one package name, and the root's `[override]` does not pick one (§33.2) | the second `[deps]` entry (`previous`: the first chain) | — |
+| E1709 | `dependency_lacks_target` | a dependency does not list the target being built (§33.2) | the `[deps]` entry | — |
+| E1710 | `compiler_too_old` | a package's `ingot` key names a newer compiler than this one | the key | — |
+| E1711 | `duplicate_export` | two `export fn`s with one name in a build (§33.2) | the second (`previous`) | — |
 
 ## 18. Traps
 
@@ -372,7 +376,7 @@ fixed as below, with the bracketed parts filled in.
 | T14 | `vector_access_out_of_bounds` | `@load`, `@store`, `@load_tail`, `@store_tail`, `@gather`, `@scatter` | `vector access at {i} out of bounds for length {len}` |
 | T15 | `scatter_index_repeated` | `@scatter` | `scatter index {i} occurs twice` |
 | T16 | `dispatch_out_of_bounds` | `dispatch` | `dispatch range {lo}..{hi} exceeds a buffer of length {len}`, or `dispatch range {lo}..{hi} is outside 0..2147483647` |
-| T17 | `not_on_a_task` | a blocking operation, `spawn` or `par for` on a thread the runtime did not create | `blocking operation outside a task` |
+| T17 | `not_on_a_task` | entering a `scope`, `spawn`, `par for`, `select` or an operation that would park, outside a task: in the body of an `export fn`, on any thread (§23) | `blocking operation outside a task` |
 
 T13 is the one trap that prints more than one line. For T11, T12, T13 and T17 the
 position is the innermost Ingot source position known, or `<runtime>:0:0` if there is

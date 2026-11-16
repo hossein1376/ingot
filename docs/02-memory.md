@@ -273,8 +273,13 @@ written through a shared borrow, in `unsafe` (section 15). A type **has interior
 mutability** when it contains a `Cell` by value: as itself, or in a field, an array
 element, a tuple part or an enum payload, but not behind a borrow or a pointer.
 `Atomic`, `Mutex`, `RwLock`, `Once`, `Chan` and `Arena` contain one. The bound on
-`Cell` is what makes every such type's contents `Owned`. An arena's cell holds only its
-bump pointer, which is why the arena itself may hand out views.
+`Cell` is what makes every such type's contents `Owned`, or, for contents behind a raw
+pointer (a channel's buffer), the type's own bound (section 15). `Cell` is public: a
+program may build its own interior-mutable type on it. `Cell.get` is safe and gives a
+raw pointer to the contents; every use of that pointer is `unsafe`. An arena may hold
+views because nothing stored in it can be read back except through a borrow it handed
+out, and the checker gives the arena the origins of what is stored through those
+borrows (checker.md section 2).
 
 ### 13.7 What this does not express
 
@@ -420,17 +425,21 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   | `@unchecked_load(V, s, i)`, `@unchecked_store(s, i, v)` | as `@load` and `@store` (section 26.3), with no check |
   | `@slice_from_raw(p, len)` | `p: *T` gives `[]T`, `p: *mut T` gives `[]mut T`; `len: i64`, at most 2^62 |
   | `@borrow_from_raw(p)` | `p: *T` gives `&T`, `p: *mut T` gives `&mut T` |
-  | `@atomic_load(p, order)` | `p: *T` or `*mut T` to a live, aligned `T: AtomicValue`; gives `T`. `order` is not `release` or `acq_rel` |
-  | `@atomic_store(p, v, order)` | `p: *mut T`, `v: T`; `void`. `order` is not `acquire` or `acq_rel` |
-  | `@atomic_swap(p, v, order)` | as `@atomic_store`; gives the previous value |
-  | `@atomic_cmpxchg(p, expected, new, success, failure)` | gives `T ! T`: the previous value on success, the observed value as the error otherwise. `failure` is not `release` or `acq_rel`, and not stronger than `success` |
+  | `@atomic_load(p, order)` | `p: *T` or `*mut T` to a live, aligned `T: AtomicValue`; `order: LoadOrder`; gives `T` |
+  | `@atomic_store(p, v, order)` | `p: *mut T`, `v: T`, `order: StoreOrder`; `void` |
+  | `@atomic_swap(p, v, order)` | as `@atomic_store`, with `order: AtomicOrder`; gives the previous value |
+  | `@atomic_cmpxchg(p, expected, new, success, failure)` | `success: AtomicOrder`, `failure: LoadOrder`. Gives `T ! T`: the previous value on success, the observed value as the error otherwise |
   | `@atomic_cmpxchg_weak(p, expected, new, success, failure)` | the same, and may fail although the values were equal |
-  | `@atomic_add`, `@atomic_sub`, `@atomic_and`, `@atomic_or`, `@atomic_xor` `(p, v, order)` | `T: Int`; gives the previous value. `add` and `sub` wrap |
+  | `@atomic_add`, `@atomic_sub`, `@atomic_and`, `@atomic_or`, `@atomic_xor` `(p, v, order)` | `T: Int`, `order: AtomicOrder`; gives the previous value. `add` and `sub` wrap |
 
-  The `@unchecked_*` list is closed: one per check kind of section 31. Every `order` argument
-  of an atomic builtin is a constant expression of type `std.sync.AtomicOrder`, a
-  payload-free enum `relaxed, acquire, release, acq_rel, seq_cst`. `@fence(order)` is
-  the one safe atomic builtin: `void`, and `order` is not `relaxed`.
+  The `@unchecked_*` list is closed: one per check kind of section 31. The orders are
+  three payload-free enums of `std.sync`, so an order an operation does not allow
+  cannot be written: `LoadOrder { relaxed, acquire, seq_cst }`,
+  `StoreOrder { relaxed, release, seq_cst }` and
+  `AtomicOrder { relaxed, acquire, release, acq_rel, seq_cst }`. An `order` argument is
+  any expression of its type; one that is not a constant becomes a branch over its
+  values (pipeline.md section 7). `@fence(order: AtomicOrder)` is the one safe atomic
+  builtin: `void`, and a `.relaxed` fence does nothing.
 * `unsafe` does not turn off any check on safe constructs. Borrows are still checked and
   `a[i]` is still bounds-checked inside the block.
 * An `unsafe` block that contains nothing that needs it is an error, so that the list
@@ -449,8 +458,10 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 * A borrow made from a raw pointer has no origins. The checker accepts it wherever a
   `from` or `into` clause is needed, and keeping it valid for as long as it is used is
   the block's obligation.
-* A type that builds interior mutability out of `unsafe` must bound its contents with
-  `Owned` (section 13.6), and must not be `Sync` unless it synchronizes every access.
+* A type whose contents change through a shared borrow keeps them in a `Cell`
+  (section 13.6). A type that keeps such contents behind a raw pointer instead (a
+  channel's buffer) must bound them with `Owned` itself. Neither may be `Sync` unless it
+  synchronizes every access.
 * A type that keeps a `T` behind an untyped pointer has a field whose type mentions `T`
   (a `[0]T` field costs nothing), so that its properties follow `T`.
 
@@ -470,7 +481,7 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
 | no memory for a task record or a task stack | `spawn`, `par for`, parking a task (section 23) |
 | a repeated index | `@scatter` (section 26.3) |
 | a dispatch range that a buffer does not cover | `dispatch` (section 27.2) |
-| blocking, `spawn` or `par for` outside a task | an `export fn` called on a foreign thread (section 23) |
+| entering a `scope`, `spawn`, `par for`, `select` or parking outside a task | the body of an `export fn` (section 23) |
 
 A trap is never undefined behavior and never continues. Each trap has a stable code
 (`T01` to `T17`) that appears in its message.
@@ -484,7 +495,7 @@ an `unsafe` block or from foreign code:
    or whose use the third rule of section 15 has ended.
 2. Creating a borrow or slice with `@borrow_from_raw`/`@slice_from_raw` that breaks
    section 12: a `&mut` that aliases a live borrow, or any borrow that outlives its
-   memory.
+   memory. A borrow passed to a function stays valid until that function returns.
 3. Reading memory obtained from `@uninit` before writing it.
 4. Producing an invalid value: a `bool` other than 0 or 1, an enum tag with no variant,
    a null `&T` or slice pointer.
@@ -494,6 +505,7 @@ an `unsafe` block or from foreign code:
    breaking the documented precondition of an `unsafe fn`.
 8. Freeing memory with a different allocator, size or alignment than it was allocated
    with.
+9. An exception or a `longjmp` of foreign code that passes through an Ingot frame.
 
 ### 16.3 What is safe but still wrong
 

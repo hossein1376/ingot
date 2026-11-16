@@ -12,7 +12,7 @@ elsewhere.
 file         = { import } { item } ;
 import       = "import" IDENT { "." IDENT } [ "." TYPE ] [ "as" ( IDENT | TYPE ) ] ";" ;
 
-item         = [ "pub" ] ( fn_decl | struct_decl | enum_decl | interface_decl
+item         = [ vis ] ( fn_decl | struct_decl | enum_decl | interface_decl
                          | const_decl | static_decl | type_decl )
              | impl_decl | extern_block | test_decl | bench_decl | when_items ;
 
@@ -32,12 +32,13 @@ fn_bound     = ( "Fn" | "FnMut" | "FnOnce" ) "(" [ type { "," type } ] ")" [ "->
 
 (* ---- types ---- *)
 struct_decl  = [ "copy" | "linear" ] "struct" TYPE [ gparams ] [ align ] "{" [ field { "," field } [ "," ] ] "}" ;
-field        = [ "pub" ] IDENT ":" type [ align ] ;
+field        = [ vis ] IDENT ":" type [ align ] ;
+vis          = "pub" [ "(" "pkg" ")" ] ;
 enum_decl    = [ "copy" ] "enum" TYPE [ gparams ] [ ":" type ] "{" [ variant { "," variant } [ "," ] ] "}" ;
 variant      = IDENT [ ":" [ "from" ] type ] [ "=" expr ] ;
 interface_decl = "interface" TYPE [ gparams ] [ ":" bound { "+" bound } ] "{" { iface_member } "}" ;
 iface_member = "type" TYPE ";" | fn_decl ;
-impl_decl    = [ "unsafe" ] "impl" [ gparams ] ( type | path_type "for" type ) "{" { [ "pub" ] ( fn_decl | const_decl | type_decl ) } "}" ;
+impl_decl    = [ "unsafe" ] "impl" [ gparams ] ( type | path_type "for" type ) "{" { [ vis ] ( fn_decl | const_decl | type_decl ) } "}" ;
 const_decl   = "const" IDENT ":" type "=" expr ";" ;
 static_decl  = "static" IDENT ":" type [ align ] "=" expr ";" ;
 type_decl    = "type" TYPE [ gparams ] "=" type ";" ;
@@ -75,7 +76,7 @@ stmt         = ( "let" | "var" ) pattern [ ":" type ] "=" expr ";"
              | ( "defer" | "errdefer" ) block
              | "scope" IDENT block
              | "spawn" call_expr "in" expr ";"
-             | "select" "{" { pattern "=" call_expr "=>" block } [ "else" "=>" block ] "}"
+             | "select" "{" { pattern "=" [ "try" ] call_expr "=>" block } [ "else" "=>" block ] "}"
              | "dispatch" call_expr "over" domain "on" expr ";"
              | "unsafe" "(" STRING ")" block
              | when_stmt
