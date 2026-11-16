@@ -186,7 +186,8 @@ linear struct File { fd: i32 }                  // must be consumed exactly once
   leave the remaining fields out: `let Vec3.{ x, .. } = v;`. A field left out of a pattern
   that moves the value is dropped, so its type must be `Discard`; leaving out a linear
   field is error E1003. Destructuring a struct is only possible where every field is
-  visible. This is how a linear struct is finally taken apart.
+  visible, and, as for construction below, a struct with no fields counts as having a
+  private one. This is how a linear struct is finally taken apart.
 * **Construction respects privacy.** Outside a struct's module, a value of it can be
   made from nothing only if every field is visible there. This covers a literal, `@zero` and
   `@bits` alike, and a struct with no fields counts as having a private one. A type

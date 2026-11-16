@@ -54,6 +54,11 @@ code alone.
 * **No grouped imports and no error for an unused private function** (review 1, Q13,
   rejected). One import per line keeps the E0310 fix a line deletion; the unused-function
   error would fire on every half-written module.
+* **A struct with no fields cannot be taken apart outside its module** (*user*,
+  2026-11-16, found reviewing P1b; 01 §4.2, E0307). Construction already counted a
+  fieldless struct as having a private field; destructuring did not, so another module
+  could consume a fieldless `linear struct Permit {}` that is meant to come back to its
+  own module. *Rejected:* the vacuous reading ("every field is visible").
 
 ## 2. Types, interfaces and generics
 
