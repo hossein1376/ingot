@@ -559,13 +559,17 @@ so that earlier work does not rule it out.
 
 ## 11. Known gaps in this document
 
-* The runtime's design (scheduler, stacks, I/O per operating system) is not specified
-  beyond §23 and section 8 above.
+* The runtime's design is drafted in `docs/std/rt.md` (the compiler boundary) and
+  `docs/std/sched.md` (the scheduler's three stages); the deque, wait-queue and timer
+  algorithms and the I/O layer per operating system are not chosen yet.
 * The kernel IR and its three emitters (masked vector code, Metal Shading Language,
-  SPIR-V) are not specified.
-* The standard library's API is an outline (§35), so `alloc`, `lock` and `park_point`
-  cost items cannot be fully defined yet.
-* The debug-information format is not specified.
+  SPIR-V) are not specified. The decisions so far (a structured IR, what is equal
+  across executors) are in COMPILER.md's back-end section; `kernels.md` is written
+  with that step.
+* The `lock` cost item names `std.sync`'s functions (section 8), which are designed but
+  not implemented.
+* The debug-information format is the platform's; only line tables and function names
+  are planned for the first back end (COMPILER.md).
 * **There is no builtin reference.** Builtins are named across eight sections. One
   appendix table (name, signature, constant or not, `unsafe` or not, trap) is to be
   written. It is also to say what `@abs`, `@min`, `@max` and the other §26.2 math

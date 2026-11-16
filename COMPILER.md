@@ -330,6 +330,153 @@ then the target's checks, then the store; a compound assignment reads the place 
 the value by the same rule. A `scope` lowers to storage start, body, the body's deferred
 code and storage ends, `cancel(s)` on an error exit, `scope_wait(s)`, storage end.
 
+## The back end (phases 11–14): design
+
+Not built yet. This is the design the language's second review settled (the decisions
+and their reasons are in `docs/impl/decisions.md`); the normative parts are in
+pipeline.md §6a, §7 and §8. The steps that build it are B1 to B7 below. Where the spec
+and this section disagree, the spec wins and this section is fixed.
+
+**Instantiation.** 11a (discovery, depth, the per-instance codes) is pipeline §6a and
+step P2. 11b (specialization) is one CFG per instance by substitution, with a layout
+for each concrete type; only `build` runs it. No sharing of code between instances in
+v1, and no drop glue, since the language has no destructors.
+
+**IR and pipelines.**
+- LLVM IR as text, compiled by `clang`. It keeps the compiler free of dependencies
+  (rule 5) and the IR readable in a review. Textual IR is not stable across LLVM
+  versions: support one pinned major version, check it at start-up, and fail with a
+  named error otherwise.
+- `--fast` is the same path at `-O0`. Everything up to and including the IR is shared,
+  so "identical semantics, traps included" holds by construction, as long as the IR
+  never relies on undefined behavior (pipeline §7): no `nsw`/`nuw` unless the check is
+  present or phase 10 removed it, no `inbounds` on `@offset`, no fast-math flags. A
+  separate quick back end is an optimization to consider after measurements.
+- What must not depend on LLVM's optimizer, because both pipelines promise it: check
+  removal (phase 10), `inline fn` (`alwaysinline`), and kernel vectorization for
+  `exec.simd` (our emitter writes vector IR; it never asks LLVM to vectorize).
+- For build time, `--fast` may split the program into one IR file per package and
+  compile them in parallel, since `inline fn` is the only inlining it promises. The
+  optimizing pipeline starts as one file and is split when a measurement says so. No
+  LTO is needed: the program is already compiled whole.
+
+**Lowering.**
+
+| Question | Answer |
+|---|---|
+| Calling convention | The target's C convention with our own argument lowering: scalars and pointers as they are; a slice as two arguments; an aggregate of up to two registers split into scalars; a larger one by a pointer to a copy the callee may not change (a moved value needs no copy). Vectors in vector registers |
+| `T ! E`, `?T` in memory | The enum layout of §25, nothing else |
+| `T ! E`, `?T` returned | The tag in one register, the payload in another when it fits; otherwise the payload through a result pointer and the tag still in a register, so `try` stays one compare and branch |
+| Closures | A closure value is its capture record. A call is a direct call of the body with the record by `&`, `&mut` or value |
+| `&dyn I` | `{ data, table }`; the table is a static array of the interface's functions for that type, each taking the data pointer as `self`. No size, alignment or cleanup entries |
+| Linear values, `defer` | Nothing to do: moves are explicit in the CFG and nothing runs at a scope end. No drop flags |
+| Checks | A compare and a branch to a cold block that calls `rt.trap(site, a, b, c)` (pipeline §7) |
+| `@uninit`, padding | Storage is not initialized at `StorageStart`; phase 9 guarantees a write before any read. Aggregates are copied whole, padding included. `@uninit(T)` is storage with no write |
+| Borrow parameters | `&mut T`: non-aliasing. `&T` of a type with no `Cell` by value: non-aliasing and read-only. Both: non-null, aligned, dereferenceable for the call. These rest on 02 §15's pointer rules and §16.2 item 2 |
+| Mangling | Pipeline §7's scheme, completed: a fixed spelling for every type constructor, and names for the bodies that have none in the source (closure and `par for` bodies by owner and source index, `spawn` thunks, method tables, trap sites). Only "deterministic and one-to-one" is normative |
+| Stack probes | In the function prologue for frames above a page, with the target's page size (16 KiB on macOS). If LLVM emits them inline on every target, `rt.stack_probe` is not needed |
+
+Float builtins with an obvious but wrong LLVM spelling: `@min` and `@max` are IEEE
+`minimumNumber`/`maximumNumber` (not `minnum`/`maxnum`, and not a compare and select);
+float `@reduce_add` is the explicit pairwise tree of §26.2, never LLVM's reduction
+intrinsic.
+
+**The runtime in Ingot** (`docs/std/rt.md`). No temporary C runtime: B1 writes the
+entry, `trap` with its integer printing, `write` and `exit` in Ingot through `extern`.
+Thread-local state is one OS slot read by a call (`pthread_getspecific`,
+`TlsGetValue`), so no address computed before a park is reused after the task resumes
+on another worker. The stack switch is one assembly file per target in `std.sys`,
+listed in std's manifest (`[link.<target>] asm`) and assembled by `clang`. The
+guard-page handler and thread entry are `export fn`s (they run outside any task). A
+function that is not reachable from the roots is not compiled, so the scheduler is
+absent from a program that never reaches it, and the entry calls `rt.start` or
+`rt.start_tasks` accordingly. The scheduler is built in the three stages of
+`docs/std/sched.md`.
+
+**SIMD and kernels.**
+- A vector type is an LLVM vector; a 256- or 512-bit one on NEON is split by LLVM's
+  legalizer (the "two or four registers" of §26.1). A mask is a vector of bits in
+  registers and `N` bytes in memory (§25), converted at loads and stores. `@lookup` and
+  the exact shuffles need per-target intrinsics: keep a table per target.
+- SME is not in the first back end. The routines of `arch.aarch64.sme` are whole
+  routines that enter and leave streaming mode themselves, written in assembly first.
+  When they arrive, state the rule that a streaming routine calls nothing that can park.
+- The kernel IR is structured, not a CFG: typed expression trees and `if`, loops,
+  `break`, `continue`, `return`, lowered from phase 7's typed tree. Two of the three
+  emitters want that (SPIR-V needs structured control flow; Metal's input is source
+  text). The masked-vector emitter converts branches to masks: an active mask per loop,
+  masked stores at the kernel's own index, gathers for `at_clamped` and `at_or`, one
+  accumulator per lane for `reduce`. Every integer result, and every float result
+  outside `reduce`, is equal across executors, with contraction off in all three
+  emitters. Its document, `docs/impl/kernels.md`, is written at step B5. Order:
+  `exec.seq` (kernel IR to a scalar loop), `exec.simd`, `exec.par` once the scheduler
+  has workers, then the GPU after both CPU targets. The GPU runtime needs a conversion
+  between raw pointers and `extern fn` pointers (`dlsym`, the Objective-C runtime,
+  Vulkan's function tables); it is deferred to step G1 (rationale §12).
+
+**Linking.**
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Driver | `clang`, the system linker | `clang`, with `lld` when present | `clang` with `lld-link` |
+| C library | libSystem, dynamic (the only choice) | glibc, dynamic | none; imports from `kernel32` and `ntdll` |
+| Process entry | `main`, called by the system's start code | `main` | our own entry symbol, with no arguments |
+| Arguments | `argc`, `argv`, `envp` | the same | read from the system by `rt.start` |
+
+On Linux, §24.2's "direct system calls" means `std` does not use libc's I/O: the
+process still starts, makes threads and loads shared libraries through glibc, and
+system calls go through its `syscall` function. A static executable with our own
+`_start` is possible later but cannot load a Vulkan driver, so it can never be the only
+mode. Position-independent executables always. Every Ingot symbol is local; only the
+`export fn`s and the entry are global; symbols are kept unless `--strip`. Unwind tables
+are emitted; every function is marked as not unwinding. A build for another target
+needs that target's libraries by `--sysroot`; checking never does. (Recorded for later:
+the `extern` declarations name every imported symbol, so the compiler could write the
+stub libraries a linker needs itself, if each `extern` block named its library.)
+`ingot build` needs the pinned `clang` and the system's linker inputs (the Command Line
+Tools on macOS; a C library's development files on Linux; an SDK's import libraries on
+Windows); `ingot targets` reports what it found.
+
+**Reproducible output** (pipeline §2). No timestamps (`/Brepro` for PE), a content
+build id (ELF build-id, Mach-O UUID), relative input paths (on macOS the debug map of
+object files is the known leak: `-oso_prefix`, or not keeping it), a fixed input
+order. This machine's `ld` documents `-reproducible`, `-no_uuid` and `-oso_prefix`;
+which of them are needed is found by B3's three-build comparison, not decided ahead.
+
+**Cost items and debug information.** `indirect_call`, `task_spawn`, `copy` and
+`alloc` need no back end (step P3); `lock` after `std.sync`; `park_point` from 11a's
+call graph. `not_inlined`, `loop` and `frame` come from LLVM's optimization remarks
+(missed inlining, the loop vectorizer) and its stack-usage output, mapped back by line
+and column (step B7). Debug information is not needed for the first back end: trap
+messages carry their position in the static trap site. Line and column per instruction
+and a name per function come with B7; variables and types later; the format is the
+platform's.
+
+**To confirm, and when.**
+
+| Unknown | Settle in |
+|---|---|
+| The pinned LLVM version, and whether Apple `clang` reads its textual IR (this machine has Apple clang 21). It decides what a user must install | the first week of B1 |
+| `alwaysinline` honored at `-O0` | B1 |
+| Inline stack probes on aarch64 and on Windows | B1 (aarch64), T3 (Windows) |
+| LLVM no longer requiring a compare-exchange failure order no stronger than success | R2 |
+| `minimumNumber`/`maximumNumber` intrinsics in the pinned version; the x86 cost of the float `@min`/`@max` rule | B4 |
+| Which linker flags make a Mach-O byte-identical | B3 |
+
+**The first milestone** (B1 to B3) is the twelve `run`/`trap` tests that need no
+vectors and no tasks (six `arith`, two `types`, three `errors`,
+`unsafe/raw_round_trip`), plus three programs of real size, written as `run` tests that
+report through `@assert`, all under both pipelines with the trap tests printing
+byte-identical lines:
+1. **SHA-256 of a literal**, compared with the known digest: wrapping arithmetic,
+   shifts, arrays, `for` loops, and check removal in a hot loop.
+2. **A parser and evaluator for arithmetic expressions** over a byte literal: enums
+   with payloads, `match`, `T ! E` with `from` variants, `try`, slices, recursion.
+3. **A generic sort and a binary heap over arrays**, used at two element types with a
+   closure comparator and with `Ord`: instances, calls through bounds, closures.
+
+Then an arena-backed tree at R1, and a pipeline of tasks over a channel at R3.
+
 ## Steps
 
 Each step ends with `scripts/verify.sh` passing and the reviewer having read the full

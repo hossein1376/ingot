@@ -1,7 +1,10 @@
 # The Ingot language specification
 
-Status: **design draft, 2026-11-11.** This directory defines Ingot. There is no compiler
-for it yet; [../ROADMAP.md](../ROADMAP.md) has the order of implementation.
+Status: **design draft, revised by two design reviews (2026-11-14, 2026-11-16).**
+This directory defines Ingot. A compiler is being built ([../COMPILER.md](../COMPILER.md));
+it checks programs and does not generate code yet. [../ROADMAP.md](../ROADMAP.md) has
+the order of implementation, and [impl/decisions.md](impl/decisions.md) why the rules
+changed since the first draft.
 
 ## Files
 
@@ -14,9 +17,10 @@ for it yet; [../ROADMAP.md](../ROADMAP.md) has the order of implementation.
 | [04-hardware.md](04-hardware.md) | The three targets, layout, SIMD, kernels and executors, GPU, FFI |
 | [05-tooling.md](05-tooling.md) | Diagnostics, cost reports, tests, packages, formatter, standard library outline |
 | [grammar.md](grammar.md) | The complete EBNF |
-| [rationale.md](rationale.md) | Why each major decision went the way it did, and what was rejected |
+| [rationale.md](rationale.md) | Why each major decision of the first draft went the way it did, and what was rejected. Later decisions: [impl/decisions.md](impl/decisions.md) |
 | [research.md](research.md) | Sourced facts about the hardware and the platform ABIs, and what is still unsourced |
-| [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms, the tool protocol |
+| [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms, the tool protocol, and the decision record ([impl/decisions.md](impl/decisions.md)) |
+| [std/](std/plan.md) | Standard library design drafts (`rt`, `sched`, `task`, `sync`, `mem`, `env`, `time`) and the plan for the rest; not normative until a module is accepted |
 | [../conformance/](../conformance/README.md) | Programs with an expected outcome, which every implementation must pass |
 
 Sections are numbered once across files 01 to 05, so "section 13" means the same thing
