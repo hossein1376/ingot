@@ -6,8 +6,8 @@
 //! Analysis A (moves and linear values), Analysis B (origin sets) and Analysis C
 //! (loans, E1101–E1105 and E1403) and the task rules (E1401, E1402, E1407) on the
 //! checked package's CFGs. A `from` clause computed for E1201 is attached to that
-//! diagnostic. Phase 10 is not done, so a package with a body that passes phase 7
-//! still records that in `not_implemented`. A
+//! diagnostic. Phase 10 removes the guaranteed checks, reports E0806 for a folded
+//! operation that traps, and records the surviving checks for `ingot cost`. A
 //! constant that phase 6 cannot evaluate is not accepted either. The command line exits
 //! with status 2 instead of 0 when
 //! `not_implemented` is non-empty.
@@ -16,18 +16,17 @@ use crate::files::{self, Files};
 use crate::loader::{self, LoadOptions, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
 use ingot_diag::source::{Source, Sources};
+use ingot_sema::ty::{ConstArg, GenericArg, TyKind};
 use ingot_sema::{ModuleInput, PackageInput, Target};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::{check_operator_mixing, parse};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::Path;
 
 /// What phase 6 alone leaves unchecked in a package that has bodies. Phase 7 checks
 /// them, so it never appears in an `Analysis`.
 pub const UNCHECKED: &str = ingot_sema::UNCHECKED_BODIES;
-
-/// What the pipeline does not do yet for a body that passed phase 7.
-pub const UNCHECKED_CHECK_REMOVAL: &str = ingot_cfg::UNCHECKED_CHECK_REMOVAL;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -70,8 +69,16 @@ pub struct Analysis {
     /// library's).
     pub files: usize,
     /// Phase 8's CFGs for the checked package, one per function and test body and one
-    /// per closure and `par for` body.
+    /// per closure and `par for` body. Phase 10 does not change these: the dump and
+    /// its goldens are phase 8's output.
     pub cfgs: ingot_cfg::Cfgs,
+    /// Phase 10's CFGs with the removed check statements gone.
+    pub removed_cfgs: ingot_cfg::Cfgs,
+    /// The checks that survived phase 10, in `ingot cost` order.
+    pub cost: Vec<ingot_cfg::removal::CostItem>,
+    /// When `PATH` was one file of a package, that file relative to the package root.
+    /// `check` and `cost` print only what belongs to it.
+    pub only_file: Option<String>,
     /// The front end, kept when phases 5 to 7 ran.
     pub front_end: Option<FrontEnd>,
 }
@@ -181,6 +188,8 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     });
 
     let mut cfgs = ingot_cfg::Cfgs::default();
+    let mut removed_cfgs = ingot_cfg::Cfgs::default();
+    let mut cost = Vec::new();
     let mut front_end = None;
     // With dependencies the imports of their packages cannot be resolved, and
     // reporting every one of them as unresolved would be wrong: stop at what is known.
@@ -237,21 +246,25 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         not_implemented.extend(bodies.not_implemented.iter().cloned());
         not_implemented.extend(lowered_not_implemented);
         // Phase 9, analyses A, B and C, plus the task rules. Constant-evaluation
-        // CFGs are not in `cfgs`. Phase 10 is still open.
+        // CFGs are not in `cfgs`.
         // E1201 was copied out of the declarations above; attach the clause here.
         let owned =
             ingot_cfg::check::check_ownership(&output.sema, &mut bodies.declarations, &all, &cfgs);
         ingot_cfg::check::attach_from_fixes(&mut diagnostics, &owned.from_fixes);
         diagnostics.extend(owned.diagnostics);
         not_implemented.extend(owned.not_implemented);
-        if bodies.bodies.bodies.values().any(|b| {
-            !b.failed
-                && matches!(
-                    b.kind,
-                    ingot_sema::typed::BodyKind::Fn | ingot_sema::typed::BodyKind::Test
-                )
-        }) {
-            not_implemented.push(UNCHECKED_CHECK_REMOVAL.to_string());
+        // Phase 10: the guaranteed removals, E0806 for a folded operation that traps,
+        // and the surviving checks `ingot cost` reports.
+        let removal = ingot_cfg::removal::remove_checks(&bodies.declarations, &all, &cfgs);
+        diagnostics.extend(removal.diagnostics);
+        not_implemented.extend(removal.not_implemented);
+        removed_cfgs = removal.cfgs;
+        cost = removal.items;
+        // E0809 is a phase-11 diagnostic: a generic body is analysed uninstantiated.
+        // Polymorphic recursion is recorded as the phase-11 entry instead of being
+        // accepted silently.
+        if has_polymorphic_recursion(&bodies.declarations, &cfgs) {
+            not_implemented.push(ingot_sema::PER_INSTANCE_CHECKS.to_string());
         }
         front_end = Some(FrontEnd {
             resolved: output,
@@ -274,6 +287,9 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         target: options.target.clone(),
         files,
         cfgs,
+        removed_cfgs,
+        cost,
+        only_file: None,
         front_end,
     })
 }
@@ -306,6 +322,7 @@ pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis>
         None
     };
     let mut analysis = analyze_with(package, options)?;
+    analysis.only_file = only.clone();
     // Only that file's source diagnostics: a manifest or command-line diagnostic is
     // about the whole package and is always printed.
     if let Some(file) = only {
@@ -340,4 +357,161 @@ fn package_relative(path: &Path, root: &Path) -> Option<String> {
 /// A source for a diagnostic that has no file: the command line.
 pub fn command_line_source(text: &str) -> Source {
     Source::new("<command line>", text)
+}
+
+/// Whether a package has a call cycle between generic functions that passes a type or
+/// constant argument other than the callee's own parameter unchanged. That is E0809
+/// (instantiation nests more than 64 deep), which only instantiation can decide.
+fn has_polymorphic_recursion(decls: &ingot_sema::Declarations, cfgs: &ingot_cfg::Cfgs) -> bool {
+    use ingot_cfg::model::{CallTarget, Terminator};
+    use ingot_sema::defs::DefId;
+
+    let mut edges: BTreeMap<DefId, BTreeSet<DefId>> = BTreeMap::new();
+    let mut growing_edges: BTreeSet<(DefId, DefId)> = BTreeSet::new();
+    for (_, cfg) in cfgs.iter() {
+        let from = cfg.key.owner;
+        if decls.generics_of(from).is_empty() {
+            continue;
+        }
+        let caller_params: BTreeSet<DefId> =
+            decls.generics_of(from).iter().map(|g| g.def).collect();
+        let mut targets = Vec::new();
+        for block in &cfg.blocks {
+            match &block.term {
+                Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
+                    targets.push(target.clone());
+                }
+                Terminator::Select { ops } => {
+                    targets.extend(
+                        ops.iter()
+                            .filter_map(|op| op.call.as_ref().map(|c| c.target.clone())),
+                    );
+                }
+                _ => {}
+            }
+        }
+        for target in targets {
+            let CallTarget::Fn { fn_ref, .. } = target else {
+                continue;
+            };
+            let to = fn_ref.def;
+            if decls.generics_of(to).is_empty() {
+                continue;
+            }
+            edges.entry(from).or_default().insert(to);
+            if fn_ref
+                .args
+                .iter()
+                .any(|arg| growing_arg(decls, &caller_params, arg))
+            {
+                growing_edges.insert((from, to));
+            }
+        }
+    }
+    for (from, to) in &growing_edges {
+        let mut seen = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(*to);
+        while let Some(node) = queue.pop_front() {
+            if node == *from {
+                return true;
+            }
+            if !seen.insert(node) {
+                continue;
+            }
+            if let Some(next) = edges.get(&node) {
+                queue.extend(next.iter().copied());
+            }
+        }
+    }
+    false
+}
+
+/// An argument is growing when it is not a bare parameter of the caller: a type that
+/// contains one inside another type (`List[T]`, `[n]T`, `&T`), or a constant
+/// expression over one. A concrete argument is not growing.
+fn growing_arg(
+    decls: &ingot_sema::Declarations,
+    caller: &BTreeSet<ingot_sema::defs::DefId>,
+    arg: &ingot_sema::ty::GenericArg,
+) -> bool {
+    match arg {
+        GenericArg::Ty(ty) => {
+            if matches!(decls.types.kind(*ty), TyKind::Param(p) if caller.contains(p)) {
+                return false;
+            }
+            type_mentions_param(decls, *ty, caller, &mut BTreeSet::new())
+        }
+        GenericArg::Const(ConstArg::Param(_)) => false,
+        GenericArg::Const(ConstArg::Value(_)) => false,
+        GenericArg::Const(ConstArg::Poison) => true,
+    }
+}
+
+fn type_mentions_param(
+    decls: &ingot_sema::Declarations,
+    ty: ingot_sema::ty::TypeId,
+    caller: &BTreeSet<ingot_sema::defs::DefId>,
+    seen: &mut BTreeSet<ingot_sema::ty::TypeId>,
+) -> bool {
+    use ingot_sema::ty::{ConstArg, GenericArg, TyKind, TypeId};
+    if !seen.insert(ty) {
+        return false;
+    }
+    let arg_mentions = |arg: &GenericArg, seen: &mut BTreeSet<TypeId>| match arg {
+        GenericArg::Ty(t) => type_mentions_param(decls, *t, caller, seen),
+        GenericArg::Const(ConstArg::Param(p)) => caller.contains(p),
+        GenericArg::Const(_) => false,
+    };
+    match decls.types.kind(ty) {
+        TyKind::Param(p) => caller.contains(p),
+        TyKind::Array(element, length) => {
+            type_mentions_param(decls, *element, caller, seen)
+                || matches!(length, ConstArg::Param(p) if caller.contains(p))
+        }
+        TyKind::Tuple(fields) => fields
+            .iter()
+            .any(|f| type_mentions_param(decls, *f, caller, seen)),
+        TyKind::Adt(_, args) | TyKind::Dyn(_, _, args) => {
+            args.iter().any(|a| arg_mentions(a, seen))
+        }
+        TyKind::Optional(inner)
+        | TyKind::Ref(_, inner)
+        | TyKind::Slice(_, inner)
+        | TyKind::RawPtr(_, inner)
+        | TyKind::Projection(inner, _) => type_mentions_param(decls, *inner, caller, seen),
+        TyKind::Result(a, b) => {
+            type_mentions_param(decls, *a, caller, seen)
+                || type_mentions_param(decls, *b, caller, seen)
+        }
+        TyKind::FnPtr(sig) => {
+            sig.params
+                .iter()
+                .any(|p| type_mentions_param(decls, *p, caller, seen))
+                || type_mentions_param(decls, sig.ret, caller, seen)
+                || sig
+                    .error
+                    .is_some_and(|e| type_mentions_param(decls, e, caller, seen))
+        }
+        TyKind::DynFn(_, _, sig) => {
+            sig.params
+                .iter()
+                .any(|p| type_mentions_param(decls, *p, caller, seen))
+                || type_mentions_param(decls, sig.ret, caller, seen)
+                || sig
+                    .error
+                    .is_some_and(|e| type_mentions_param(decls, e, caller, seen))
+        }
+        // A closure type names a body, not its captures, but instantiating it with
+        // the caller's environment makes a new type at every level.
+        TyKind::Closure(_, _) => true,
+        TyKind::Int(_)
+        | TyKind::Float(_)
+        | TyKind::Bool
+        | TyKind::Void
+        | TyKind::Never
+        | TyKind::Vector(_, _)
+        | TyKind::Mask(_)
+        | TyKind::Poison => false,
+    }
 }

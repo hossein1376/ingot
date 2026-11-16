@@ -1,0 +1,17 @@
+//! expect: cost
+//! section: 31
+
+struct W { k: i64 }
+
+impl W {
+    fn set(self: &mut W, v: i64) {
+        self.k = 100 +% v;
+    }
+}
+
+fn m(a: [4]i64, w: W) -> i64 {
+    var w2 = w;
+    let x = a[w2.k]; //~ bounds_check
+    w2.set(a[w2.k]); //~ bounds_check
+    return x +% a[w2.k]; //~ bounds_check
+}

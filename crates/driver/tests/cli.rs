@@ -132,22 +132,14 @@ fn checking_one_file_still_prints_the_manifests_diagnostics() {
 }
 
 #[test]
-fn a_package_with_declarations_is_not_accepted_until_it_can_be_checked() {
+fn a_package_with_checked_bodies_is_accepted() {
     let dir = package("decl", "name = \"app\"\n", "fn f() -> i64 { return 1; }\n");
     let o = ingot(&["check", "--json"], &dir);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("not implemented: check removal and cost items"),
-        "{}",
-        stderr(&o)
-    );
+    assert_eq!(o.status.code(), Some(0), "{}", stdout(&o));
     let out = stdout(&o);
     let summary = out.lines().last().unwrap();
-    assert!(summary.contains("\"ok\":false"), "{summary}");
-    assert!(
-        summary.contains("\"not_implemented\":[\"check removal and cost items"),
-        "{summary}"
-    );
+    assert!(summary.contains("\"ok\":true"), "{summary}");
+    assert!(!summary.contains("\"not_implemented\""), "{summary}");
     assert!(summary.contains("\"errors\":0"), "{summary}");
     assert!(summary.contains("\"files\":1"), "{summary}");
 }
@@ -390,4 +382,71 @@ fn the_output_is_the_same_on_every_run() {
         };
         assert_eq!(strip(&first), strip(&again));
     }
+}
+
+#[test]
+fn cost_prints_surviving_checks_and_names_the_missing_kinds() {
+    let dir = package(
+        "cost",
+        "name = \"app\"\n",
+        "fn first(xs: []i64, i: i64) -> i64 {\n    return xs[i];\n}\n\nfn second() -> i64 {\n    return 2 + 3;\n}\n",
+    );
+    let o = ingot(&["cost", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(
+        out.contains("\"type\":\"cost\",\"kind\":\"bounds_check\",\"fn\":\"app.first\""),
+        "{out}"
+    );
+    assert!(!out.contains("app.second"), "{out}");
+    let summary = out.lines().last().unwrap();
+    assert!(summary.contains("\"checks\":1"), "{summary}");
+    assert!(
+        summary.contains("cost items other than checks"),
+        "{summary}"
+    );
+    assert!(stderr(&o).contains("not implemented: cost items other than checks"));
+
+    let o = ingot(&["cost", "--json", "--fn", "app.second"], &dir);
+    let out = stdout(&o);
+    assert!(!out.contains("\"type\":\"cost\""), "{out}");
+    assert!(
+        out.lines().last().unwrap().contains("\"checks\":0"),
+        "{out}"
+    );
+}
+
+#[test]
+fn cost_prints_diagnostics_and_filters_to_one_file() {
+    let dir = package(
+        "cost-files",
+        "name = \"app\"\n",
+        "fn main_pick(xs: []i64, i: i64) -> i64 {\n    return xs[i];\n}\n",
+    );
+    fs::write(
+        dir.join("lib.ingot"),
+        "pub fn lib_pick(xs: []i64, i: i64) -> i64 {\n    return xs[i];\n}\n",
+    )
+    .unwrap();
+    let main = dir.join("main.ingot").to_string_lossy().into_owned();
+    let o = ingot(&["cost", "--json", &main], &dir);
+    let out = stdout(&o);
+    assert!(out.contains("app.main_pick"), "{out}");
+    assert!(!out.contains("app.lib_pick"), "{out}");
+    assert!(
+        out.lines().last().unwrap().contains("\"checks\":1"),
+        "{out}"
+    );
+
+    let bad = dir.join("bad.ingot");
+    fs::write(&bad, "fn bad() -> i64 {\n    return nope;\n}\n").unwrap();
+    let bad = bad.to_string_lossy().into_owned();
+    let o = ingot(&["cost", "--json", &bad], &dir);
+    assert_eq!(o.status.code(), Some(1), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("\"type\":\"diagnostic\""), "{out}");
+    assert!(
+        out.lines().last().unwrap().contains("\"errors\":1"),
+        "{out}"
+    );
 }

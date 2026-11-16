@@ -61,6 +61,14 @@ fn every_accept_test_lowers() {
             ));
         }
         let problems = ingot_cfg::validate::validate_all(&analysis.cfgs);
+        let after = ingot_cfg::validate::validate_all(&analysis.removed_cfgs);
+        if !after.is_empty() {
+            failures.push(format!(
+                "{}: phase 10 CFG validator:\n  {}",
+                case.path.display(),
+                after.join("\n  ")
+            ));
+        }
         if !problems.is_empty() {
             failures.push(format!(
                 "{}: validator:\n  {}",

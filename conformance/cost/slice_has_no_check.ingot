@@ -1,0 +1,9 @@
+//! expect: cost
+//! section: 31
+
+fn four(s: []i64, i: i64) -> []i64 from s {
+    @assert(i >= 0);
+    @assert(i <= 1000);
+    @assert(i + 4 <= s.len);
+    return s[i..i + 4];
+}

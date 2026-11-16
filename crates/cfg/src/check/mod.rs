@@ -3,7 +3,7 @@
 //! Analysis A (moves and linear values, E1001–E1006) is [`moves`]. Analysis B
 //! (origin sets, E1202–E1205) is [`origins`]. Analysis C (loans, E1101–E1105 and
 //! E1403) is [`loans`]. [`tasks`] is E1401, E1402 and E1407. Phase 9 never changes
-//! the CFG. The driver still records [`crate::UNCHECKED_CHECK_REMOVAL`] for phase 10.
+//! the CFG; phase 10 ([`crate::removal`]) is what deletes check statements.
 
 mod loans;
 mod moves;

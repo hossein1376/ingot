@@ -1,0 +1,11 @@
+//! expect: cost
+//! section: 31
+
+fn pick(s: []i64, i: i64) -> i64 {
+    var j = i;
+    @assert(j >= 0);
+    @assert(j <= 1000);
+    @assert(j + 2 <= s.len);
+    j = j + 1;
+    return s[j]; //~ bounds_check
+}

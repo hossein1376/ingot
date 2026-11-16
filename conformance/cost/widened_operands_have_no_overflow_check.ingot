@@ -1,0 +1,6 @@
+//! expect: cost
+//! section: 5.4, 31
+
+fn add(a: i32, b: i32) -> i64 {
+    return (a as i64) + (b as i64);
+}

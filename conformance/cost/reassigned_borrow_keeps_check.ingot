@@ -1,0 +1,30 @@
+//! expect: cost
+//! section: 31
+
+fn reborrowed(a: [4]i64, c: bool) -> i64 {
+    var i: i64 = 0;
+    var j: i64 = 0;
+    var r: &mut i64 = &mut j;
+    if c {
+        r = &mut i;
+    }
+    r.* = 100;
+    if i < 4 {
+        return a[i]; //~ bounds_check
+    }
+    return 0;
+}
+
+fn after_write(a: [4]i64, c: bool) -> i64 {
+    var i: i64 = 0;
+    if i < 4 {
+        var j: i64 = 0;
+        var r: &mut i64 = &mut j;
+        if c {
+            r = &mut i;
+        }
+        r.* = 100;
+        return a[i]; //~ bounds_check
+    }
+    return 0;
+}

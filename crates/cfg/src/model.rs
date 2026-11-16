@@ -765,6 +765,14 @@ impl Cfgs {
             .filter_map(|(i, c)| c.as_ref().map(|c| (CfgId(i as u32), c)))
     }
 
+    /// Every CFG, mutably, in id order.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (CfgId, &mut Cfg)> {
+        self.entries
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, c)| c.as_mut().map(|c| (CfgId(i as u32), c)))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.iter().next().is_none()
     }

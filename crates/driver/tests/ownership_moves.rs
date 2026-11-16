@@ -5,7 +5,7 @@
 //! the related labels.
 
 use ingot_diag::source::Span;
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
+use ingot_driver::pipeline::{self, Analysis};
 
 fn analyze(name: &str, files: &[(&str, &str)]) -> Analysis {
     let dir = std::env::temp_dir().join(format!(
@@ -34,16 +34,11 @@ fn analyze_main(name: &str, source: &str) -> Analysis {
     analyze(name, &[("main.ingot", source)])
 }
 
-fn assert_unchecked(analysis: &Analysis) {
+fn assert_reached_phase_8(analysis: &Analysis) {
     assert!(
-        analysis
-            .not_implemented
-            .iter()
-            .any(|m| m == UNCHECKED_CHECK_REMOVAL),
-        "phase 10 must keep the check-removal entry, got {:?}\nE10: {:?}\nother: {:?}",
-        analysis.not_implemented,
-        e10(analysis),
-        others(analysis)
+        !analysis.cfgs.is_empty(),
+        "the body must reach phase 8, got {:?}",
+        analysis.not_implemented
     );
 }
 
@@ -103,7 +98,7 @@ fn others(analysis: &Analysis) -> Vec<String> {
 
 fn expect(name: &str, source: &str, diags: &[&str]) {
     let analysis = analyze_main(name, source);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     assert_eq!(
         e10(&analysis),
         diags.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -114,7 +109,7 @@ fn expect(name: &str, source: &str, diags: &[&str]) {
 
 fn expect_files(name: &str, files: &[(&str, &str)], diags: &[&str]) {
     let analysis = analyze(name, files);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     assert_eq!(
         e10(&analysis),
         diags.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -669,7 +664,7 @@ fn after_move() {{
 
 fn expect_clean(name: &str, source: &str) {
     let analysis = analyze_main(name, source);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     assert_eq!(
         e10(&analysis),
         Vec::<String>::new(),
@@ -736,7 +731,7 @@ fn unused(ok: bool) -> i64 {
 }
 ";
     let analysis = analyze_main("resmatch", src);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     let got = e10(&analysis);
     assert!(
         got.iter().all(|d| d.contains("`r`")),
@@ -819,7 +814,7 @@ fn early() {
 }
 ";
     let analysis = analyze_main("linarray", src);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     assert_eq!(
         e10(&analysis),
         Vec::<String>::new(),
@@ -909,7 +904,7 @@ fn f() -> i32 {
 }
 ";
     let analysis = analyze_main("multiline", src);
-    assert_unchecked(&analysis);
+    assert_reached_phase_8(&analysis);
     assert_eq!(
         e10(&analysis),
         vec![

@@ -964,7 +964,10 @@ impl Cx<'_, '_> {
             return false;
         }
         match self.d.types.kind(t).clone() {
-            TyKind::Param(_) => true,
+            TyKind::Param(_) => {
+                self.ni(crate::PER_INSTANCE_CHECKS);
+                true
+            }
             TyKind::Vector(l, n) => {
                 n <= 4
                     && match l {

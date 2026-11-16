@@ -1,0 +1,16 @@
+//! expect: cost
+//! section: 15, 31
+
+fn g(xs: []i64, short: []i64) -> i64 {
+    let i: i64 = 1;
+    var s = xs;
+    let r = &mut s;
+    let q = r as *mut []i64;
+    if i < s.len {
+        unsafe("q writes s") {
+            q.* = short;
+        }
+        return s[i]; //~ bounds_check
+    }
+    return 0;
+}

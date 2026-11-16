@@ -5,7 +5,7 @@
 //! std does not declare it, and a call would poison the body.
 
 use ingot_diag::source::Span;
-use ingot_driver::pipeline::{self, Analysis, UNCHECKED_CHECK_REMOVAL};
+use ingot_driver::pipeline::{self, Analysis};
 
 fn analyze(name: &str, files: &[(&str, &str)]) -> Analysis {
     let dir = std::env::temp_dir().join(format!(
@@ -34,15 +34,11 @@ fn analyze_main(name: &str, source: &str) -> Analysis {
     analyze(name, &[("main.ingot", source)])
 }
 
-fn assert_unchecked(analysis: &Analysis) {
+fn assert_reached_phase_8(analysis: &Analysis) {
     assert!(
-        analysis
-            .not_implemented
-            .iter()
-            .any(|m| m == UNCHECKED_CHECK_REMOVAL),
-        "phase 10 must keep the check-removal entry, got {:?}\n{}",
-        analysis.not_implemented,
-        fmt_all(analysis)
+        !analysis.cfgs.is_empty(),
+        "the body must reach phase 8, got {:?}",
+        analysis.not_implemented
     );
 }
 
@@ -92,12 +88,8 @@ fn fmt_all(analysis: &Analysis) -> String {
 
 fn expect(name: &str, source: &str, diags: &[&str]) {
     let analysis = analyze_main(name, source);
-    assert_unchecked(&analysis);
-    let extra: Vec<&String> = analysis
-        .not_implemented
-        .iter()
-        .filter(|m| *m != UNCHECKED_CHECK_REMOVAL)
-        .collect();
+    assert_reached_phase_8(&analysis);
+    let extra: Vec<&String> = analysis.not_implemented.iter().collect();
     assert!(
         extra.is_empty(),
         "task analysis gave up: {extra:?}\n{}",

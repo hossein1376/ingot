@@ -1,0 +1,8 @@
+//! expect: cost
+//! section: 31
+
+const k: i64 = 2;
+
+fn answer() -> i64 {
+    return 3 + k;
+}

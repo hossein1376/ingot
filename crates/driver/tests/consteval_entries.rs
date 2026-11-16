@@ -3,7 +3,6 @@
 //! that silently became an entry would hide a failure.
 
 use ingot_driver::conformance;
-use ingot_driver::pipeline::UNCHECKED_CHECK_REMOVAL;
 use std::path::{Path, PathBuf};
 
 #[test]
@@ -19,12 +18,10 @@ fn consteval_tests_have_no_not_implemented_entries() {
             continue;
         };
         for entry in &analysis.not_implemented {
-            if entry != UNCHECKED_CHECK_REMOVAL {
-                offenders.push(format!(
-                    "{}: not implemented: {entry}",
-                    relative(&root, &case.path)
-                ));
-            }
+            offenders.push(format!(
+                "{}: not implemented: {entry}",
+                relative(&root, &case.path)
+            ));
         }
     }
     for offender in &offenders {

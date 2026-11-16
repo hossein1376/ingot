@@ -155,7 +155,26 @@ fn run(args: &[String]) -> Result<u8, String> {
             }
             Ok(0)
         }
-        "run" | "test" | "cost" => Err(format!("`{command}` is not implemented yet")),
+        "cost" => {
+            let path = path_arg(args, &["--fn"])?;
+            let function = flag_value(args, "--fn")?;
+            let output = commands::cost(&path, function.as_deref(), &Overlays::default());
+            if json {
+                for line in &output.lines {
+                    println!("{line}");
+                }
+            } else {
+                print!("{}", output.human);
+                if let Some(message) = &output.error {
+                    eprintln!("ingot: {message}");
+                }
+            }
+            for what in &output.not_implemented {
+                eprintln!("ingot: not implemented: {what}");
+            }
+            Ok(output.exit)
+        }
+        "run" | "test" => Err(format!("`{command}` is not implemented yet")),
         "conformance" => {
             let root = args
                 .iter()

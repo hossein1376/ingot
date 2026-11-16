@@ -1,0 +1,14 @@
+//! expect: cost
+//! section: 31
+
+fn bump(x: &mut i64, y: i64) -> i64 {
+    x.* = 100;
+    return y;
+}
+
+fn tp(a: [4]i64) -> i64 {
+    var i: i64 = 0;
+    let x = a[i];
+    let y = bump(&mut i, a[i]); //~ bounds_check
+    return x +% y +% a[i]; //~ bounds_check
+}

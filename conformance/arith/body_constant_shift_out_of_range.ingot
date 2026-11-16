@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 5.2, 31
+
+fn f() -> u8 {
+    return 1 << 8; //~ E0806
+}

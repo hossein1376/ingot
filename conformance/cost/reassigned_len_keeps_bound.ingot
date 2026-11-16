@@ -1,0 +1,12 @@
+//! expect: cost
+//! section: 31
+
+fn sum(x0: []i64, ys: []i64) -> i64 {
+    var xs = x0;
+    var s: i64 = 0;
+    for i in 0..xs.len {
+        xs = ys;
+        s = s +% xs[i]; //~ bounds_check
+    }
+    return s;
+}

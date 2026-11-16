@@ -208,7 +208,7 @@ fn editing_std_checks_the_other_open_packages_again() {
 }
 
 #[test]
-fn not_implemented_is_a_log_message_not_a_diagnostic() {
+fn a_checked_body_has_no_not_implemented_log() {
     let dir = scratch("not-implemented");
     let file = dir.join("main.ingot");
     let text = "fn f() -> i64 { return 1; }\n";
@@ -217,12 +217,8 @@ fn not_implemented_is_a_log_message_not_a_diagnostic() {
     let mut client = Client::spawn(&[]);
     client.initialize(false);
     client.open(&document, text);
-    let message = client.log_containing("not implemented");
-    assert!(
-        message.contains("check removal and cost items"),
-        "{message}"
-    );
     assert!(client.published(&document).is_empty());
+    assert!(!client.pending_log_contains("not implemented"));
 }
 
 #[test]

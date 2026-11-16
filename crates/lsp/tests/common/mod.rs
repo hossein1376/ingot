@@ -260,6 +260,14 @@ impl Client {
         }
     }
 
+    /// Whether a log message already received contains `text`.
+    pub fn pending_log_contains(&self, text: &str) -> bool {
+        self.pending
+            .iter()
+            .filter_map(log_message)
+            .any(|message| message.contains(text))
+    }
+
     /// The next `window/logMessage` whose text contains `text`.
     pub fn log_containing(&mut self, text: &str) -> String {
         for index in 0..self.pending.len() {

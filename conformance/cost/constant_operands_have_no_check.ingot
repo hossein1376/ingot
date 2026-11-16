@@ -1,0 +1,6 @@
+//! expect: cost
+//! section: 31
+
+fn answer() -> i64 {
+    return 2 + 3;
+}

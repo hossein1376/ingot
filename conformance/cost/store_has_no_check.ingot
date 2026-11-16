@@ -1,0 +1,9 @@
+//! expect: cost
+//! section: 26.3, 31
+
+fn store(xs: []mut f32, i: i64, v: f32x4) {
+    @assert(i >= 0);
+    @assert(i <= 1000);
+    @assert(i + 4 <= xs.len);
+    @store(xs, i, v);
+}

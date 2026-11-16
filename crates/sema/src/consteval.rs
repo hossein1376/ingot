@@ -918,10 +918,7 @@ impl Cx<'_, '_> {
         match f {
             Fail::Reported => {}
             Fail::Interpret(m) | Fail::NotImplemented(m) => self.ni(m.clone()),
-            Fail::Generic => self.ni(
-                "constant evaluation of an expression over a generic parameter (computed per \
-                 instance)",
-            ),
+            Fail::Generic => self.ni(crate::PER_INSTANCE_CHECKS),
             Fail::OutOfRange(_) => self.ni(
                 "type checking of a constant expression (an integer literal that does not fit \
                  its type, E0405)",
