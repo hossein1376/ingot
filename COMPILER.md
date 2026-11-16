@@ -353,7 +353,23 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S8 | grok + relay | Ownership, Analysis C: loans (checker.md §5, E1101–E1105) | done (12eecab) |
 | S9 | grok + relay | Ownership: scopes and tasks (checker.md §7, E1401–E1403, E1407) | done (0747185) |
 | S10 | relay | Check removal and `ingot cost` (pipeline §6) | done (633b48e) |
-| B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
+| P1a | relay | Review 2's holes in phases 6–10: the scope loan (H1), `shared` from `self` (H2), E0521 for concrete lengths and sizes (H3), Q7's pointer rule replacing the raw-pointer stopgap (H4), `Atomic` `Send` only if `T: Send` (H6), rule 5 with dead branches and constant bounds checks, shared borrows of temporaries (D15), `Fn`-bound type-parameter flow (S-2), negative literal generic arguments (N4) | `reject` tests for H1–H4 and H6; the D15 and S-2 accept tests |
+| P1b | relay | Review 2's phase-7 language features: `pub(pkg)`, D18 as changed (safe `Cell.get`, typed orders, `AtomicValue`, atomic builtins, casts, `@offset`), `waitable` operations and `try` in a `select` arm, `@test_env` giving a `TestEnv`, `?extern fn`, `impl I for &T` | conformance tests per feature |
+| P2 | relay | Phase 11a: instance discovery, depth, the per-instance codes (E0809, E0806, E0810, E1514, E0521, E0515, E1504); removes the polymorphic-recursion detector and the `per-instance checks` entries | `generics/const_parameter_values`; a `reject` test with an `instantiation` label per code |
+| P3 | relay | The cost items that need no back end: `indirect_call`, `task_spawn`, `copy`, `alloc` | `cost` tests per kind; `ingot cost` no longer exits 2 |
+| B1 | — | `ingot-codegen`: 11b, layouts per instance, mangling, IR for scalars, control flow, calls, aggregates, checks and trap sites; `rt` core in Ingot (entry, `trap`, `write`, `exit`); linking on `aarch64-macos-m4` | the six `arith` and two `types` run/trap tests |
+| B2 | — | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | the `errors` tests, `unsafe/raw_round_trip`, three programs of real size (review 2 Q6) |
+| B3 | — | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | the gate |
+| R1 | — | `std.mem` (`Heap`, `Vm`, `Arena`, `FixedBuf`, `Box`), `list`, `str` | `test` blocks in std; a `run` test with an arena and a list |
+| B4, B5 | — | Vectors, masks and the §26 builtins; the kernel IR, `exec.seq`, `exec.simd` | `simd/*`, `kernels/saxpy` |
+| R2 | — | Atomics in the back end; `Cell`, `Atomic`, `Mutex`; the inline scheduler | all 19 run/trap tests |
+| R3, R4 | — | Parking (stacks, switch, wait queues, `select`, `Chan`, timers, `--seed`, T11, T13); workers and `exec.par` | new concurrency run tests |
+| B6, B7, R5 | — | The full C ABI; line tables and the optimizer cost items; `io`, `fmt`, `fs`, `net` | their tests |
+| T2, T3, G1 | — | The Linux and Windows targets; Metal, then Vulkan | the suite on each target |
+
+Each B and R step ends with the `run` and `trap` tests it names passing under both
+pipelines. A std design document is accepted only when its declarations pass `ingot
+check` as stubs, and is written one step before the step that implements it.
 
 Alongside each S step, a Haiku subagent may write the missing conformance tests for the
 *next* step's codes (it touches only `conformance/`). The reviewer checks each test

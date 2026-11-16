@@ -97,8 +97,11 @@ There is no `usize`, no `char`, no string type distinct from `[]u8` and no impli
 integer promotion. Text handling in the standard library validates and decodes UTF-8
 explicitly.
 
-No array or slice has more than 2^62 elements. An array type with a longer length is
-E0521, and `@slice_from_raw` requires it. So `i + c` cannot overflow when `i` is at most
+No array or slice has more than 2^62 elements. An array type with a negative or longer
+length is E0521, and so is a type whose size is above 2^62 bytes (`[n][n]u64` can be).
+A length or size computed from a constant generic argument is checked where the type
+is concrete: in a signature or a type written in a body (phase 6), and inside a generic
+body for each instance (phase 11). `@slice_from_raw` requires the same limit. So `i + c` cannot overflow when `i` is at most
 a length and `c` is a constant no larger than 2^62.
 
 **Type properties.** Every type has four properties that the compiler computes from its
@@ -436,7 +439,9 @@ else is a builtin that names what happens to values that do not fit:
   slice of an array is a borrow and is written as one: `&a[lo..hi]` gives `[]T`,
   `&mut a[lo..hi]` gives `[]mut T`.
 * `&p` and `&mut p` borrow a place (section 12). `&mut` needs a `var` or a place reached
-  through `&mut`.
+  through `&mut`. `&e` of a value that is not a place (`&f(x)`, `&(a + b)`, `&"ada"`)
+  borrows a temporary that lives to the end of the statement (02-memory section 11);
+  `&mut` of one is E0607, because a change made to a temporary would be lost.
 * An exclusive borrow does not convert to a shared one by itself. `&r.*` reborrows a
   `&mut T` as `&T`, and `s.shared()` reborrows a `[]mut T` as `[]T`.
 
@@ -696,7 +701,8 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
 
 * Generic parameters are types or `const` values of integer, `bool` or enum type. A
   constant parameter is a value and is spelled like one (`const n: i64`); an argument for
-  it is a literal, a constant name or `{ expr }`: `Ring[u8, max_depth]`.
+  it is a literal (a negative number included: `Ring[u8, -1]` is written as in an
+  expression, section 1), a constant name or `{ expr }`: `Ring[u8, max_depth]`.
 * A generic body is checked **once**, against its bounds. An operation not granted by a
   bound is an error in the generic, not in some instantiation.
 * Each distinct instantiation is compiled as its own copy. Checking the generic once is

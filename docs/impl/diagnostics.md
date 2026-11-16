@@ -178,7 +178,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0518 | `missing_body` | a function without a body outside an interface or `extern` block, or with one inside an `extern` block | the function name | — |
 | E0519 | `bad_associated_type` | an implementation omits an associated type, or a path names one the interface does not declare | the name, or the `impl` for an omitted one (`signature`: the `type` line of the interface) | — |
 | E0520 | `alias_cycle` | a type alias expands, directly or through other aliases, to a type that contains itself | the alias name | — |
-| E0521 | `negative_length` | an array length is negative or above 2^62 | the length | — |
+| E0521 | `negative_length` | an array length is negative or above 2^62, or a type's size is above 2^62 bytes, including a length computed from a constant generic argument (01-core §3: phase 6 for a concrete type, phase 11 per instance) | the length (`instantiation` per instance) | — |
 | E0522 | `bad_tag_type` | the tag type of an enum is not an integer type | the type | — |
 | E0523 | `not_an_interface` | an `impl ... for`, a bound or a `dyn` names something that is not an interface or a built-in bound, or `Fn`, `FnMut` or `FnOnce` is written without a signature | the name | — |
 | E0524 | `interface_as_type` | an interface or a bound is used as a type | the name | — |
@@ -194,7 +194,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0604 | `refutable_pattern` | a pattern in `let`, `var` or a `for` binding can fail to match | the pattern | — |
 | E0605 | `break_outside_loop` | `break` or `continue` with no enclosing loop | the keyword | — |
 | E0606 | `assign_to_immutable` | assignment to a `let`, a parameter, or a place reached through a shared borrow | the place (`declared`) | for a `let`, change it to `var` |
-| E0607 | `not_a_place` | assignment to, or a borrow of, something that is not a place | the expression | — |
+| E0607 | `not_a_place` | assignment to, or an exclusive borrow of (written or as a receiver), something that is not a place; at item level, a borrow of anything but a static or a literal. A shared borrow of a temporary is legal (02-memory §11) | the expression | — |
 | E0608 | `not_iterable` | `for x in e` where `e` is not a range, array, slice or `Iter`; or a shared slice whose element type is not `Copy` | the expression | for the non-`Copy` slice, append `.refs()` |
 | E0609 | `bad_range` | range bounds of different types, a `step` that is not a positive constant, a non-integer range, or a second (counter) variable on a `for` over a range | the offending bound, or the second variable | — |
 | E0610 | `mut_borrow_of_immutable` | `&mut x` of a `let`, a parameter or a `static`, or through a shared borrow | the borrow (`declared`) | for a `let`, change it to `var` |
@@ -226,7 +226,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |
 | E0805 | `not_generic` | generic arguments on something that takes none | the argument list | delete them |
-| E0806 | `constant_evaluation_trapped` | a constant expression traps, or an operation in a body whose operands are all constants traps (pipeline §6, rule 5). The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
+| E0806 | `constant_evaluation_trapped` | a constant expression traps, or an operation in a body whose operands are all constants traps (pipeline §6, rule 5: for a bounds check, a constant index against a constant length), unless only an untaken branch on a constant condition reaches it. The message carries the trap code | the operation that trapped (`call`: the call in the constant expression that led there, when the operation is in a called function; `instantiation` if inside a generic) | — |
 | E0807 | `not_constant` | a constant expression reads a local variable or parameter (as in the condition of `@static_assert` in a function body) or a `static`, enters `unsafe`, calls an `extern` function, or runs `spawn`, `par for`, `select` or `dispatch` (pipeline §4.6) | the operation (`call` as for E0806) | — |
 | E0808 | `evaluation_limit` | constant evaluation takes more than 2^24 steps, nests calls more than 1024 deep, or holds more than 2^24 bytes of values at once (pipeline §4.6) | the outermost call | — |
 | E0809 | `instantiation_depth` | generic instantiation nests more than 64 deep | the innermost use (`instantiation`) | — |
@@ -257,7 +257,7 @@ Each of these carries `borrow` (where the conflicting loan was made) and `later_
 | E1102 | `exclusive_borrow_conflict` | an exclusive borrow is taken while another loan that overlaps it is live | the new borrow, or the call whose receiver takes it | — |
 | E1103 | `use_while_exclusively_borrowed` | a place is read or borrowed shared while an exclusive loan that overlaps it is live | the use | — |
 | E1104 | `move_while_borrowed` | a place is moved, or consumed by `@forget`, while a loan on it is live | the move | — |
-| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live | the borrow expression (`scope_end`, `later_use`) | — |
+| E1105 | `borrow_outlives_place` | a place's storage ends while a loan on it is live; this includes a borrow of a temporary still live after its statement | the borrow expression (`scope_end`, `later_use`) | — |
 
 ## 12. Origins (E12xx)
 
@@ -340,7 +340,7 @@ Their `file` is `ingot.toml` or the file concerned.
 | E1703 | `dependency_hash_mismatch` | a dependency's content does not match its pinned hash | the hash | — |
 | E1704 | `no_entry_point` | `build` or `run` of a package with no `main.ingot` or no `main` in it | 1:1 of `main.ingot`, or of `ingot.toml` | — |
 | E1705 | `bad_module_name` | a file or directory name that is not a value identifier | 1:1 of the file | — |
-| E1706 | `test_only` | `@test_env()` outside a `test` or `bench` block | the builtin | — |
+| E1706 | `test_only` | `@test_env()` outside a `test` block | the builtin | — |
 | E1707 | `duplicate_test_name` | two `test` blocks, or two `bench` blocks, with one name in a module | the second (`previous`) | — |
 
 ## 18. Traps

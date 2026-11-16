@@ -247,7 +247,7 @@ Its exact form is the implementer's choice. It must have these properties.
   element (index not recorded), dereference of a borrow, enum payload. A place rooted at
   a `static` takes no loans (§12).
 * **Statements** are one of: assign `place = rvalue`; storage start and storage end of a
-  local; `cancel(s)`, which sets a scope's cancel flag and is a use of `s`; a check with
+  local; `cancel(σ)`, which sets a scope's cancel flag and is a use of the scope local `σ`; a check with
   its operands and its source span; and "no-op with a use", which marks a read for
   liveness. The check kinds, one per trap that phase 10 can reason about:
 
@@ -314,9 +314,10 @@ Lowering must do the following, because the checker's rules are stated on the re
   `[]mut T` reborrows the iterand once for the whole loop; each item holds that loan and
   takes no loan of its own. A `for` over an array value moves the whole array at loop
   entry.
-* **`scope s { B }`** becomes: storage start of `s`; `B`; the deferred code of the block;
-  storage end of every local of `B`; a `scope_wait(s)` terminator; storage end of `s`.
-  An error exit inserts the statement `cancel(s)` before the wait.
+* **`scope s { B }`** becomes: storage start of a local `σ: Scope`; `s = &σ`; `B`; the
+  deferred code of the block; storage end of every local of `B`; a `scope_wait(σ)`
+  terminator; storage end of `σ`. An error exit inserts the statement `cancel(σ)`
+  before the wait.
 * **Checks are explicit statements**, one per place the specification says a trap can
   occur, placed immediately before the operation they guard. Phase 10 deletes
   statements; it never changes operations.
@@ -331,10 +332,17 @@ remove more, but must remove at least these, and only checks that cannot fail.
 
 Facts the analysis tracks at each point, per local of integer type: a lower bound and an
 upper bound, each a constant, a constant generic parameter plus a constant, or
-`len(place) + constant`. A fact about a local dies when the local is assigned, except
-as below. A fact about `len(place)` dies when the place is assigned, exclusively
-borrowed through an overlapping path, or given by exclusive borrow to a call; nothing
-else can change it (invariant I2). Facts come from:
+`len(place) + constant`. A fact about a local dies when the local is assigned (except
+as below), and when a place rooted at it is borrowed exclusively. The borrow is a write
+the analysis does not follow. While its loan is live nothing else can read the local
+(I2), so no new fact is made, and when the loan is dead nothing can write through it.
+A two-phase borrow kills the facts again at the terminator that activates it, since
+the local may be read in between. A fact about `len(place)` dies when the place is
+assigned, and when an overlapping path is borrowed exclusively, in the same two ways.
+A rule-6 check dies with the facts about its operands. A raw pointer made from a
+borrow cannot change a local behind the analysis: its use ends at the local's next
+direct use (02-memory section 15), and every fact is made by such a use. Facts come
+from:
 
 * the type's range, and widening casts (`u8 as i64` is in `0..=255`);
 * an assignment of a constant;
@@ -355,7 +363,7 @@ else can change it (invariant I2). Facts come from:
 | 1 | it guards the element access generated for `for x in xs`. Lowering (section 5) emits no such check, so this rule holds by construction |
 | 2, 3 | it is a bounds check on index `e` against `len(p)` and the facts give `0 <= e` and `e < len(p)`. For a slice range or vector access of width `k`: `0 <= e` and `e + k <= len(p)` |
 | 4 | it is an overflow check on `a op b` and the facts bound the exact result inside the type's range |
-| 5 | both operands are constants: literals, `const` items, or operations on those (not locals, and not constant generic parameters, which are symbols here). The operation is folded; a trap is E0806, reported by this phase at the operation |
+| 5 | both operands are constants: literals, `const` items, or operations on those (not locals, and not constant generic parameters, which are symbols here). For a bounds check the operands are the index and the length. The operation is folded; a trap is E0806, reported by this phase at the operation. A branch on a constant condition is folded first: a block that only such a branch, not taken, leads to is dead, its checks are removed and nothing in it is reported |
 | 6 | an identical check on the same operands dominates it with no assignment to them in between |
 
 The analysis is a forward dataflow; at a join each bound is the weaker of the two, and

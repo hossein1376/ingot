@@ -76,10 +76,12 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
   value that is an error (E1003, at its declaration), because one path would leak it.
 * A temporary, a value that is used without being bound, lives until the end of the
   statement that contains it. In the header of an `if`, `match`, `while` or `for` that
-  is the end of the whole statement, and for a loop, of each iteration. A temporary is
-  not a place (section 5.5), so it cannot be borrowed, explicitly or as a method
-  receiver (E0607); bind the value with `let` to borrow it. A linear temporary that is
-  not consumed by then is E1003 at the expression that made it.
+  is the end of the whole statement, and for a loop, of each iteration. A shared borrow
+  may be taken of a temporary: `&f(x)`, `&(a + b)`, `&"ada"`, and the receiver of a
+  method that takes `self: &T`. A borrow of it that is still live after the statement is
+  E1105. An exclusive borrow, written or as a receiver, needs a place (E0607): a change
+  made to a temporary would be lost. A linear temporary that is not consumed by then is
+  E1003 at the expression that made it.
 * Uninitialized memory does not exist in safe code. `@uninit(T)` is an `unsafe` builtin.
 
 ## 12. Borrows
@@ -216,6 +218,11 @@ value with the list's origins (and does not keep the list borrowed), and `get` r
 borrow of the list whose pointee has the list's origins. This is the one place flow is
 derived instead of written, because a generic body cannot tell a view `T` from any
 other `T`.
+
+A parameter whose type is a type parameter bounded by `Fn(..) -> R`, `FnMut(..) -> R`
+or `FnOnce(..) -> R` mentions the type parameters of that signature. So
+`fn pick[R, A: FnOnce() -> R](a: A) -> R` needs no `from a`: the caller adds the
+closure's origins to the result, as it would with the clause.
 
 ### 13.4 What the caller and the callee each check
 
@@ -382,9 +389,24 @@ unsafe("ptr came from alloc(len) above and len bytes were initialized by read()"
   `.ptr`); using it is not. `@offset(p, n)` is also safe: for `p: *T` or `*mut T` and
   `n: i64` it gives the same pointer type at the address `p + n * @sizeof(T)`, wrapping,
   and never traps.
-* Writing through a raw pointer to bytes that the program reached through a shared
-  borrow is undefined behavior, unless those bytes are inside a `Cell` (section 13.6).
-  This is the obligation a block takes on when it writes through `&x as *T as *mut T`.
+* **What a raw pointer may touch.** A raw pointer has no origins, so the checker does
+  not follow it. These rules are the obligation of the `unsafe` block, and the compiler
+  relies on them (pipeline.md sections 6 and 7):
+  * A shared borrow covers the bytes of its referent: `@sizeof(T)` bytes, or for a
+    slice its elements. While the borrow is live, writing any of those bytes is
+    undefined, by any means, unless the bytes are inside a `Cell` (section 13.6).
+    Memory that the referent only points to is not covered.
+  * An exclusive borrow covers the same bytes. While it is live, reading or writing
+    them other than through that borrow, or through something made from it, is
+    undefined.
+  * A pointer made from a borrow of a place, by `as`, by `.ptr`, or through any chain of
+    casts and `@offset`, may be used only until the place is next used in any other
+    way: read, written, borrowed or moved, by its name or through another borrow, or
+    its storage ends. After that, every access through the pointer is undefined. Make
+    a new pointer.
+  * Memory that came from an allocator or from the operating system is not a place. A
+    pointer to it is bound only by the first two rules, for the borrows made of it with
+    `@borrow_from_raw` and `@slice_from_raw`.
 
   | Builtin | Signature |
   |---|---|
@@ -458,7 +480,8 @@ A trap is never undefined behavior and never continues. Each trap has a stable c
 Safe code has none. The following are undefined, and each is reachable only from inside
 an `unsafe` block or from foreign code:
 
-1. Dereferencing a raw pointer that is null, dangling, misaligned or outside its object.
+1. Dereferencing a raw pointer that is null, dangling, misaligned or outside its object,
+   or whose use the third rule of section 15 has ended.
 2. Creating a borrow or slice with `@borrow_from_raw`/`@slice_from_raw` that breaks
    section 12: a `&mut` that aliases a live borrow, or any borrow that outlives its
    memory.

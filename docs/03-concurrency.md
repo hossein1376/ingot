@@ -37,8 +37,12 @@ fn serve(listener: &Listener, db: &Db) -> void ! NetErr {
 }
 ```
 
-* `scope name { ... }` introduces `name`, a value of type `&Scope` that is a view of this
-  block. It can be passed to functions, so a callee can spawn into its caller's scope.
+* `scope name { ... }` introduces `name`, a `&Scope`: a shared borrow of the block's
+  scope, which is declared just outside the block's own variables. It can be passed to
+  functions, so a callee can spawn into its caller's scope. Like any borrow of a local
+  it holds a loan on the scope, so `name`, a copy of it, and anything a function
+  returns `from` it cannot be returned from the block (E1203) or kept in a place that
+  is used after the block (E1105).
 * `spawn call in s` evaluates the callee and every argument **now**, on the current
   task, then starts the call as a new task in scope `s`.
   * As an expression it gives a `Task[R]`, where `R` is the call's result type.
@@ -157,7 +161,7 @@ its parts do, and a container's allocator counts as a part. The base cases:
 | `&T` | if `T: Sync` | if `T: Sync` |
 | `&mut T` | if `T: Send` | if `T: Sync` |
 | `*T`, `*mut T` | no | no |
-| `Atomic[T]` | yes | yes |
+| `Atomic[T]` | if `T: Send` | if `T: Send`, so that `Atomic[*mut T]` gets neither without an `unsafe impl` |
 | `Mutex[T]`, `Chan[T, A]` | if `T: Send` | if `T: Send` |
 | `RwLock[T]` | if `T: Send` | if `T: Send + Sync`, because readers share a `&T` |
 | `Arena`, `FixedBuf` | yes | no |

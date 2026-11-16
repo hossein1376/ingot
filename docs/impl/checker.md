@@ -191,10 +191,12 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
 
 1. **`into`.** For each parameter `x` declared `into p`: store `A_x` through `a_p`, by
    the widening rule of 4.4, treating `a_p` as a path with one dereference. If `p` is a
-   scope, the store is `O(s) ∪= A_x` for the scope local behind `a_p`, or a check
+   scope, the store is `O(σ) ∪= A_x` for each scope `σ` in `S(a_p)`, or a check
    against `Self` if `a_p` is itself a scope parameter.
 2. **Type-parameter flow.** For each type parameter `T` of `f`, let `U_T` be the union,
-   over every parameter `q` whose type mentions `T`, of:
+   over every parameter `q` whose type mentions `T`, of (a type parameter bounded by
+   `Fn(..) -> R`, `FnMut` or `FnOnce` mentions the type parameters of that signature,
+   outside any borrow; 02-memory §13.3):
    `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner⁺(A_q)` if it
    occurs inside one. `inner⁺(S)` is `inner*(inner(S))`: what is hidden inside the
    borrow, without the borrow's own origins (its loan, `Param(q)`), which are not a `T`. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
@@ -236,7 +238,7 @@ capture from a *different* parameter or capture is E1204 with no fix.
 ### 5.1 Liveness
 
 Run a backward liveness analysis on locals, where a *use* is any read, move, borrow or
-storage-dependent terminator (`scope_wait(s)` uses `s`). A local is **use-live** at a
+storage-dependent terminator (`scope_wait(σ)` uses `σ`). A local is **use-live** at a
 point if some path from there reads it before it is assigned as a whole.
 
 A loan `L` is **live** at a point if it is in the least set satisfying:
@@ -326,22 +328,29 @@ implementation's own clauses.
 Lowering gives `scope s { B }` this shape (pipeline.md section 5):
 
 ```
-storage_start(s) ; B ; deferred code of B ; storage_end(locals of B) ; scope_wait(s) ; storage_end(s)
+storage_start(σ) ; s = &σ ; B ; deferred code of B ; storage_end(locals of B) ; scope_wait(σ) ; storage_end(σ)
 ```
 
-* `O(s)` starts empty.
-* `spawn f(a_1..a_n) in s`:
+* Lowering declares a local `σ: Scope` and binds `s = &σ`: a shared loan `L_σ`, and
+  `O(s) = { L_σ }`. `O(σ)` starts empty. `s` is an ordinary local holding a borrow, so a
+  copy of it, a field that holds it and a capture of it are followed like any other
+  borrow, and an escape of it is an ordinary E1203 or E1105.
+* `spawn f(a_1..a_n) in e`, with `A = A_1 ∪ ... ∪ A_n` the union of the argument sets:
   1. every argument type and the result type must be `Send`, else E1401;
   2. the effects of the call on its arguments (4.5 steps 1 and 2) are applied now;
-  3. `O(s) ∪= A_1 ∪ ... ∪ A_n`. If `s` is a scope parameter, this is a store that
-     reaches `Self(s)`, checked by 6.2;
-  4. the handle, if any, gets `{ a shared loan on s } ∪ (the result set of step 3 of
-     4.5)`. That loan is what keeps a handle from leaving the block.
-* `scope_wait(s)` is a use of `s`. Since it comes after the storage ends of the block's
-  locals, any loan in `O(s)` on a local of `B` is live at that storage end: E1403.
-* `h.join()` does not shrink `O(s)`. Loans given to a task end with the scope.
+  3. `A` is stored through `e`, as a store through a path with one dereference (4.4).
+     For a loan on a scope `σ'` in `S(e)` that is `O(σ') ∪= A`. For `Self(p)`,
+     `Param(p)` or `Inner(p)` in `S(e)` (a scope parameter) it is the check of 6.2;
+  4. the handle, if any, gets `S(e) ∪ (the result set of step 3 of 4.5)`. The loan on
+     the scope in `S(e)` is what keeps a handle, and anything returned `from` it, from
+     leaving the block.
+* `scope_wait(σ)` is a use of `σ`. Since it comes after the storage ends of the block's
+  locals, any loan in `O(σ)` on a local of `B` is live at that storage end: E1403.
+* A scope reached through a field of a parameter (`c.s`, with `c: &Ctx`) cannot be
+  named by `into`, so a spawn into it is E1204.
+* `h.join()` does not shrink `O(σ)`. Loans given to a task end with the scope.
 * Two tasks given overlapping exclusive borrows conflict by 5.2, because the first
-  loan is live (held by `s`) when the second is taken.
+  loan is live (held by `σ`) when the second is taken.
 
 `par for` is checked as a closure with one parameter (the item) and one shared-borrow
 capture per outer local it names:
@@ -409,9 +418,9 @@ Inner(self)}`. `Param(self)` is not covered by `from self.*`: E1202.
 ```ingot
 var total: i64 = 0;
 scope s {
-    let h = spawn bump(&mut total) in s;   // L on total, O(s) = {L}
+    let h = spawn bump(&mut total) in s;   // L on total, O(σ) = {L}
     h.join();
-    total += 1;                            // s is use-live until scope_wait: E1101
+    total += 1;                            // σ is use-live until scope_wait: E1101
 }
 total += 1;                                // accepted
 ```
