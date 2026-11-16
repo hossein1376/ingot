@@ -352,7 +352,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | S7 | grok + relay | Ownership, Analysis B: origin sets and the function boundary (checker.md §4, §6, E1201–E1205) | done (ef74f22) |
 | S8 | grok + relay | Ownership, Analysis C: loans (checker.md §5, E1101–E1105) | done (12eecab) |
 | S9 | grok + relay | Ownership: scopes and tasks (checker.md §7, E1401–E1403, E1407) | done (0747185) |
-| S10 | Haiku | Check removal and `ingot cost` (pipeline §6) | `cost/*` |
+| S10 | relay | Check removal and `ingot cost` (pipeline §6) | done (633b48e) |
 | B1… | Sonnet | Instantiation, LLVM IR, runtime entry and traps, a minimal `std.Env` | `run` and `trap` tests |
 
 Alongside each S step, a Haiku subagent may write the missing conformance tests for the
