@@ -1,0 +1,11 @@
+//! expect: accept
+//! section: 9
+
+const scale: i64 = 0;
+
+fn f(n: i64) -> i64 {
+    if scale != 0 {
+        return 100 / scale;
+    }
+    return n;
+}

@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 11
+
+fn g(xs: []i64) -> i64 {
+    return (&xs[1..]).*.len;
+}

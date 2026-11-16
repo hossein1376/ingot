@@ -1,0 +1,32 @@
+//! expect: accept
+//! section: 5.5, 11
+
+struct V {
+    pub n: i64,
+}
+
+impl V {
+    fn twice(self: &V) -> i64 {
+        return self.n + self.n;
+    }
+}
+
+fn mk(x: i64) -> V {
+    return V.{ n: x };
+}
+
+fn a(p: i64, q: i64, r: i64) -> bool {
+    return (p + q).cmp(&r) == .less;
+}
+
+fn c(p: i64, q: i64) -> bool {
+    return p.eq(&(q + 1));
+}
+
+fn d(p: []u8) -> bool {
+    return p.eq(&"ada");
+}
+
+fn e(x: i64) -> i64 {
+    return mk(x).twice();
+}

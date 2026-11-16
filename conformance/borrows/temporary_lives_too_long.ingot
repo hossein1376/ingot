@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 11
+
+fn g(x: i64) -> i64 {
+    return x;
+}
+
+fn f(x: i64) -> i64 {
+    let r = &g(x); //~ E1105
+    return r.*;
+}

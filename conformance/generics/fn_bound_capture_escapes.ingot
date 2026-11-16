@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 13.3
+
+fn pick[R, A: FnOnce() -> R](a: A) -> R {
+    return a();
+}
+
+fn f() -> &i64 from static {
+    let x: i64 = 3;
+    let c = fn[&x]() -> &i64 { return x; };
+    return pick(c); //~ E1203
+}

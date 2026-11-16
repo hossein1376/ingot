@@ -1,0 +1,13 @@
+//! expect: accept
+//! section: 18
+
+import std.task.Scope;
+import std.task.Task;
+
+fn one() -> i64 {
+    return 1;
+}
+
+fn start(s: &Scope) -> Task[i64] from s {
+    return spawn one() in s;
+}

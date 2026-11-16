@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 3
+
+fn f(a: [1 << 40][1 << 40]u64) { //~ E0521
+    _ = a;
+}

@@ -1922,6 +1922,12 @@ impl Cx<'_, '_> {
     // ------------------------------------------------------- obligations
 
     pub(crate) fn check_obligations(&mut self) {
+        let mut concrete = std::mem::take(&mut self.d.concrete_types);
+        concrete.sort_by_key(|c| (c.file, c.span.start, c.span.end, c.ty.0));
+        concrete.dedup_by_key(|c| (c.file, c.span.start, c.span.end, c.ty.0));
+        for c in concrete {
+            self.check_concrete_type(&c);
+        }
         let mut obligations = std::mem::take(&mut self.d.obligations);
         obligations.sort_by_key(|o| (o.file, o.span.start, o.span.end));
         for o in obligations {
@@ -1931,6 +1937,88 @@ impl Cx<'_, '_> {
                     self.check_args(&o, *item, args, spans)
                 }
             }
+        }
+    }
+
+    /// E0521 for a concrete type: a length from a constant generic argument that is
+    /// negative or above 2^62, or a size above 2^62 bytes (01-core §3, the catalog).
+    fn check_concrete_type(&mut self, c: &ConcreteType) {
+        match self.d.layout_of(c.ty) {
+            Ok(layout) => {
+                if layout.size > 1 << 62 {
+                    self.error(
+                        "E0521",
+                        "a type's size is at most 2^62 bytes".to_string(),
+                        c.file,
+                        c.span,
+                    );
+                }
+            }
+            Err(LayoutError::Unspecified(m)) if m.contains("larger than 2^64") => {
+                self.error(
+                    "E0521",
+                    "a type's size is at most 2^62 bytes".to_string(),
+                    c.file,
+                    c.span,
+                );
+            }
+            Err(LayoutError::Poison) => {
+                let mut seen = BTreeSet::new();
+                if let Some(value) = self.invalid_array_length(c.ty, &mut seen, 0) {
+                    let message = if value < 0 {
+                        format!("an array cannot have the negative length {value}")
+                    } else {
+                        format!("an array length is at most 2^62, not {value}")
+                    };
+                    let span = c.length_span.unwrap_or(c.span);
+                    self.error("E0521", message, c.file, span);
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// A length in `ty` that is negative or above 2^62, after substitution.
+    fn invalid_array_length(
+        &mut self,
+        ty: TypeId,
+        seen: &mut BTreeSet<TypeId>,
+        depth: u32,
+    ) -> Option<i128> {
+        if depth > 64 || !seen.insert(ty) {
+            return None;
+        }
+        match self.d.types.kind(ty).clone() {
+            TyKind::Array(elem, n) => {
+                if let ConstArg::Value(ConstValue::Int { value, .. }) = n
+                    && !(0..=(1 << 62)).contains(&value)
+                {
+                    return Some(value);
+                }
+                self.invalid_array_length(elem, seen, depth + 1)
+            }
+            TyKind::Adt(def, args) => {
+                let parts = self.d.adt_part_types(def, &args)?;
+                for part in parts {
+                    if let Some(v) = self.invalid_array_length(part, seen, depth + 1) {
+                        return Some(v);
+                    }
+                }
+                None
+            }
+            TyKind::Tuple(ts) => {
+                for t in ts {
+                    if let Some(v) = self.invalid_array_length(t, seen, depth + 1) {
+                        return Some(v);
+                    }
+                }
+                None
+            }
+            TyKind::Optional(inner) => self.invalid_array_length(inner, seen, depth + 1),
+            TyKind::Result(a, b) => self
+                .invalid_array_length(a, seen, depth + 1)
+                .or_else(|| self.invalid_array_length(b, seen, depth + 1)),
+            _ => None,
         }
     }
 

@@ -1,0 +1,19 @@
+//! expect: reject
+//! section: 20
+
+import std.sync.Atomic;
+
+struct Node {
+    pub v: i64,
+}
+
+struct Stack {
+    pub head: Atomic[*mut Node],
+}
+
+fn share(s: &Stack) {
+    par for i in 0..4 {
+        _ = s; //~ E1402
+        _ = i;
+    }
+}

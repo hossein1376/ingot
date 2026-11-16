@@ -29,7 +29,7 @@ impl[T] []T {
 
 impl[T] []mut T {
     /// A shared reborrow of an exclusive slice (section 5.5).
-    pub fn shared(self: &[]mut T) -> []T from self.* {
+    pub fn shared(self: &[]mut T) -> []T from self {
         unsafe("the shared view lives only while the exclusive slice is borrowed") {
             return @slice_from_raw(@bits(*T, self.ptr), self.len);
         }

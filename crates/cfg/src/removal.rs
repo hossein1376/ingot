@@ -19,7 +19,7 @@ use ingot_diag::source::{Sources, Span};
 use ingot_sema::consteval::ValueState;
 use ingot_sema::defs::DefId;
 use ingot_sema::sigs::{Declarations, ItemSig};
-use ingot_sema::ty::{ConstValue, IntTy, Mutability, TyKind, TypeId};
+use ingot_sema::ty::{ConstArg, ConstValue, IntTy, Mutability, TyKind, TypeId};
 use ingot_sema::value::Value as SemValue;
 use ingot_syntax::ast::{BinOp, UnOp};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -128,7 +128,6 @@ struct CfgAnalysis {
 
 impl Engine<'_> {
     fn analyze_cfg(&self, id: CfgId, cfg: &Cfg) -> CfgAnalysis {
-        let raw = raw_sullied(cfg);
         let two_phase = two_phase_borrows(cfg);
         let n = cfg.blocks.len();
         let mut ins: Vec<Option<State>> = vec![None; n];
@@ -145,7 +144,7 @@ impl Engine<'_> {
             .collect();
         let entry = cfg.entry as usize;
         if entry < n {
-            ins[entry] = Some(State::seed(cfg, self.decls, raw.clone()));
+            ins[entry] = Some(State::seed(cfg, self.decls));
         }
         let mut queue: VecDeque<Block> = VecDeque::new();
         if entry < n {
@@ -166,6 +165,14 @@ impl Engine<'_> {
             let step = self.transfer(cfg, block, state, &two_phase, false);
             let mut touched = Vec::new();
             for (slot, (succ, edge)) in step.edges.into_iter().enumerate() {
+                if step.skipped.contains(&slot) {
+                    // A branch on a constant condition: the untaken edge is dead.
+                    // Nothing it reaches is reported, and its checks are removed.
+                    if let Some(cell) = edge_states[block as usize].get_mut(slot) {
+                        *cell = None;
+                    }
+                    continue;
+                }
                 if let Some(cell) = edge_states[block as usize].get_mut(slot) {
                     *cell = Some(edge);
                 }
@@ -202,6 +209,23 @@ impl Engine<'_> {
                 cfg.name
             ));
             return analysis;
+        }
+        // Rule 5: a block no taken edge reaches is dead. Its operations are not
+        // reported, and its checks are removed.
+        for (block, state) in ins.iter().enumerate() {
+            if state.is_some() {
+                continue;
+            }
+            let removed: Vec<usize> = cfg.blocks[block]
+                .stmts
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| matches!(s.kind, StmtKind::Check(_)))
+                .map(|(i, _)| i)
+                .collect();
+            if !removed.is_empty() {
+                analysis.removed.push((block as Block, removed));
+            }
         }
         for (block, state) in ins.iter().enumerate() {
             let Some(state) = state.clone() else {
@@ -275,7 +299,6 @@ impl Engine<'_> {
                 StmtKind::Check(check) => {
                     let key = self.check_key(cfg, check, &defs);
                     let first = match &key {
-                        Some(k) if k.touches_raw(&state.raw) => true,
                         Some(k) => state.avail.insert(k.clone()),
                         None => true,
                     };
@@ -383,9 +406,6 @@ impl Engine<'_> {
         defs: &BTreeMap<Local, Rvalue>,
     ) -> Bounds {
         let range = state.type_bounds(cfg, self.decls, dest);
-        if state.raw.contains(&dest) {
-            return range;
-        }
         match value {
             Rvalue::Use(Operand::Const(Const::Int { value, .. })) => {
                 Bounds::exact(Val::constant(*value))
@@ -425,9 +445,6 @@ impl Engine<'_> {
             },
             Rvalue::SliceLen(place) => {
                 let key = place_key(place);
-                if state.raw_place(&key) {
-                    return range;
-                }
                 Bounds::exact(Val::symbol(Sym::Len(key), 0))
             }
             _ => range,
@@ -446,7 +463,7 @@ impl Engine<'_> {
         depth: u32,
     ) -> Bounds {
         let range = state.type_bounds(cfg, self.decls, dest);
-        if state.raw.contains(&dest) || depth > 32 {
+        if depth > 32 {
             return range;
         }
         match value {
@@ -475,9 +492,6 @@ impl Engine<'_> {
             }
             Rvalue::SliceLen(place) => {
                 let key = place_key(place);
-                if state.raw_place(&key) {
-                    return range;
-                }
                 Bounds::exact(Val::symbol(Sym::Len(key), 0))
             }
             Rvalue::Binary { op, lhs, rhs }
@@ -589,6 +603,16 @@ impl Engine<'_> {
         }
     }
 
+    fn const_bool_named(&self, def: DefId) -> Option<bool> {
+        match self.decls.consts.get(&def) {
+            Some(ingot_sema::consteval::ConstState::Done(Ok(ConstValue::Bool(b)))) => Some(*b),
+            _ => match self.decls.values.get(&def) {
+                Some(ValueState::Done(Ok(SemValue::Bool(b)))) => Some(*b),
+                _ => None,
+            },
+        }
+    }
+
     fn const_named(&self, def: DefId) -> Option<i128> {
         match self.decls.consts.get(&def) {
             Some(ingot_sema::consteval::ConstState::Done(Ok(ConstValue::Int {
@@ -659,12 +683,27 @@ impl Engine<'_> {
             } => {
                 let mut yes = state.clone();
                 let mut no = state.clone();
+                let mut constant = None;
                 if let Some((op, lhs, rhs)) = self.comparison(cfg, cond, defs) {
                     self.edge_facts(cfg, &mut yes, op, &lhs, &rhs, true);
                     self.edge_facts(cfg, &mut no, op, &lhs, &rhs, false);
                 }
+                // Rule 5's constants are literals, `const` items and operations on
+                // those (through compiler temporaries). A dataflow fact about a user
+                // local is not a constant condition and must not make a block dead for
+                // reporting.
+                if let Some((op, a, b)) = self.constant_comparison(cfg, cond, defs) {
+                    constant = constant_compare(op, a, b);
+                } else if let Some(value) = self.bool_constant(cfg, cond, defs) {
+                    constant = Some(value);
+                }
                 step.edges.push((*then_block, yes));
                 step.edges.push((*else_block, no));
+                // Rule 5: a branch on a constant condition is folded first. The
+                // untaken edge is unreachable in the dataflow.
+                if let Some(value) = constant {
+                    step.skipped.push(if value { 1 } else { 0 });
+                }
             }
             Terminator::Switch { cases, default, .. } => {
                 step.edges.push((*default, state.clone()));
@@ -686,12 +725,12 @@ impl Engine<'_> {
         }
     }
 
-    fn comparison(
+    /// The operands of a comparison expression, before any dataflow facts are used.
+    fn comparison_operands(
         &self,
-        cfg: &Cfg,
         cond: &Operand,
         defs: &BTreeMap<Local, Rvalue>,
-    ) -> Option<(BinOp, Lx, Lx)> {
+    ) -> Option<(BinOp, Operand, Operand)> {
         let Operand::Place(place, _) = cond else {
             return None;
         };
@@ -709,7 +748,7 @@ impl Engine<'_> {
                 Rvalue::Use(Operand::Place(src, _)) if src.proj.is_empty() => {
                     local = src.root()?;
                 }
-                Rvalue::Binary { op, lhs, rhs } => break (op, lhs, rhs),
+                Rvalue::Binary { op, lhs, rhs } => break (*op, lhs.clone(), rhs.clone()),
                 _ => return None,
             }
         };
@@ -719,9 +758,63 @@ impl Engine<'_> {
         ) {
             return None;
         }
-        let left = self.lin_expr(cfg, lhs, defs, 0)?;
-        let right = self.lin_expr(cfg, rhs, defs, 0)?;
-        Some((*op, left, right))
+        Some((op, lhs, rhs))
+    }
+
+    fn comparison(
+        &self,
+        cfg: &Cfg,
+        cond: &Operand,
+        defs: &BTreeMap<Local, Rvalue>,
+    ) -> Option<(BinOp, Lx, Lx)> {
+        let (op, lhs, rhs) = self.comparison_operands(cond, defs)?;
+        let left = self.lin_expr(cfg, &lhs, defs, 0)?;
+        let right = self.lin_expr(cfg, &rhs, defs, 0)?;
+        Some((op, left, right))
+    }
+
+    /// A comparison whose two operands are rule-5 constants: literals, `const`
+    /// items, or operations on those, through compiler temporaries.
+    fn constant_comparison(
+        &self,
+        cfg: &Cfg,
+        cond: &Operand,
+        defs: &BTreeMap<Local, Rvalue>,
+    ) -> Option<(BinOp, i128, i128)> {
+        let (op, lhs, rhs) = self.comparison_operands(cond, defs)?;
+        Some((
+            op,
+            self.const_int(cfg, &lhs, defs, 0)?,
+            self.const_int(cfg, &rhs, defs, 0)?,
+        ))
+    }
+
+    /// The value of a constant `bool` condition, through compiler temporaries.
+    fn bool_constant(
+        &self,
+        cfg: &Cfg,
+        cond: &Operand,
+        defs: &BTreeMap<Local, Rvalue>,
+    ) -> Option<bool> {
+        match cond {
+            Operand::Const(Const::Bool(b)) => Some(*b),
+            Operand::Const(Const::Named { def, .. }) => self.const_bool_named(*def),
+            Operand::Const(_) => None,
+            Operand::Place(place, _) => {
+                let root = place.root()?;
+                if cfg.local(root).kind != LocalKind::Temp {
+                    return None;
+                }
+                match defs.get(&root)? {
+                    Rvalue::Use(op) => self.bool_constant(cfg, op, defs),
+                    Rvalue::Unary {
+                        op: UnOp::Not,
+                        operand,
+                    } => self.bool_constant(cfg, operand, defs).map(|b| !b),
+                    _ => None,
+                }
+            }
+        }
     }
 
     /// A linear expression of the values the analysis tracks: a constant, a constant
@@ -883,7 +976,7 @@ impl Engine<'_> {
                 let bounds = state.locals.get(local)?;
                 let shared: Vec<&Val> = bounds.lo.intersection(&bounds.hi).collect();
                 match shared.as_slice() {
-                    [value] if !state.raw_value(value) => Some((*value).clone().add(*offset)),
+                    [value] => Some((*value).clone().add(*offset)),
                     _ => None,
                 }
             }
@@ -898,6 +991,19 @@ impl Engine<'_> {
         defs: &BTreeMap<Local, Rvalue>,
         first: bool,
     ) -> Decision {
+        // Rule 5 for a bounds check: a constant index against a constant length is
+        // folded. In range it is removed; out of range it is E0806 with T01.
+        if let CheckKind::Bounds(BoundsKind::Index) = check.kind
+            && let Some((index, len)) = self.constant_bounds(cfg, check, defs)
+        {
+            return if index >= 0 && index < len {
+                Decision::Remove
+            } else {
+                Decision::Trap(format!(
+                    "this operation always traps: T01: index {index} out of bounds for length {len}"
+                ))
+            };
+        }
         // Rule 5 first: a folded operation that traps is E0806, not a check removal.
         if let Some(result) = self.fold_check(cfg, check, defs) {
             return match result {
@@ -937,6 +1043,25 @@ impl Engine<'_> {
             // `@narrow` is written in the source and is not a cost item (§31).
             CheckKind::Narrow => Decision::Keep(None),
         }
+    }
+
+    /// The index and length of a bounds check when both are constants.
+    fn constant_bounds(
+        &self,
+        cfg: &Cfg,
+        check: &Check,
+        defs: &BTreeMap<Local, Rvalue>,
+    ) -> Option<(i128, i128)> {
+        let index = self.const_int(cfg, check.lo.as_ref()?, defs, 0)?;
+        let place = check.place.as_ref()?;
+        let ty = self.place_ty(cfg, place)?;
+        let TyKind::Array(_, len) = self.decls.types.kind(ty) else {
+            return None;
+        };
+        let ConstArg::Value(ConstValue::Int { value, .. }) = len else {
+            return None;
+        };
+        Some((index, *value))
     }
 
     fn fold_check(
@@ -1572,17 +1697,11 @@ struct State {
     locals: BTreeMap<Local, Bounds>,
     lens: BTreeMap<PlaceKey, Bounds>,
     avail: BTreeSet<CheckKey>,
-    /// Locals whose borrow is cast to a raw pointer anywhere in the body. A raw write
-    /// may change them after a branch established a fact, so no fact is ever added.
-    raw: BTreeSet<Local>,
 }
 
 impl State {
-    fn seed(cfg: &Cfg, decls: &Declarations, raw: BTreeSet<Local>) -> State {
-        let mut state = State {
-            raw,
-            ..State::default()
-        };
+    fn seed(cfg: &Cfg, decls: &Declarations) -> State {
+        let mut state = State::default();
         for (index, _) in cfg.locals.iter().enumerate() {
             let local = index as Local;
             if let TyKind::Int(int) = decls.types.kind(cfg.local(local).ty) {
@@ -1609,59 +1728,31 @@ impl State {
         }
     }
 
-    /// The type's range, or nothing for a non-integer. A raw-sullied local keeps only
-    /// its type range: it is never narrowed.
+    /// The type's range, or nothing for a non-integer.
     fn type_bounds(&self, cfg: &Cfg, decls: &Declarations, local: Local) -> Bounds {
         State::type_range(cfg, decls, local)
     }
 
     fn add_lower(&mut self, local: Local, value: Val, range: Bounds) {
-        if self.raw.contains(&local) || self.raw_value(&value) {
-            return;
-        }
         let entry = self.locals.entry(local).or_insert(range);
         entry.lo.insert(value);
     }
 
     fn add_upper(&mut self, local: Local, value: Val, range: Bounds) {
-        if self.raw.contains(&local) || self.raw_value(&value) {
-            return;
-        }
         let entry = self.locals.entry(local).or_insert(range);
         entry.hi.insert(value);
     }
 
     fn set_exact(&mut self, local: Local, value: Val) {
-        if self.raw.contains(&local) || self.raw_value(&value) {
-            return;
-        }
         self.locals.insert(local, Bounds::exact(value));
     }
 
-    fn raw_place(&self, key: &PlaceKey) -> bool {
-        matches!(key.base, BaseKey::Local(local) if self.raw.contains(&local))
-    }
-
     fn add_len_lower(&mut self, key: PlaceKey, value: Val) {
-        if self.raw_place(&key) || self.raw_value(&value) {
-            return;
-        }
         self.lens.entry(key).or_default().lo.insert(value);
     }
 
     fn add_len_upper(&mut self, key: PlaceKey, value: Val) {
-        if self.raw_place(&key) || self.raw_value(&value) {
-            return;
-        }
         self.lens.entry(key).or_default().hi.insert(value);
-    }
-
-    /// A value that names the length of a raw-sullied place is not a fact.
-    fn raw_value(&self, value: &Val) -> bool {
-        match &value.sym {
-            Some(Sym::Len(key)) => self.raw_place(key),
-            _ => false,
-        }
     }
 
     fn join(&self, other: &State) -> State {
@@ -1693,9 +1784,21 @@ impl State {
             locals,
             lens,
             avail,
-            raw: self.raw.clone(),
         }
     }
+}
+
+/// `a op b` for two constants: `None` for an operator rule 5 does not fold.
+fn constant_compare(op: BinOp, a: i128, b: i128) -> Option<bool> {
+    Some(match op {
+        BinOp::Lt => a < b,
+        BinOp::Le => a <= b,
+        BinOp::Gt => a > b,
+        BinOp::Ge => a >= b,
+        BinOp::Eq => a == b,
+        BinOp::Ne => a != b,
+        _ => return None,
+    })
 }
 
 fn key_ty(key: &PlaceKey, cfg: &Cfg, decls: &Declarations) -> Option<TypeId> {
@@ -1908,105 +2011,6 @@ fn two_phase_arg(
     None
 }
 
-/// Locals whose borrow is cast to a raw pointer anywhere in the body. The spec does
-/// not yet say whether a write through that pointer is undefined behavior, so phase 10
-/// adds no fact about such a local: a fact from before the write would be unsound.
-fn raw_sullied(cfg: &Cfg) -> BTreeSet<Local> {
-    let mut borrowed: BTreeMap<Local, Place> = BTreeMap::new();
-    let mut assigned: BTreeMap<Local, Rvalue> = BTreeMap::new();
-    for block in &cfg.blocks {
-        for stmt in &block.stmts {
-            let StmtKind::Assign { place, value } = &stmt.kind else {
-                continue;
-            };
-            if !place.proj.is_empty() {
-                continue;
-            }
-            let Some(local) = place.root() else {
-                continue;
-            };
-            match value {
-                Rvalue::Borrow { place, .. } | Rvalue::Reborrow { place, .. } => {
-                    borrowed.insert(local, place.clone());
-                }
-                Rvalue::Slice {
-                    base,
-                    borrow: Some(Mutability::Mut),
-                    ..
-                } => {
-                    borrowed.insert(local, base.clone());
-                }
-                _ => {}
-            }
-            assigned.insert(local, value.clone());
-        }
-    }
-    let mut raw = BTreeSet::new();
-    let mut unknown = false;
-    for block in &cfg.blocks {
-        for stmt in &block.stmts {
-            let StmtKind::Assign { value, .. } = &stmt.kind else {
-                continue;
-            };
-            let Rvalue::Cast {
-                kind: ingot_sema::typed::CastKind::RefToPtr,
-                operand,
-            } = value
-            else {
-                continue;
-            };
-            let Operand::Place(place, _) = operand else {
-                unknown = true;
-                continue;
-            };
-            if !place.proj.is_empty() {
-                // A borrow held in a field (`w.r as *mut T`) has an origin the CFG
-                // does not name. Be conservative for the whole body.
-                unknown = true;
-                continue;
-            }
-            let Some(mut local) = place.root() else {
-                unknown = true;
-                continue;
-            };
-            let mut found = false;
-            for _ in 0..32 {
-                if let Some(target) = borrowed.get(&local) {
-                    let Some(root) = target.root() else {
-                        break;
-                    };
-                    if borrowed.contains_key(&root) {
-                        local = root;
-                        continue;
-                    }
-                    raw.insert(root);
-                    found = true;
-                    break;
-                }
-                match assigned.get(&local) {
-                    Some(Rvalue::Use(Operand::Place(src, _)))
-                        if src.proj.is_empty() && src.root().is_some_and(|next| next != local) =>
-                    {
-                        local = src.root().unwrap_or(local);
-                    }
-                    _ => break,
-                }
-            }
-            if !found {
-                unknown = true;
-            }
-        }
-    }
-    if unknown {
-        // A cast whose borrow origin the CFG does not name: no local of this body
-        // gets a fact, because any of them may hold or be a length.
-        for index in 0..cfg.locals.len() {
-            raw.insert(index as Local);
-        }
-    }
-    raw
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CheckKey {
     tag: CheckTag,
@@ -2028,10 +2032,6 @@ impl CheckKey {
 
     fn place_overlaps(&self, written: &PlaceKey) -> bool {
         self.place.as_ref().is_some_and(|p| overlaps(p, written))
-    }
-
-    fn touches_raw(&self, raw: &BTreeSet<Local>) -> bool {
-        raw.iter().any(|local| self.mentions(*local))
     }
 }
 
@@ -2172,6 +2172,8 @@ impl Lx {
 struct Step {
     out: State,
     edges: Vec<(Block, State)>,
+    /// Successor slots a constant branch does not take (rule 5).
+    skipped: Vec<usize>,
     items: Vec<(usize, CostKind, Span)>,
     diagnostics: Vec<Diagnostic>,
     removed: Vec<usize>,

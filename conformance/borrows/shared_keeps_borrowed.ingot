@@ -1,0 +1,16 @@
+//! expect: reject
+//! section: 5.5, 11
+
+fn sum(xs: []i64) -> i64 {
+    var t: i64 = 0;
+    for x in xs {
+        t +%= x;
+    }
+    return t;
+}
+
+fn f(xs: []mut i64) -> i64 {
+    let sh = xs.shared();
+    xs[0] = 7; //~ E1101
+    return sum(sh);
+}

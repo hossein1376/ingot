@@ -1,0 +1,20 @@
+//! expect: reject
+//! section: 5.5, 11
+
+struct V {
+    pub n: i64,
+}
+
+impl V {
+    fn bump(self: &mut V) {
+        self.n += 1;
+    }
+}
+
+fn mk(x: i64) -> V {
+    return V.{ n: x };
+}
+
+fn f() {
+    mk(1).bump(); //~ E0607
+}

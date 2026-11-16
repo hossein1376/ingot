@@ -281,7 +281,7 @@ fn f() -> Task[i64] {
 ",
         &[
             "E1201 the return type holds a borrow and needs a `from` clause `Task[i64]`",
-            "E1203 the returned value borrows a local `return h;` borrow=`let h = spawn work() in s;`",
+            "E1203 the returned value borrows a local `return h;` borrow=`s`",
         ],
     );
 }

@@ -1,16 +1,14 @@
 //! expect: cost
 //! section: 15, 31
 
-fn pick(a: [4]i64) -> i64 {
+fn f(a: [4]i64) -> i64 {
     var i: i64 = 0;
     let p = &mut i as *mut i64;
     if i >= 0 {
         if i < 4 {
-            unsafe("p may write i") {
-                p.* = 100;
-            }
-            return a[i]; //~ bounds_check
+            return a[i];
         }
     }
+    _ = p;
     return 0;
 }

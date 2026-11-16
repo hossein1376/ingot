@@ -1,0 +1,11 @@
+//! expect: cost
+//! section: 9, 31
+
+const scale: i64 = 0;
+
+fn f(a: [4]i64, n: i64) -> i64 {
+    if scale != 0 {
+        return a[n + 1] + (100 / scale);
+    }
+    return a[0];
+}

@@ -303,8 +303,14 @@ impl Checker<'_, '_, '_> {
                 }
                 return (ty, ExprRes::Borrow(m));
             }
-            // A slice of a slice is already a value: borrowing it again is a borrow of a
-            // value that is not a place.
+            // A slice of a slice is a value. A shared borrow of it borrows a
+            // temporary (02-memory §11); an exclusive borrow still needs a place.
+            if m == Mutability::Shared {
+                if self.is_poison(ty) {
+                    return (self.poison(), ExprRes::None);
+                }
+                return (self.ref_to(Mutability::Shared, ty), ExprRes::Borrow(m));
+            }
             if !self.is_poison(ty) {
                 let span = self.span_of(operand);
                 self.err("E0607", "a borrow of something that is not a place", span);
@@ -350,11 +356,9 @@ impl Checker<'_, '_, '_> {
             }
         } else if m == Mutability::Mut {
             self.require_mutable_place(operand, Use::BorrowMut);
-        } else if self.place(operand).is_none() {
-            let span = self.span_of(operand);
-            self.err("E0607", "a borrow of something that is not a place", span);
-            return (self.poison(), ExprRes::None);
         }
+        // 02-memory §11: a shared borrow may be taken of a temporary; it lives to the
+        // end of the statement. An exclusive borrow still needs a place (E0607).
         (self.ref_to(m, t), ExprRes::Borrow(m))
     }
 

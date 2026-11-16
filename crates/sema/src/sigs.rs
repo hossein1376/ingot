@@ -480,6 +480,17 @@ pub struct Obligation {
     pub kind: ObligationKind,
 }
 
+/// A concrete type written in a signature or a body. E0521 is reported when an
+/// instantiated length is out of range or the type is above 2^62 bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct ConcreteType {
+    pub file: usize,
+    pub span: Span,
+    /// The argument that became an invalid array length, when there is one.
+    pub length_span: Option<Span>,
+    pub ty: TypeId,
+}
+
 // ----------------------------------------------------------- the result
 
 /// The definitions the builtin names of section 4.4 and 27.2 stand for. `Ordering`,
@@ -526,6 +537,8 @@ pub struct Declarations {
     pub props: BTreeMap<TypeId, Props>,
     pub layouts: BTreeMap<TypeId, Layout>,
     pub obligations: Vec<Obligation>,
+    /// Concrete types that need the E0521 length and size check (01-core §3).
+    pub concrete_types: Vec<ConcreteType>,
     /// For each associated type of an interface: the interface and the name.
     pub assoc_info: BTreeMap<DefId, (DefId, String)>,
     /// The definitions behind the builtin names `Eq`, `Ord`, ... (section 4.4).
@@ -555,6 +568,7 @@ impl Declarations {
             props: BTreeMap::new(),
             layouts: BTreeMap::new(),
             obligations: Vec::new(),
+            concrete_types: Vec::new(),
             assoc_info: BTreeMap::new(),
             builtins: BuiltinNames::default(),
             infinite: BTreeSet::new(),

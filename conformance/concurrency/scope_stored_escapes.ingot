@@ -1,0 +1,35 @@
+//! expect: reject
+//! section: 18
+
+import std.task.Scope;
+
+fn work() -> void {}
+
+struct Keep {
+    pub s: ?&Scope,
+}
+
+fn f() {
+    var keep = Keep.{ s: .none };
+    scope s { //~ E1105
+        keep.s = .some(s);
+    }
+    if let .some(t) = keep.s {
+        spawn work() in t;
+    }
+}
+
+fn g() {
+    scope s {
+        let t = s;
+        spawn work() in t;
+    }
+}
+
+fn nested() {
+    scope a {
+        scope b {
+            spawn work() in a;
+        }
+    }
+}

@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 3
+
+fn f() {
+    let a: [1 << 40][1 << 40]u64 = @zero; //~ E0521
+    _ = a;
+}

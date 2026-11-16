@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 9
+
+fn f() -> i64 {
+    let i: i64 = 0;
+    if i < 4 {
+        return 1;
+    }
+    return 7 / 0; //~ E0806
+}

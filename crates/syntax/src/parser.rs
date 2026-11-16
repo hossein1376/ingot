@@ -1448,6 +1448,11 @@ impl<'a> Parser<'a> {
             TokenKind::Int(_) | TokenKind::Keyword(Kw::True) | TokenKind::Keyword(Kw::False) => {
                 GenericArg::Const(self.expr())
             }
+            // A negative numeric literal (`Ring[u8, -1]`) is written as in an
+            // expression (01-core §8). Other expressions need `{ ... }`.
+            TokenKind::Punct(Punct::Minus) if matches!(self.peek_at(1).kind, TokenKind::Int(_)) => {
+                GenericArg::Const(self.expr())
+            }
             TokenKind::Punct(LBrace) => {
                 let open = self.bump().span;
                 let e = self.expr();

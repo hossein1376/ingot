@@ -1,0 +1,7 @@
+//! expect: reject
+//! section: 11
+
+fn f(xs: []i64) -> i64 {
+    let t = &xs[1..]; //~ E1105
+    return t.*.len;
+}

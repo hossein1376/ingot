@@ -855,7 +855,7 @@ impl<'a, 'i> Cx<'a, 'i> {
     // ------------------------------------------------------------------ types
 
     pub fn lower_ty(&mut self, ty: &hir::Ty) -> TypeId {
-        match &ty.kind {
+        let lowered = match &ty.kind {
             hir::TyKind::Path(p) => self.lower_path_ty(p),
             hir::TyKind::Borrow { mutable, inner } => {
                 let t = self.lower_ty(inner);
@@ -900,7 +900,50 @@ impl<'a, 'i> Cx<'a, 'i> {
             }
             hir::TyKind::Dyn { interface, mutable } => self.lower_dyn(interface, *mutable, ty.span),
             hir::TyKind::Poison => self.d.types.poison,
+        };
+        // 01-core §3: a length or size that depends on a constant generic argument is
+        // checked where the type is concrete. The check runs after every signature
+        // exists (check_obligations), for a type in a signature or in a body.
+        if !self.d.types.has_params(lowered)
+            && !self.d.types.has_poison(lowered)
+            && matches!(
+                self.d.types.kind(lowered),
+                TyKind::Array(..) | TyKind::Adt(..)
+            )
+        {
+            let length_span = self.invalid_argument_span(ty, lowered);
+            self.d.concrete_types.push(crate::sigs::ConcreteType {
+                file: self.cur.file,
+                span: ty.span,
+                length_span,
+                ty: lowered,
+            });
         }
+        lowered
+    }
+
+    /// The span of a constant generic argument whose value is not a valid length. It
+    /// is the span E0521 uses when that argument made the array length invalid.
+    fn invalid_argument_span(&mut self, ty: &hir::Ty, lowered: TypeId) -> Option<Span> {
+        let hir::TyKind::Path(path) = &ty.kind else {
+            return None;
+        };
+        let TyKind::Adt(_, args) = self.d.types.kind(lowered).clone() else {
+            return None;
+        };
+        for (arg, lowered) in path.args.iter().zip(&args) {
+            let GenericArg::Const(ConstArg::Value(ConstValue::Int { value, .. })) = lowered else {
+                continue;
+            };
+            if (0..=(1 << 62)).contains(value) {
+                continue;
+            }
+            return Some(match arg {
+                hir::GenericArg::Ty(t) => t.span,
+                hir::GenericArg::Const(e) => self.pkgs[self.cur.pkg].expr(*e).span,
+            });
+        }
+        None
     }
 
     /// The length of an array type: a constant generic parameter or a value.

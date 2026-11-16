@@ -284,9 +284,13 @@ omits the label when there is none. E1403 carries `spawn` and `declared`.
 result must be `Send` (E1401), and so must a `par for` item. A `par for` body that
 reads an outer local whose type is not `Sync` is E1402. A body that assigns to, moves
 or exclusively borrows an outer local is E1407, and that is the only code for that
-use. Analysis B applies a `spawn`'s argument effects and stores those origins into
-the scope, the same way as `into`. A scope parameter without `into` is E1204. Each
-`select` arm is applied on its own successor.
+use. Analysis B stores a `spawn`'s argument sets through `S(e)`, exactly as `into`
+stores through a parameter: `O(σ) ∪= A` for each scope local in `S(e)`, and the §6.2
+check for a scope parameter. There is no "every scope in the function" fallback.
+The handle gets `S(e)` plus the call's result set; the loan on the scope in `S(e)`
+is what keeps the handle, and anything returned `from` it, from leaving the block.
+A scope parameter without `into` is E1204. Each `select` arm is applied on its own
+successor.
 
 **Phase 10** (`crates/cfg/src/removal.rs`). A forward dataflow tracks, per integer
 local, a set of lower and upper bounds: a constant, a constant generic parameter plus
@@ -299,36 +303,39 @@ that local's bounds, kills every `len` fact that overlaps the borrowed place and
 drops the rule-6 checks it protects, at the borrow itself: whether the borrow is
 stored in a struct, reassigned in a branch or passed to a call makes no difference.
 A two-phase exclusive borrow also kills them again at the terminator that activates
-it, because its root may be read between reservation and activation. A local whose
-borrow is cast to a raw pointer gets no facts in that body: no bounds, no `len` fact
-and no rule-6 availability, because an `unsafe` write through the pointer could
-follow a fact. A bound that names `len(raw place)` is likewise never recorded, even
-on a local that is not itself raw. If the cast's borrow origin is a field the CFG
-does not name, every local of that body is treated that way. Joins intersect the bounds, so a fact one
-side lacks is dropped. The six §31 removals are applied to the check statements: the `for`
-element access emits no check; a bounds check goes when the facts put `e` in
-`0 .. len(p)` (with the width for a slice or vector); an overflow check when the
-operands' ranges put the exact result in the type's range; a check whose operands are
-all constants is folded, and a trap is E0806 at the operation; and an identical check
-dominated with no assignment in between is dropped. `@gather`, `@scatter`-range,
-`@scatter`-distinct and `dispatch` coverage checks are never removed, and `@narrow`
-is not a cost item. A surviving check becomes a `removal::CostItem`; `ingot cost`
-prints those items in `(function, span)` order. The phase-8 CFG is unchanged, so the
-dump and its goldens stay phase 8's output; `Analysis.removed_cfgs` is the CFG with
-the removed checks gone. Generic bodies are analysed uninstantiated, with constant
-generic parameters as symbols. What only instantiation can decide is one
-`per-instance checks (pipeline phase 11)` entry: an `@static_assert` whose condition
-depends on a generic parameter, a kernel type that is a type parameter (E1514), a
-constant evaluation over a generic parameter, and polymorphic recursion (E0809: a call
-cycle with an argument that is not a bare caller parameter; a closure argument is
-growing, since its environment makes a new type at every level).
+it, because its root may be read between reservation and activation. Phase 10 has no
+raw-pointer rule: 02-memory §15 says a raw pointer made from a borrow of a place is
+usable only until the place's next direct use, and every fact here is made by such a
+use. Joins intersect the bounds, so a fact one side lacks is dropped. The six §31
+removals are applied to the check statements: the `for` element access emits no
+check; a bounds check goes when the facts put `e` in `0 .. len(p)` (with the width
+for a slice or vector); an overflow check when the operands' ranges put the exact
+result in the type's range; a check whose operands are all constants is folded, and
+a trap is E0806 at the operation; and an identical check dominated with no assignment
+in between is dropped. For rule 5 a branch on a constant condition is folded first:
+a block that only an untaken edge reaches is dead, its checks are removed and
+nothing in it is reported. A bounds check folds when its index and length are both
+constants: in range it is removed, out of range it is E0806 with T01 at the
+operation. `@gather`, `@scatter`-range, `@scatter`-distinct and `dispatch` coverage
+checks are never removed, and `@narrow` is not a cost item. A surviving check becomes
+a `removal::CostItem`; `ingot cost` prints those items in `(function, span)` order.
+The phase-8 CFG is unchanged, so the dump and its goldens stay phase 8's output;
+`Analysis.removed_cfgs` is the CFG with the removed checks gone. Generic bodies are
+analysed uninstantiated, with constant generic parameters as symbols. What only
+instantiation can decide is one `per-instance checks (pipeline phase 11)` entry: an
+`@static_assert` whose condition depends on a generic parameter, a kernel type that
+is a type parameter (E1514), a constant evaluation over a generic parameter, and
+polymorphic recursion (E0809: a call cycle with an argument that is not a bare caller
+parameter; a closure argument is growing, since its environment makes a new type at
+every level).
 
 **Defer and evaluation order.** `defer`/`errdefer` are copied at lowering, in reverse
 registration order, to every exit of their block, tagged with the defer and the exit;
 after that no `defer` exists. Assignment evaluates the target's indices, then the value,
 then the target's checks, then the store; a compound assignment reads the place after
-the value by the same rule. A `scope` lowers to storage start, body, the body's deferred
-code and storage ends, `cancel(s)` on an error exit, `scope_wait(s)`, storage end.
+the value by the same rule. A `scope s` lowers to storage start of `σ: Scope`, `s = &σ`,
+the body, the body's deferred code and storage ends, `cancel(σ)` on an error exit,
+`scope_wait(σ)`, storage end of `s`, storage end of `σ`.
 
 ## The back end (phases 11–14): design
 

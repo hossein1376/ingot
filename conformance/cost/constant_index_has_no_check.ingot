@@ -1,0 +1,6 @@
+//! expect: cost
+//! section: 9, 31
+
+fn f(a: [4]i64) -> i64 {
+    return a[2];
+}

@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 5.5, 11
+
+fn g() -> i64 {
+    return 1;
+}
+
+fn f() {
+    let r = &mut g(); //~ E0607
+    _ = r;
+}

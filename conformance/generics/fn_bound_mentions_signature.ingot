@@ -1,0 +1,25 @@
+//! expect: accept
+//! section: 13.3
+
+fn pick[R, A: FnOnce() -> R](a: A) -> R {
+    return a();
+}
+
+fn call[R, A: Fn() -> R](a: A) -> R {
+    return a();
+}
+
+fn call_mut[R, A: FnMut() -> R](a: A) -> R {
+    return a();
+}
+
+fn f() -> i64 {
+    let c1 = fn[]() -> i64 { return 3; };
+    let c2 = fn[]() -> i64 { return 4; };
+    var n: i64 = 0;
+    let c3 = fn[&mut n]() -> i64 {
+        n.* += 1;
+        return n.*;
+    };
+    return pick(c1) + call(c2) + call_mut(c3);
+}

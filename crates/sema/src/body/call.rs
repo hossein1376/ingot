@@ -1436,16 +1436,8 @@ impl Checker<'_, '_, '_> {
                 };
                 match mode {
                     ReceiverMode::Exclusive => self.require_mutable_receiver(base, derefs),
-                    ReceiverMode::Shared => {
-                        if derefs == 0 && self.place(base).is_none() {
-                            let span = self.span_of(base);
-                            self.err(
-                                "E0607",
-                                "a method that takes `&self` borrows its receiver, which is not a place",
-                                span,
-                            );
-                        }
-                    }
+                    // 02-memory §11: a `self: &T` receiver may be a temporary.
+                    ReceiverMode::Shared => {}
                     ReceiverMode::Value => {}
                 }
                 Some(Receiver { derefs, mode })

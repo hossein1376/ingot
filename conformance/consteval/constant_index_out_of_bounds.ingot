@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 9
+
+fn f(a: [4]i64) -> i64 {
+    return a[5]; //~ E0806
+}

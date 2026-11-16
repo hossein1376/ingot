@@ -636,11 +636,11 @@ fn the_standard_library_has_the_properties_the_specification_states() {
     let task = d.adt_of("std.task", "Task", vec![GenericArg::Ty(i64_ty)]);
     let p = d.decls.props(task);
     assert_eq!((p.linear, p.view, p.copy), (Tri::Yes, Tri::Yes, Tri::No));
-    // Atomic[T]: Send and Sync for every T (section 20).
-    for t in [i64_ty, ptr] {
+    // Atomic[T]: Send and Sync when T: Send (section 20).
+    for (t, send, sync) in [(i64_ty, Tri::Yes, Tri::Yes), (ptr, Tri::No, Tri::No)] {
         let atomic = d.adt_of("std.sync", "Atomic", vec![GenericArg::Ty(t)]);
         let p = d.decls.props(atomic);
-        assert_eq!((p.send, p.sync), (Tri::Yes, Tri::Yes));
+        assert_eq!((p.send, p.sync), (send, sync));
     }
     // Mutex[T]: both when T: Send (sections 20 and 21), neither otherwise.
     let mutex_i64 = d.adt_of("std.sync", "Mutex", vec![GenericArg::Ty(i64_ty)]);

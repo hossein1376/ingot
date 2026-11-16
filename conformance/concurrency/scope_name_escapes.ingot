@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 18
+
+import std.task.Scope;
+
+fn one() -> i64 {
+    return 1;
+}
+
+fn outer() -> &Scope from static {
+    scope s {
+        return s; //~ E1203
+    }
+}

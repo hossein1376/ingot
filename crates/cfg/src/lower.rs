@@ -282,6 +282,8 @@ struct Frame {
     defers: Vec<DeferEntry>,
     /// A `scope` boundary: wait on this local and end it.
     scope: Option<Local>,
+    /// The `&Scope` binding of that boundary (`s = &σ`), ended just before `σ`.
+    scope_binding: Option<Local>,
 }
 
 #[derive(Clone)]
@@ -819,6 +821,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             temps: Vec::new(),
             defers: Vec::new(),
             scope: None,
+            scope_binding: None,
         });
     }
 
@@ -883,13 +886,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let name = self.pkg.local(id).name.clone();
         let span = self.pkg.local(id).span;
         let ty = self.local_ty(id);
-        // `scope s` arrives holding `&Scope`. A user binding does not.
-        let kind = if self.pkg.local(id).kind == hir::LocalKind::Scope {
-            LocalKind::Scope
-        } else {
-            LocalKind::User
-        };
-        let l = self.new_local(kind, Some(name), Some(id), ty, span);
+        // `scope s` binds an ordinary `&Scope` local; lowering declares the `Scope`
+        // value it borrows (`lower_scope`, 03-concurrency §18).
+        let l = self.new_local(LocalKind::User, Some(name), Some(id), ty, span);
         self.local_map.insert(id, l);
         l
     }
@@ -1578,14 +1577,40 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         self.end_temps(mark);
     }
 
+    /// `scope s { B }` (pipeline §5): declare a `Scope` local `σ`, bind `s = &σ`,
+    /// lower `B`, then end `s`, wait on `σ` and end `σ`. The binding is a shared
+    /// loan on `σ`, so an escape is an ordinary E1203 or E1105.
     fn lower_scope(&mut self, local: LocalId, body: BlockId, span: Span) {
-        let s = self.ensure_local(local);
-        let s_span = self.cfg.local(s).span;
-        self.emit_at(StmtKind::StorageStart(s), s_span);
+        let binding = self.ensure_local(local);
+        let binding_ty = self.local_ty(local);
+        let scope_ty = match self.kind(binding_ty) {
+            TyKind::Ref(_, inner) => inner,
+            _ => {
+                self.fail("a scope binding whose type is not `&Scope`");
+                return;
+            }
+        };
+        let name = self.cfg.local(binding).name.clone();
+        let binding_span = self.cfg.local(binding).span;
+        let scope = self.new_local(LocalKind::Scope, name, None, scope_ty, binding_span);
+        self.start_local(scope, false);
+        self.start_local(binding, false);
+        self.emit_at(
+            StmtKind::Assign {
+                place: Place::local(binding),
+                value: Rvalue::Borrow {
+                    place: Place::local(scope),
+                    mutability: Mutability::Shared,
+                    two_phase: false,
+                },
+            },
+            binding_span,
+        );
         let boundary = self.frames.len();
         self.push_frame(span);
         if let Some(f) = self.frames.get_mut(boundary) {
-            f.scope = Some(s);
+            f.scope = Some(scope);
+            f.scope_binding = Some(binding);
         }
         self.lower_block(body);
         if self.reachable {
@@ -1638,6 +1663,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 for f in &mut self.frames {
                     f.temps.retain(|t| *t != l);
                     f.locals.retain(|t| *t != l);
+                    if f.scope_binding == Some(l) {
+                        f.scope_binding = None;
+                    }
                 }
             }
         }
@@ -1664,13 +1692,14 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     }
 
     fn end_frame(&mut self, idx: usize, error: bool, exit_span: Span) {
-        let (defers, temps, locals, scope, frame_span) = {
+        let (defers, temps, locals, scope, scope_binding, frame_span) = {
             let f = &self.frames[idx];
             (
                 f.defers.clone(),
                 f.temps.clone(),
                 f.locals.clone(),
                 f.scope,
+                f.scope_binding,
                 f.span,
             )
         };
@@ -1695,6 +1724,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             self.term_at(Terminator::ScopeWait { scope: s, next }, frame_span);
             self.cur = next;
             self.reachable = true;
+            if let Some(binding) = scope_binding {
+                self.emit_at(StmtKind::StorageEnd(binding), frame_span);
+            }
             self.emit_at(StmtKind::StorageEnd(s), frame_span);
         }
     }
@@ -2271,13 +2303,26 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 ) {
                     return self.lower_expr(inner);
                 }
-                let (place, checks) = self.lower_place(operand)?;
-                self.emit_checks(checks);
                 let mutability = if op == UnOp::BorrowMut {
                     Mutability::Mut
                 } else {
                     Mutability::Shared
                 };
+                // 02-memory §11: a shared borrow may be taken of a temporary. The
+                // temporary lives to the end of the statement, so a borrow that is
+                // still live after it is E1105 in phase 9.
+                let (place, checks) =
+                    if mutability == Mutability::Shared && !self.is_place_expr(operand) {
+                        let inner_ty = self.ty(operand);
+                        let value = self.lower_expr(operand)?;
+                        (
+                            self.place_of_operand(value, inner_ty, self.span(operand)),
+                            Vec::new(),
+                        )
+                    } else {
+                        self.lower_place(operand)?
+                    };
+                self.emit_checks(checks);
                 let two_phase = mutability == Mutability::Mut && self.arg_depth > 0;
                 Some(self.materialize(
                     Rvalue::Borrow {

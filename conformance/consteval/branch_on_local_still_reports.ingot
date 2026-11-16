@@ -1,0 +1,18 @@
+//! expect: reject
+//! section: 9
+
+fn f(a: [4]i64) -> i64 {
+    let i: i64 = 0;
+    if i > 4 {
+        return a[9]; //~ E0806
+    }
+    return a[i];
+}
+
+fn g(x: u8) -> i64 {
+    let y = x as i64;
+    if y > 1000 {
+        return 7 / 0; //~ E0806
+    }
+    return y;
+}

@@ -17,7 +17,7 @@ use crate::model::*;
 use ingot_diag::diagnostic::{Diagnostic, Edit};
 use ingot_diag::source::{Source, Sources, Span};
 use ingot_sema::defs::{DefId, Sema};
-use ingot_sema::sigs::{Declarations, FnSig, ItemSig, OriginSig, Tri};
+use ingot_sema::sigs::{Bound, Declarations, FnSig, ItemSig, OriginSig, Tri};
 use ingot_sema::ty::{GenericArg, Mutability, TyKind, TypeId};
 use ingot_sema::typed::{FnRef, FnSource, InterfaceVia};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -61,24 +61,6 @@ pub struct Loan {
 
 pub type OriginSet = BTreeSet<Origin>;
 pub type OriginMap = BTreeMap<Local, OriginSet>;
-
-/// Where a scope operand points. `Local` is the `&Scope` of a `scope` block.
-/// `Param` is a scope parameter (`Self`). `Through` is some other place whose
-/// origins decide the store.
-enum ScopeTarget {
-    Local(Local),
-    Param(u32),
-    Through(Place),
-}
-
-#[derive(Default)]
-struct ScopeAcc {
-    seen: BTreeSet<Local>,
-    locals: BTreeSet<Local>,
-    params: BTreeSet<u32>,
-    through: Vec<Place>,
-    conservative: bool,
-}
 
 /// Entry state of every block, and every loan the body created.
 #[derive(Clone, Debug)]
@@ -720,16 +702,17 @@ impl<'a> Cx<'a> {
                 self.value_result(flow, &arg_sets, &cset)
             }
         };
-        let targets = self.scope_targets(scope);
-        self.store_into_targets(flow, &targets, &union_all(&arg_sets));
+        // checker.md §7 step 3: `A` is stored through `S(e)`. The scope's origins
+        // name exactly the scopes the argument may reach; there is no fallback.
+        let scope_set = self.eval_operand(flow, scope);
+        self.store_through_operand(flow, scope, &union_all(&arg_sets));
         let Some(dest) = dest else {
             return;
         };
-        let mut handle = result;
-        for place in self.handle_places(&targets) {
-            let cursor = self.walk(flow, &place);
-            handle.extend(self.finish_borrow(flow, &cursor, Mutability::Shared, false));
-        }
+        // Step 4: the handle gets `S(e)` plus the call's result set. The loan on the
+        // scope in `S(e)` is what keeps the handle from leaving the block.
+        let mut handle = scope_set;
+        handle.extend(result);
         self.store_place(flow, dest, &handle, true);
     }
 
@@ -1155,35 +1138,30 @@ impl<'a> Cx<'a> {
         self.widen(flow, &origins, &rest, &set, 0);
     }
 
-    /// `O(s) ∪= set` for every scope `op` may name. A copy chain is followed
-    /// through every whole-value assignment, so `if c { b } else { a }` stores
-    /// into both scopes. A scope parameter is §6.2.
+    /// `O(σ) ∪= set` through `S(op)`: the store a path with one dereference makes
+    /// (checker.md §4.5 step 1 and §7 step 3). A scope local in `S(op)` receives the
+    /// set; a scope parameter is the §6.2 check.
     fn store_into_scope(&mut self, flow: &mut OriginMap, op: &Operand, set: &OriginSet) {
         if set.is_empty() || self.diverged {
             return;
         }
-        let targets = self.scope_targets(op);
-        self.store_into_targets(flow, &targets, set);
+        self.store_through_operand(flow, op, set);
     }
 
-    fn store_into_targets(
-        &mut self,
-        flow: &mut OriginMap,
-        targets: &[ScopeTarget],
-        set: &OriginSet,
-    ) {
-        for target in targets {
-            match target {
-                ScopeTarget::Local(local) => {
-                    union_into(flow, *local, set);
-                    self.note_captured(set);
-                }
-                ScopeTarget::Param(index) => self.check_store_param(*index, set),
-                ScopeTarget::Through(place) => {
-                    let through = Operand::Place(place.clone(), PlaceUse::Copy);
-                    self.store_through(flow, &through, set);
-                    self.note_captured(set);
-                }
+    fn store_through_operand(&mut self, flow: &mut OriginMap, op: &Operand, set: &OriginSet) {
+        if set.is_empty() || self.diverged {
+            return;
+        }
+        if matches!(op, Operand::Place(..)) {
+            self.store_through(flow, op, set);
+            self.note_captured(set);
+            return;
+        }
+        // A `&Scope` is never a constant, so this only guards a malformed CFG.
+        let origins = self.eval_operand(flow, op);
+        for origin in origins {
+            if let Origin::Param(index) | Origin::Inner(index) | Origin::Scope(index) = origin {
+                self.check_store_param(index, set);
             }
         }
     }
@@ -1192,143 +1170,6 @@ impl<'a> Cx<'a> {
         for origin in set {
             if let Origin::Loan(id) = *origin {
                 self.captured.entry(id).or_insert(self.span);
-            }
-        }
-    }
-
-    /// Every scope a `&Scope` operand may refer to.
-    ///
-    /// Each local in the copy chain contributes every whole-value copy into it,
-    /// so both arms of an `if` are kept. A source that is not a plain copy of a
-    /// place cannot be named: the operand is then treated as every scope local
-    /// and every scope parameter in the function (over-approximation, never
-    /// silence). A place with no such assignment is [`ScopeTarget::Through`]:
-    /// its origin set decides the store.
-    fn scope_targets(&self, op: &Operand) -> Vec<ScopeTarget> {
-        let Operand::Place(start, _) = op else {
-            return self.every_scope();
-        };
-        let mut acc = ScopeAcc::default();
-        self.walk_scope(start.clone(), 0, &mut acc);
-        if acc.conservative
-            || (acc.locals.is_empty() && acc.params.is_empty() && acc.through.is_empty())
-        {
-            return self.every_scope();
-        }
-        let mut out = Vec::new();
-        for local in acc.locals {
-            out.push(ScopeTarget::Local(local));
-        }
-        for index in acc.params {
-            out.push(ScopeTarget::Param(index));
-        }
-        for place in acc.through {
-            out.push(ScopeTarget::Through(place));
-        }
-        out
-    }
-
-    /// Places the handle's shared loan is taken from. A scope local is borrowed
-    /// itself, so a handle returned out of that `scope` block is E1203. A
-    /// parameter or other reference is borrowed through `.*`, so the loan's
-    /// origin is the reference's and not the parameter's own storage.
-    fn handle_places(&self, targets: &[ScopeTarget]) -> Vec<Place> {
-        let mut out = Vec::new();
-        for target in targets {
-            let place = match target {
-                ScopeTarget::Local(local) => Place::local(*local),
-                ScopeTarget::Param(index) => {
-                    let Some(local) = self.cfg.params.get(*index as usize).copied() else {
-                        continue;
-                    };
-                    Place::local(local).deref()
-                }
-                ScopeTarget::Through(place) => place.clone().deref(),
-            };
-            out.push(place);
-        }
-        out
-    }
-
-    fn every_scope(&self) -> Vec<ScopeTarget> {
-        let mut out = Vec::new();
-        for (i, loc) in self.cfg.locals.iter().enumerate() {
-            if loc.kind == LocalKind::Scope {
-                out.push(ScopeTarget::Local(i as Local));
-            }
-        }
-        for (i, local) in self.cfg.params.iter().copied().enumerate() {
-            if self
-                .cfg
-                .locals
-                .get(local as usize)
-                .is_some_and(|l| self.is_scope_ty(l.ty))
-            {
-                out.push(ScopeTarget::Param(i as u32));
-            }
-        }
-        out
-    }
-
-    fn walk_scope(&self, place: Place, depth: u32, acc: &mut ScopeAcc) {
-        if acc.conservative {
-            return;
-        }
-        if depth > self.cfg.locals.len() as u32 {
-            acc.conservative = true;
-            return;
-        }
-        let Some(root) = place.root() else {
-            acc.conservative = true;
-            return;
-        };
-        let Some(loc) = self.cfg.locals.get(root as usize) else {
-            acc.conservative = true;
-            return;
-        };
-        if loc.kind == LocalKind::Scope && place.proj.is_empty() {
-            acc.locals.insert(root);
-            return;
-        }
-        if loc.kind == LocalKind::Param && place.proj.is_empty() && self.is_scope_ty(loc.ty) {
-            if let Some(index) = self.cfg.params.iter().position(|p| *p == root) {
-                acc.params.insert(index as u32);
-            }
-            return;
-        }
-        if !acc.seen.insert(root) {
-            return;
-        }
-        let mut copies = Vec::new();
-        let mut any = false;
-        for block in &self.cfg.blocks {
-            for stmt in &block.stmts {
-                let StmtKind::Assign { place: dest, value } = &stmt.kind else {
-                    continue;
-                };
-                if dest.proj.is_empty() && dest.root() == Some(root) {
-                    any = true;
-                    match value {
-                        Rvalue::Use(Operand::Place(src, _)) => copies.push(src.clone()),
-                        _ => {
-                            acc.conservative = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        if !any {
-            acc.through.push(place);
-            return;
-        }
-        for src in copies {
-            let extra = place.proj.clone();
-            let mut next = src;
-            next.proj.extend(extra);
-            self.walk_scope(next, depth.saturating_add(1), acc);
-            if acc.conservative {
-                return;
             }
         }
     }
@@ -2570,7 +2411,19 @@ fn mention_rec(
                 (true, false)
             }
         }
-        TyKind::Param(_) => (false, false),
+        // 02-memory §13.3: a type parameter bounded by `Fn(..) -> R`, `FnMut` or
+        // `FnOnce` mentions the type parameters of that signature.
+        TyKind::Param(p) => {
+            let bounds = cx.decls.param_bounds.get(&p).cloned().unwrap_or_default();
+            let mut out = (false, false);
+            for bound in bounds {
+                if let Bound::Fn(_, sig) = bound {
+                    let m = mention_sig(cx, &sig.params, sig.ret, sig.error, param, inside, seen);
+                    out = (out.0 || m.0, out.1 || m.1);
+                }
+            }
+            out
+        }
         TyKind::Ref(_, t) | TyKind::Slice(_, t) => mention_rec(cx, t, param, true, seen),
         TyKind::RawPtr(_, t)
         | TyKind::Optional(t)
@@ -2653,6 +2506,20 @@ fn collect_params(cx: &Cx<'_>, ty: TypeId, out: &mut BTreeSet<DefId>, seen: &mut
     match cx.kind(ty) {
         TyKind::Param(p) => {
             out.insert(p);
+            // 02-memory §13.3: an `Fn`-bounded parameter mentions the type
+            // parameters of its signature.
+            let bounds = cx.decls.param_bounds.get(&p).cloned().unwrap_or_default();
+            for bound in bounds {
+                if let Bound::Fn(_, sig) = bound {
+                    for t in &sig.params {
+                        collect_params(cx, *t, out, seen);
+                    }
+                    collect_params(cx, sig.ret, out, seen);
+                    if let Some(e) = sig.error {
+                        collect_params(cx, e, out, seen);
+                    }
+                }
+            }
         }
         _ => {
             for c in cx.decls.types.children(ty) {

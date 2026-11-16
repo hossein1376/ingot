@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 3, 8
+
+struct Ring[T, const n: i64] {
+    pub items: [n]T,
+}
+
+fn use_it(r: &Ring[u8, { 0 - 1 }]) -> i64 { //~ E0521
+    _ = r;
+    return 0;
+}
