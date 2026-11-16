@@ -395,6 +395,12 @@ pub enum CastKind {
     EnumToTag,
     /// `&T` to `*T`, `&mut T` to `*mut T`.
     RefToPtr,
+    /// A raw pointer to a raw pointer, with any pointee and either mutability.
+    PtrToPtr,
+    /// A raw pointer to its address.
+    PtrToInt,
+    /// An address to a raw pointer.
+    IntToPtr,
     /// The source and target types are the same.
     Identity,
 }

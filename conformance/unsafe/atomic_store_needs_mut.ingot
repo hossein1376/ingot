@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 15
+
+fn store(p: *i64) {
+    unsafe("p points at a live i64") {
+        @atomic_store(p, 1, .relaxed); //~ E0401
+    }
+}

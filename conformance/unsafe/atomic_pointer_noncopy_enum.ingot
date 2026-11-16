@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 8, 15
+
+enum Plain {
+    a,
+    b,
+}
+
+fn load(p: *mut Plain) {
+    unsafe("p points at a live Plain") {
+        let x = @atomic_load(p, .relaxed); //~ E0423
+        _ = x;
+    }
+}

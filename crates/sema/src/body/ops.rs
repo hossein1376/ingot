@@ -822,8 +822,14 @@ impl Checker<'_, '_, '_> {
             return self.poison();
         }
         let sym = op.symbol();
-        if self.param_operand_fails(l, accepts(op), sym, op_span)
-            || self.param_operand_fails(r, accepts(op), sym, op_span)
+        // `AtomicValue` implies `Eq`, and every `AtomicValue` type (integers, `bool`,
+        // raw pointers, payload-free enums) supports `==` and `!=` (01-core §8).
+        let atomic_eq = matches!(op, BinOp::Eq | BinOp::Ne)
+            && matches!(self.kind(l), TyKind::Param(p)
+                if self.cx.d.granted(p).contains(&PropBound::AtomicValue));
+        if !atomic_eq
+            && (self.param_operand_fails(l, accepts(op), sym, op_span)
+                || self.param_operand_fails(r, accepts(op), sym, op_span))
         {
             return self.poison();
         }
@@ -841,6 +847,7 @@ impl Checker<'_, '_, '_> {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::RawPtr(..) => self.bool_(),
             TyKind::Vector(_, n) => self.mk(TyKind::Mask(n)),
             TyKind::Adt(d, _) if self.cx.d.is_payload_free_enum(d) => self.bool_(),
+            TyKind::Param(_) if atomic_eq => self.bool_(),
             TyKind::Param(_) => match self.poss(l).verdict(accepts(op)) {
                 Verdict::Ok => self.bool_(),
                 Verdict::Undefined => {
@@ -1033,6 +1040,11 @@ impl Checker<'_, '_, '_> {
                     Err(CastError::Lossy)
                 }
             }
+            // 01-core §5.4: `*T` to `*U`, `*mut T` to `*mut U`, `*T` and `*mut T` to
+            // each other, and a raw pointer to and from `u64`.
+            (TyKind::RawPtr(..), TyKind::RawPtr(..)) => Ok(CastKind::PtrToPtr),
+            (TyKind::RawPtr(..), TyKind::Int(IntTy::U64)) => Ok(CastKind::PtrToInt),
+            (TyKind::Int(IntTy::U64), TyKind::RawPtr(..)) => Ok(CastKind::IntToPtr),
             (TyKind::Param(_), _) | (_, TyKind::Param(_)) => Err(CastError::Unspecified(
                 "`as` between a type parameter and another type (the specification does not say \
                  when a conversion is lossless for every instance)"

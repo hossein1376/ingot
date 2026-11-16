@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 15
+
+fn at(p: *i64, n: i64) -> *i64 {
+    return @offset(p, n);
+}
+
+fn at_mut(p: *mut i64, n: i64) -> *mut i64 {
+    return @offset(p, n);
+}

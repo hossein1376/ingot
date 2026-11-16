@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 5.4
+
+fn to_small(p: *u8) -> u32 {
+    return p as u32; //~ E0402
+}
+
+fn from_small(n: u32) -> *u8 {
+    return n as *u8; //~ E0402
+}
+
+fn shared_to_mut(x: &i64) -> *mut i64 {
+    return x as *mut i64; //~ E0402
+}

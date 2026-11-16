@@ -1,0 +1,21 @@
+//! expect: reject
+//! section: 8, 15
+
+fn add_bool(p: *mut bool, v: bool) {
+    unsafe("p points at a live bool") {
+        @atomic_add(p, v, .relaxed); //~ E0423
+    }
+}
+
+fn add_pointer(p: *mut *mut i64, v: *mut i64) {
+    unsafe("p points at a live pointer") {
+        @atomic_add(p, v, .relaxed); //~ E0423
+    }
+}
+
+fn load_slice(p: *mut []u8) {
+    unsafe("p points at a live slice") {
+        let x = @atomic_load(p, .relaxed); //~ E0423
+        _ = x;
+    }
+}

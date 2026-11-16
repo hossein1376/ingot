@@ -1,0 +1,20 @@
+//! expect: accept
+//! section: 8
+
+// `AtomicValue` implies `Copy`, `Discard` and `Owned`, but not `Send` or `Sync`.
+fn twice[T: AtomicValue](x: T) -> (T, T) {
+    return (x, x);
+}
+
+fn leave[T: AtomicValue](x: T) {
+}
+
+fn keep[T: AtomicValue](x: T) -> T {
+    return x;
+}
+
+fn all[T: AtomicValue](x: T) -> T {
+    leave(x);
+    let (_, b) = twice(x);
+    return keep(b);
+}

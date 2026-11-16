@@ -80,6 +80,7 @@ pub enum Builtin {
     Send,
     Sync,
     Owned,
+    AtomicValue,
     Int,
     SInt,
     UInt,
@@ -94,7 +95,7 @@ pub enum Builtin {
 /// types are keywords and never looked up by name). Together with the names the
 /// builtin declarations (`builtin.ingot`) give, these are exactly the builtin names of
 /// specification section 8 (and pipeline section 4.3).
-const NAMED_BUILTINS: [(&str, Builtin); 21] = [
+const NAMED_BUILTINS: [(&str, Builtin); 22] = [
     ("Option", Builtin::Option),
     ("Result", Builtin::Result),
     ("Idx", Builtin::Idx),
@@ -108,6 +109,7 @@ const NAMED_BUILTINS: [(&str, Builtin); 21] = [
     ("Send", Builtin::Send),
     ("Sync", Builtin::Sync),
     ("Owned", Builtin::Owned),
+    ("AtomicValue", Builtin::AtomicValue),
     ("Int", Builtin::Int),
     ("SInt", Builtin::SInt),
     ("UInt", Builtin::UInt),

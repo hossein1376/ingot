@@ -1,0 +1,26 @@
+//! expect: accept
+//! section: 5.4, 15
+
+fn widen(p: *u8) -> *i64 {
+    return p as *i64;
+}
+
+fn shared_to_mut(p: *u8) -> *mut u8 {
+    return p as *mut u8;
+}
+
+fn mut_to_shared(p: *mut u8) -> *u8 {
+    return p as *u8;
+}
+
+fn address(p: *u8) -> u64 {
+    return p as u64;
+}
+
+fn from_address(n: u64) -> *mut i64 {
+    return n as *mut i64;
+}
+
+fn back(p: *mut i64) -> u64 {
+    return p as u64;
+}

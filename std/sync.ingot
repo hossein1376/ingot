@@ -1,17 +1,154 @@
 // std.sync (spec sections 13.6, 20, 21 and 35). "Contents are `Owned`": a type with
 // interior mutability holds no borrow.
 
-pub struct Atomic[T: Owned] {}
+/// The cell of section 13.6: the one language item whose contents may be written
+/// through a shared borrow, in `unsafe` (section 15).
+pub struct Cell[T: Owned] {
+    value: T,
+}
+
+impl[T: Owned] Cell[T] {
+    pub fn init(value: T) -> Cell[T] {
+        return Cell[T].{ value: value };
+    }
+
+    /// A raw pointer to the contents. Safe to make; every use of it is `unsafe`
+    /// (section 15).
+    pub fn get(self: &Cell[T]) -> *mut T {
+        return &self.value as *T as *mut T;
+    }
+
+    pub fn into_inner(self: Cell[T]) -> T {
+        return self.value;
+    }
+}
+
+/// The orders of each operation, as three types so that an order the operation does
+/// not allow cannot be written (section 15).
+pub copy enum LoadOrder: u8 {
+    relaxed,
+    acquire,
+    seq_cst,
+}
+
+pub copy enum StoreOrder: u8 {
+    relaxed,
+    release,
+    seq_cst,
+}
+
+pub copy enum AtomicOrder: u8 {
+    relaxed,
+    acquire,
+    release,
+    acq_rel,
+    seq_cst,
+}
+
+/// A value that may be read and written through `&self` by a single instruction.
+pub struct Atomic[T: AtomicValue] {
+    value: Cell[T],
+}
+
+impl[T: AtomicValue] Atomic[T] {
+    pub fn init(value: T) -> Atomic[T] {
+        return Atomic[T].{ value: Cell[T].init(value) };
+    }
+
+    pub inline fn load(self: &Atomic[T], order: LoadOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_load(self.value.get(), order);
+        }
+    }
+
+    pub inline fn store(self: &Atomic[T], value: T, order: StoreOrder) -> void {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            @atomic_store(self.value.get(), value, order);
+        }
+    }
+
+    pub inline fn swap(self: &Atomic[T], value: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_swap(self.value.get(), value, order);
+        }
+    }
+
+    /// Success gives the previous value; failure also gives the observed value, so the
+    /// caller can retry without a second load.
+    pub inline fn compare_exchange(
+        self: &Atomic[T],
+        expected: T,
+        new: T,
+        success: AtomicOrder,
+        failure: LoadOrder,
+    ) -> T ! T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return try @atomic_cmpxchg(self.value.get(), expected, new, success, failure);
+        }
+    }
+
+    pub inline fn compare_exchange_weak(
+        self: &Atomic[T],
+        expected: T,
+        new: T,
+        success: AtomicOrder,
+        failure: LoadOrder,
+    ) -> T ! T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return try @atomic_cmpxchg_weak(self.value.get(), expected, new, success, failure);
+        }
+    }
+
+    pub fn get_mut(self: &mut Atomic[T]) -> &mut T from self {
+        return &mut self.value.value;
+    }
+
+    pub fn into_inner(self: Atomic[T]) -> T {
+        return self.value.into_inner();
+    }
+}
+
+impl[T: AtomicValue + Int] Atomic[T] {
+    /// Wrapping addition, as the hardware does. Gives the previous value.
+    pub inline fn add(self: &Atomic[T], delta: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_add(self.value.get(), delta, order);
+        }
+    }
+
+    pub inline fn sub(self: &Atomic[T], delta: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_sub(self.value.get(), delta, order);
+        }
+    }
+
+    pub inline fn and(self: &Atomic[T], mask: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_and(self.value.get(), mask, order);
+        }
+    }
+
+    pub inline fn or(self: &Atomic[T], mask: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_or(self.value.get(), mask, order);
+        }
+    }
+
+    pub inline fn xor(self: &Atomic[T], mask: T, order: AtomicOrder) -> T {
+        unsafe("the cell holds a live, aligned T for the whole borrow of self") {
+            return @atomic_xor(self.value.get(), mask, order);
+        }
+    }
+}
 
 pub struct Mutex[T: Owned] {}
 
 // Section 20: `Atomic[T]` and `Mutex[T]` are `Send` and `Sync` when `T: Send`. These
-// rows are given with `unsafe impl` (section 20) rather than derived from the fields,
-// since the types will hold raw pointers once they have bodies, and the properties must
-// not change when they do.
-unsafe impl[T: Owned + Send] Send for Atomic[T] {}
+// rows are given with `unsafe impl` (section 20) rather than derived from the fields:
+// `Atomic` holds a `Cell`, which is never `Sync`, and the table's row is the rule.
+unsafe impl[T: AtomicValue + Send] Send for Atomic[T] {}
 
-unsafe impl[T: Owned + Send] Sync for Atomic[T] {}
+unsafe impl[T: AtomicValue + Send] Sync for Atomic[T] {}
 
 unsafe impl[T: Owned + Send] Send for Mutex[T] {}
 

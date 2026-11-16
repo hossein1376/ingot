@@ -831,9 +831,34 @@ fn builtin_names_resolve_to_builtin_definitions() {
     // The builtin names are exactly those of section 8, and each of them is a
     // builtin definition: nothing else is in the builtin scope.
     let mut expected = vec![
-        "Option", "Result", "Copy", "Discard", "Send", "Sync", "Owned", "Int", "SInt", "UInt",
-        "Float", "Num", "Fn", "FnMut", "FnOnce", "Eq", "Ord", "Hash", "Iter", "Format", "Executor",
-        "Idx", "Idx2", "Idx3", "Grid", "GridMut", "Ordering",
+        "Option",
+        "Result",
+        "Copy",
+        "Discard",
+        "Send",
+        "Sync",
+        "Owned",
+        "AtomicValue",
+        "Int",
+        "SInt",
+        "UInt",
+        "Float",
+        "Num",
+        "Fn",
+        "FnMut",
+        "FnOnce",
+        "Eq",
+        "Ord",
+        "Hash",
+        "Iter",
+        "Format",
+        "Executor",
+        "Idx",
+        "Idx2",
+        "Idx3",
+        "Grid",
+        "GridMut",
+        "Ordering",
     ];
     expected.sort();
     let scope: Vec<&str> = r

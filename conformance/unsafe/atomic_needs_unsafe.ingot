@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(p: *mut i64) {
+    _ = @atomic_load(p, .relaxed); //~ E1301
+}

@@ -576,6 +576,13 @@ impl Declarations {
                     out.insert(PropBound::Send);
                     out.insert(PropBound::Sync);
                 }
+                // `AtomicValue` implies `Copy`, `Discard`, `Owned` and `Eq`, but not
+                // `Send` or `Sync` (01-core §8).
+                if *pb == PropBound::AtomicValue {
+                    out.insert(PropBound::Copy);
+                    out.insert(PropBound::Discard);
+                    out.insert(PropBound::Owned);
+                }
                 if *pb == PropBound::Copy || out.contains(&PropBound::Copy) {
                     out.insert(PropBound::Discard);
                 }
@@ -630,6 +637,31 @@ impl Declarations {
                     _ => p.owned(),
                 }
             }
+            PropBound::AtomicValue => match self.types.kind(ty).clone() {
+                TyKind::Param(p) => {
+                    let g = self.granted(p);
+                    // A parameter granted `Int`, `SInt` or `UInt` is a scalar integer,
+                    // and every integer satisfies `AtomicValue`. `Float` and `Num` do
+                    // not: a float is not an atomic value.
+                    Tri::from_bool(
+                        g.contains(&PropBound::AtomicValue)
+                            || g.contains(&PropBound::Int)
+                            || g.contains(&PropBound::SInt)
+                            || g.contains(&PropBound::UInt),
+                    )
+                }
+                TyKind::Int(_) | TyKind::Bool => Tri::Yes,
+                // A pointer to a view is itself a view (02-memory §10), and `Cell`
+                // holds only `Owned` contents (02-memory §13.6).
+                TyKind::RawPtr(_, t) => self.props(t).owned(),
+                // An enum is `Copy` only when it is declared `copy enum` (01-core
+                // §4.3), and `AtomicValue` implies `Copy`.
+                TyKind::Adt(d, _) => Tri::from_bool(
+                    self.is_payload_free_enum(d)
+                        && matches!(self.items.get(&d), Some(ItemSig::Enum(e)) if e.copy),
+                ),
+                _ => Tri::No,
+            },
             PropBound::Int
             | PropBound::SInt
             | PropBound::UInt
@@ -939,6 +971,13 @@ impl Declarations {
         seen: &mut BTreeSet<DefId>,
         out: &mut Vec<(DefId, Vec<GenericArg>)>,
     ) {
+        // `AtomicValue` implies `Eq` (01-core §8).
+        if matches!(b, Bound::Prop(PropBound::AtomicValue))
+            && let Some(eq) = self.builtins.eq
+            && seen.insert(eq)
+        {
+            out.push((eq, Vec::new()));
+        }
         if let Bound::Interface(i, args) = b
             && seen.insert(*i)
         {
@@ -959,6 +998,13 @@ impl Declarations {
         seen: &mut BTreeSet<DefId>,
     ) -> bool {
         for b in self.param_bounds.get(&p).into_iter().flatten() {
+            // `AtomicValue` implies `Eq` (01-core §8).
+            if matches!(b, Bound::Prop(PropBound::AtomicValue))
+                && self.builtins.eq == Some(iface)
+                && args.is_empty()
+            {
+                return true;
+            }
             if self.bound_has_interface(b, iface, args, seen) {
                 return true;
             }

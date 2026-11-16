@@ -34,6 +34,7 @@ pub enum PropBound {
     Send,
     Sync,
     Owned,
+    AtomicValue,
     Int,
     SInt,
     UInt,
@@ -49,6 +50,7 @@ impl PropBound {
             Builtin::Send => PropBound::Send,
             Builtin::Sync => PropBound::Sync,
             Builtin::Owned => PropBound::Owned,
+            Builtin::AtomicValue => PropBound::AtomicValue,
             Builtin::Int => PropBound::Int,
             Builtin::SInt => PropBound::SInt,
             Builtin::UInt => PropBound::UInt,
@@ -65,6 +67,7 @@ impl PropBound {
             PropBound::Send => "Send",
             PropBound::Sync => "Sync",
             PropBound::Owned => "Owned",
+            PropBound::AtomicValue => "AtomicValue",
             PropBound::Int => "Int",
             PropBound::SInt => "SInt",
             PropBound::UInt => "UInt",
@@ -509,6 +512,8 @@ pub struct BuiltinNames {
     pub executor: Option<DefId>,
     /// `Idx`, the 1-D kernel index type.
     pub idx: Option<DefId>,
+    /// `std.sync.Cell`, the one language item of interior mutability (02 §13.6).
+    pub cell: Option<DefId>,
 }
 
 /// Everything phase 6 knows. Phase 7 starts from this.

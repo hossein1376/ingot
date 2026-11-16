@@ -140,11 +140,12 @@ fn std_declares_the_types_the_conformance_tests_import() {
 
     let (_, sync) = module("sync.ingot");
     let sync = structs(&sync);
-    for name in ["Atomic", "Mutex"] {
+    // Section 13.6: the contents of a type with interior mutability are `Owned`.
+    // `Atomic` is built on `Cell`, and its own bound is `AtomicValue` (section 15).
+    for (name, bound) in [("Atomic", "AtomicValue"), ("Mutex", "Owned")] {
         let s = sync.iter().find(|s| s.name == name).expect(name);
         assert_eq!(s.generics.len(), 1, "{name}[T]");
-        // Section 13.6: the contents of a type with interior mutability are `Owned`.
-        assert_eq!(s.generics[0].bounds[0].name(), "Owned");
+        assert_eq!(s.generics[0].bounds[0].name(), bound);
     }
 
     // The executors of section 27.2, `exec.par` among them.
@@ -160,8 +161,9 @@ fn std_declares_the_types_the_conformance_tests_import() {
 }
 
 #[test]
-fn std_has_no_functions_yet() {
-    // Methods and bodies come with type checking.
+fn std_has_no_functions_yet_outside_sync() {
+    // Methods and bodies come with type checking. `sync.ingot` is the first module
+    // with real bodies (`Cell` and `Atomic`, part 2 of P1b).
     for file in [
         "main.ingot",
         "mem.ingot",
@@ -172,7 +174,6 @@ fn std_has_no_functions_yet() {
         "io.ingot",
         "gpu.ingot",
         "task.ingot",
-        "sync.ingot",
         "exec.ingot",
     ] {
         let (_, ast) = module(file);

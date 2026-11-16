@@ -1,0 +1,21 @@
+//! expect: accept
+//! section: 8, 20
+
+import std.sync.Atomic;
+
+copy enum Color: u8 {
+    red,
+    green,
+}
+
+fn kinds(a: Atomic[i64], b: Atomic[bool], c: Atomic[*mut u8], d: Atomic[Color]) {
+    a.store(1, .relaxed);
+    b.store(true, .relaxed);
+    let p = c.load(.relaxed);
+    _ = p;
+    d.store(.red, .relaxed);
+}
+
+fn pointer_to_owned[T: Owned](a: Atomic[*mut T]) {
+    _ = a;
+}

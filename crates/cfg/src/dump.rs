@@ -286,6 +286,9 @@ impl<'a> Dumper<'a> {
                     CastKind::BoolToInt => "bool-to-int",
                     CastKind::EnumToTag => "enum-to-tag",
                     CastKind::RefToPtr => "ref-to-ptr",
+                    CastKind::PtrToPtr => "ptr-to-ptr",
+                    CastKind::PtrToInt => "ptr-to-int",
+                    CastKind::IntToPtr => "int-to-ptr",
                     CastKind::Identity => "identity",
                 };
                 format!("cast {name} {}", self.operand(operand))

@@ -1,0 +1,23 @@
+//! expect: accept
+//! section: 13.6, 15
+
+import std.sync.Cell;
+
+struct Counter {
+    value: Cell[i64],
+}
+
+fn bump(c: &Counter) {
+    let p = c.value.get();
+    unsafe("the counter has one owner and no other borrow is live") {
+        p.* += 1;
+    }
+}
+
+fn send[T: Send](x: T) -> T {
+    return x;
+}
+
+fn share(c: Counter) -> Counter {
+    return send(c);
+}

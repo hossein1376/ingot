@@ -1,0 +1,67 @@
+//! expect: accept
+//! section: 15, 21
+
+import std.sync.Atomic;
+import std.sync.AtomicOrder;
+import std.sync.LoadOrder;
+import std.sync.StoreOrder;
+
+fn on_cell(a: &Atomic[i64]) {
+    let x = a.load(.relaxed);
+    a.store(x, .release);
+    let y = a.swap(x, .seq_cst);
+    let r = a.compare_exchange(x, y, .seq_cst, .relaxed);
+    match r {
+        .ok(v) => { _ = v; }
+        .err(v) => { _ = v; }
+    }
+    _ = a.add(1, .relaxed);
+    _ = a.sub(1, .relaxed);
+    _ = a.and(1, .relaxed);
+    _ = a.or(1, .relaxed);
+    _ = a.xor(1, .relaxed);
+}
+
+fn on_raw(p: *mut i64) {
+    unsafe("p points at one live, aligned i64") {
+        let x = @atomic_load(p, .relaxed);
+        @atomic_store(p, x, .release);
+        let y = @atomic_swap(p, x, .seq_cst);
+        let r = @atomic_cmpxchg(p, x, y, .seq_cst, .relaxed);
+        match r {
+            .ok(v) => { _ = v; }
+            .err(v) => { _ = v; }
+        }
+        let w = @atomic_cmpxchg_weak(p, x, y, .acquire, .relaxed);
+        match w {
+            .ok(v) => { _ = v; }
+            .err(v) => { _ = v; }
+        }
+        _ = @atomic_add(p, 1, .relaxed);
+        _ = @atomic_sub(p, 1, .relaxed);
+        _ = @atomic_and(p, 1, .relaxed);
+        _ = @atomic_or(p, 1, .relaxed);
+        _ = @atomic_xor(p, 1, .relaxed);
+    }
+}
+
+fn shared_load(p: *i64) -> i64 {
+    return unsafe("p points at a live i64") { @atomic_load(p, .relaxed) };
+}
+
+fn load_any[T: AtomicValue](p: *T) -> T {
+    return unsafe("p points at a live T") { @atomic_load(p, .relaxed) };
+}
+
+fn add_int[T: AtomicValue + Int](p: *mut T, n: T) -> T {
+    return unsafe("p points at a live T") { @atomic_add(p, n, .relaxed) };
+}
+
+fn orders(a: &Atomic[i64], p: *mut i64, l: LoadOrder, s: StoreOrder, o: AtomicOrder) -> i64 {
+    let x = a.load(l);
+    a.store(x, s);
+    _ = a.swap(x, o);
+    let y = unsafe("p points at a live i64") { @atomic_load(p, l) };
+    unsafe("p points at a live i64") { @atomic_store(p, y, s); }
+    return unsafe("p points at a live i64") { @atomic_add(p, 1, o) };
+}

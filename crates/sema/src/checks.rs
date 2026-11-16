@@ -28,6 +28,13 @@ impl Cx<'_, '_> {
             format: self.sema.builtin_def("Format"),
             executor: self.sema.builtin_def("Executor"),
             idx: self.sema.builtin_def("Idx"),
+            // `std.sync.Cell` is the language item of interior mutability
+            // (02-memory §13.6). The module's type namespace exists after resolution.
+            cell: self
+                .sema
+                .module_paths
+                .get("std.sync")
+                .and_then(|m| self.sema.module(*m).types.get("Cell").copied()),
         };
         self.lower_all();
         // The impl tables are built before any interpretation starts (pipeline

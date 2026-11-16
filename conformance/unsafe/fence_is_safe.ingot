@@ -1,0 +1,13 @@
+//! expect: accept
+//! section: 15
+
+import std.sync.AtomicOrder;
+
+fn fence() {
+    @fence(.relaxed);
+    @fence(.seq_cst);
+}
+
+fn fence_order(order: AtomicOrder) {
+    @fence(order);
+}

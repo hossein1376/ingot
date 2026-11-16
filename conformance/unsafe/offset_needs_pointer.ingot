@@ -1,0 +1,6 @@
+//! expect: reject
+//! section: 15
+
+fn f(n: i64) -> i64 {
+    return @offset(n, 1); //~ E0401
+}

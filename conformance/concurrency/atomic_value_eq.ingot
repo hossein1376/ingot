@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 8
+
+fn same[T: AtomicValue](a: T, b: T) -> bool {
+    return a == b;
+}
+
+fn same_by_eq[T: AtomicValue](a: T, b: T) -> bool {
+    return a.eq(&b);
+}

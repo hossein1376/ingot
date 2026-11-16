@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 15
+
+fn f() {
+    unsafe("nothing here needs it") { //~ E1304
+        @fence(.relaxed);
+    }
+}

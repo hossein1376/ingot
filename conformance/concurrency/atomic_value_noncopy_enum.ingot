@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 8
+
+import std.sync.Atomic;
+
+enum Plain {
+    a,
+    b,
+}
+
+fn bad(a: Atomic[Plain]) { //~ E0801
+    _ = a;
+}

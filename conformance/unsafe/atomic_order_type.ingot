@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 15
+
+import std.sync.LoadOrder;
+
+fn f(p: *mut i64, order: LoadOrder) {
+    unsafe("p points at a live i64") {
+        @atomic_store(p, 1, order); //~ E0401
+    }
+}

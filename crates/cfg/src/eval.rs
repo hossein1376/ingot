@@ -2043,7 +2043,11 @@ impl<'a> Evaluator<'a> {
                 }
                 _ => Err(self.inconsistent(host, "a float conversion of an unsupported value")),
             },
-            CastKind::RefToPtr => Ok(v),
+            CastKind::RefToPtr | CastKind::PtrToPtr => Ok(v),
+            // An address is not a constant value in the evaluated subset yet.
+            CastKind::PtrToInt | CastKind::IntToPtr => Err(Fail::NotImplemented(
+                "constant evaluation of a raw pointer's address".to_string(),
+            )),
         }
     }
 

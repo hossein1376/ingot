@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 15
+
+import std.sync.LoadOrder;
+
+fn f(order: LoadOrder) {
+    @fence(order); //~ E0401
+}

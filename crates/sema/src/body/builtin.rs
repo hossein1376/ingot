@@ -5,7 +5,7 @@
 use super::Checker;
 use crate::defs::DefKind;
 use crate::hir::{self, ExprId, ExprKind};
-use crate::sigs::{ItemSig, Tri};
+use crate::sigs::{ItemSig, PropBound, Tri};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
@@ -15,6 +15,7 @@ use ingot_syntax::ast::UnOp;
 fn unsafe_builtin(name: &str) -> bool {
     matches!(name, "uninit" | "assume")
         || name.starts_with("unchecked_")
+        || name.starts_with("atomic_")
         || name.ends_with("_from_raw")
 }
 
@@ -136,6 +137,35 @@ impl Checker<'_, '_, '_> {
                 }
                 self.zero_check(e, t);
                 (t, Some(t))
+            }
+            // 02 §15: `@offset` is safe; it only computes an address.
+            "offset" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                let p = self.expr(args[0], None);
+                let i64_ = self.i64_();
+                self.expect(args[1], i64_);
+                match self.kind(p) {
+                    TyKind::RawPtr(m, t) => (self.mk(TyKind::RawPtr(m, t)), None),
+                    TyKind::Poison => (poison, None),
+                    _ => {
+                        self.err(
+                            "E0401",
+                            "`@offset` needs a raw pointer, not a value",
+                            self.span_of(args[0]),
+                        );
+                        (poison, None)
+                    }
+                }
+            }
+            // 02 §15: `@fence` is the one safe atomic builtin.
+            "fence" => {
+                if !self.arity(e, name, args, 1) {
+                    return (poison, None);
+                }
+                self.expect_order(args[0], "AtomicOrder");
+                (self.void(), None)
             }
             "narrow" | "wrap" | "sat" => self.narrow_wrap_sat(e, name, targ, args),
             "nearest" => {
@@ -813,6 +843,77 @@ impl Checker<'_, '_, '_> {
                 }
                 (x, None)
             }
+            "atomic_load" => {
+                if !self.arity(e, name, args, 2) {
+                    return (poison, None);
+                }
+                self.expect_order(args[1], "LoadOrder");
+                let Some(t) = self.atomic_ptr(name, args[0], false) else {
+                    return (poison, None);
+                };
+                if !self.atomic_value(args[0], name, t) {
+                    return (poison, None);
+                }
+                (t, None)
+            }
+            "atomic_store" => {
+                if !self.arity(e, name, args, 3) {
+                    return (poison, None);
+                }
+                self.expect_order(args[2], "StoreOrder");
+                let Some(t) = self.atomic_ptr(name, args[0], true) else {
+                    self.expr(args[1], None);
+                    return (self.void(), None);
+                };
+                if !self.atomic_value(args[0], name, t) {
+                    self.expr(args[1], None);
+                    return (self.void(), None);
+                }
+                self.expect(args[1], t);
+                (self.void(), None)
+            }
+            "atomic_swap" | "atomic_add" | "atomic_sub" | "atomic_and" | "atomic_or"
+            | "atomic_xor" => {
+                if !self.arity(e, name, args, 3) {
+                    return (poison, None);
+                }
+                self.expect_order(args[2], "AtomicOrder");
+                let arithmetic = name != "atomic_swap";
+                let Some(t) = self.atomic_ptr(name, args[0], true) else {
+                    self.expr(args[1], None);
+                    return (poison, None);
+                };
+                if !self.atomic_value(args[0], name, t) {
+                    self.expr(args[1], None);
+                    return (poison, None);
+                }
+                if arithmetic && !self.atomic_int(args[0], name, t) {
+                    self.expr(args[1], None);
+                    return (poison, None);
+                }
+                self.expect(args[1], t);
+                (t, None)
+            }
+            "atomic_cmpxchg" | "atomic_cmpxchg_weak" => {
+                if !self.arity(e, name, args, 5) {
+                    return (poison, None);
+                }
+                self.expect_order(args[3], "AtomicOrder");
+                self.expect_order(args[4], "LoadOrder");
+                let Some(t) = self.atomic_ptr(name, args[0], true) else {
+                    self.expr(args[1], None);
+                    self.expr(args[2], None);
+                    return (poison, None);
+                };
+                if !self.atomic_value(args[0], name, t) {
+                    self.expr(args[1], None);
+                    self.expr(args[2], None);
+                    return (poison, None);
+                }
+                self.expect(args[1], t);
+                self.expect(args[2], t);
+                (self.mk(TyKind::Result(t, t)), None)
+            }
             "slice_from_raw" => {
                 if !self.arity(e, name, args, 2) {
                     return (poison, None);
@@ -918,6 +1019,102 @@ impl Checker<'_, '_, '_> {
                     format!("the index must be `i32xN` or `i64xN`, not `{n}`"),
                     self.span_of(idx),
                 );
+                false
+            }
+        }
+    }
+
+    /// The type of the order argument of an atomic builtin, from `std.sync`
+    /// (02 §15). Reports E0401 when the argument has another type.
+    fn expect_order(&mut self, e: ExprId, name: &str) -> bool {
+        let Some(d) = self.std_type("std.sync", name) else {
+            self.expr(e, None);
+            self.ni(format!(
+                "`std.sync.{name}`, the type of this atomic operation's order argument"
+            ));
+            return false;
+        };
+        let want = self.mk(TyKind::Adt(d, Vec::new()));
+        let got = self.expect(e, want);
+        got == want || self.is_poison(got)
+    }
+
+    /// The pointee type of the raw pointer `p`, or `None` after E0401.
+    fn atomic_ptr(&mut self, name: &str, p: ExprId, mutable: bool) -> Option<TypeId> {
+        let ty = self.expr(p, None);
+        match self.kind(ty) {
+            TyKind::RawPtr(m, t) => {
+                if mutable && m != Mutability::Mut {
+                    self.err(
+                        "E0401",
+                        format!("`@{name}` needs a `*mut T`, not a `*T`"),
+                        self.span_of(p),
+                    );
+                    None
+                } else {
+                    Some(t)
+                }
+            }
+            TyKind::Poison => None,
+            _ => {
+                let n = self.name(ty);
+                self.err(
+                    "E0401",
+                    format!("`@{name}` needs a raw pointer, not `{n}`"),
+                    self.span_of(p),
+                );
+                None
+            }
+        }
+    }
+
+    /// E0423: the pointee of an atomic builtin must satisfy `AtomicValue`
+    /// (01-core §8, 02-memory §15).
+    fn atomic_value(&mut self, p: ExprId, name: &str, t: TypeId) -> bool {
+        match self.cx.d.satisfies_prop(t, PropBound::AtomicValue) {
+            Tri::Yes => true,
+            Tri::No => {
+                let n = self.name(t);
+                self.err(
+                    "E0423",
+                    format!("`@{name}` needs a `T` that satisfies `AtomicValue`; `{n}` does not"),
+                    self.span_of(p),
+                );
+                false
+            }
+            Tri::Unknown => {
+                let n = self.name(t);
+                self.ni(format!(
+                    "whether `{n}` satisfies `AtomicValue` (its properties are not \
+                     defined by the specification)"
+                ));
+                false
+            }
+        }
+    }
+
+    /// E0423: `@atomic_add` and its siblings need an integer `T` as well.
+    fn atomic_int(&mut self, p: ExprId, name: &str, t: TypeId) -> bool {
+        match self.cx.d.satisfies_prop(t, PropBound::Int) {
+            Tri::Yes => true,
+            Tri::No => {
+                let n = self.name(t);
+                self.err(
+                    "E0423",
+                    format!(
+                        "`@{name}` needs an integer type that satisfies `AtomicValue`; `{n}` \
+                         is not an integer"
+                    ),
+                    self.span_of(p),
+                );
+                false
+            }
+            Tri::Unknown => {
+                let n = self.name(t);
+                self.ni(format!(
+                    "whether `{n}` is an integer type (its properties are not defined by \
+                     the specification)"
+                ));
                 false
             }
         }

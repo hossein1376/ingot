@@ -316,6 +316,11 @@ impl Declarations {
                 if let Some(s) = self.unsafe_impl(t, PropBound::Sync, def, &args, cur) {
                     p.sync = s;
                 }
+                // `std.sync.Cell` is never `Sync`: its contents change through a
+                // shared borrow (02-memory §13.6).
+                if self.builtins.cell == Some(def) {
+                    p.sync = Tri::No;
+                }
                 p
             }
         }

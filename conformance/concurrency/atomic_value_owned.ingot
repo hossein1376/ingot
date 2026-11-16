@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 8, 13.6
+
+import std.sync.Cell;
+
+fn hold[T: AtomicValue](x: T) -> Cell[T] {
+    return Cell[T].init(x);
+}
