@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-  <strong>A systems language written by AI agents, for two specific machines.</strong>
+  <strong>A safe systems language for AI agents to write, tuned for two specific machines.</strong>
 </p>
 
 Ingot is designed for an Apple M4 Pro and an AMD Ryzen 7 7800X3D, and nothing else. It
@@ -77,14 +77,17 @@ programs; it does not build or run them.
 
 | Works today | Not yet |
 |---|---|
-| Lexing, parsing and error recovery | Monomorphization and per-instance checks (phase 11) |
-| Names, types, generics, interfaces and constant evaluation | Code generation for the three targets |
-| Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | `ingot run` and `ingot test` |
+| Lexing, parsing and error recovery | Per-instance checks (phase 11a, in progress) |
+| Names, types, generics, interfaces and constant evaluation | Specialization and code generation for the three targets |
+| Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | `ingot build`, `ingot run` and `ingot test` |
+| Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | Dependencies between packages, and the report tools (`api`, `audit`, `layout`) |
 | Check removal, and the bounds and overflow checks `ingot cost` reports | The other cost items: allocations, indirect calls, copies, spawns, locks, park points |
-| `check`, `fix`, `query`, `serve` and an LSP server for editors | Most of the standard library |
+| Instance discovery (phase 11a): every generic instance, its depth and its symbol name | The runtime and most of the standard library |
+| `check`, `fix`, `query`, `serve` and an LSP server for editors | |
 
-The example above does not compile yet either: it needs `std.fs`, `std.simd` and
-`std.sync`, which are still being designed in [docs/std/](docs/std/). Most of the
+The example above does not compile yet either: it needs `std.fs`, `std.simd` and the
+arena of `std.mem`, which are still being designed in [docs/std/](docs/std/). `Atomic`
+and `Cell` in `std.sync` are the first standard library types with real bodies. Most of the
 [conformance suite](conformance/README.md) passes; the tests that still fail need code
 generation or standard library pieces that are still missing. [COMPILER.md](COMPILER.md)
 lists the build steps and which are done.
