@@ -1,0 +1,12 @@
+//! expect: cost
+//! section: 31, 35
+
+import std.mem;
+
+fn allocate[A: mem.Allocator](a: A) -> *mut u8 ! mem.AllocErr {
+    return try a.alloc(8, 8); //~ alloc
+}
+
+fn use_it[A: mem.Allocator](a: A) -> void ! mem.AllocErr {
+    @forget(try allocate(a)); //~ alloc
+}

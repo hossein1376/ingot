@@ -219,6 +219,17 @@ pub fn cost(path: &Path, function: Option<&str>, overlays: &Overlays) -> Output 
         json_string(&mut line, &item.fn_name);
         line.push_str(",\"span\":");
         ingot_diag::diagnostic::write_span(&mut line, &analysis.sources, file, item.span);
+        if let Some(through) = item.through {
+            line.push_str(",\"through\":");
+            json_string(&mut line, through);
+        }
+        if let Some(bytes) = item.bytes {
+            line.push_str(&format!(",\"bytes\":{bytes}"));
+        }
+        if let Some(allocator) = &item.allocator {
+            line.push_str(",\"allocator\":");
+            json_string(&mut line, allocator);
+        }
         line.push('}');
         lines.push(line);
         let pos = analysis

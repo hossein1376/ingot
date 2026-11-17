@@ -202,7 +202,8 @@ package, with `"pub(pkg)"` in `modifiers`:
 
 The first three rows and the concurrency row are the same in both build pipelines.
 `not_inlined`, `loop` and `frame` come from the optimizing pipeline and are absent with
-`--fast` (§31).
+`--fast` (§31). Until B7, `ingot cost` reports the check, `alloc`, `indirect_call`,
+`copy`, `task_spawn`, `lock` and `park_point` rows only.
 
 ### `ingot audit [PATH]`
 

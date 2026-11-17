@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+struct Big { v: [9]i64 }
+
+fn run(b: Big) -> i64 {
+    let c = b; //~ copy
+    @forget(c);
+    return 0;
+}

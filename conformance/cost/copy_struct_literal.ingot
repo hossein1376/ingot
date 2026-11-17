@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+struct Big { v: [9]i64 }
+
+fn run() -> i64 {
+    let b = Big.{ v: @zero([9]i64) };
+    @forget(b);
+    return 0;
+}

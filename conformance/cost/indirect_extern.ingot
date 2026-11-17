@@ -1,0 +1,12 @@
+//! expect: cost
+//! section: 31
+
+extern "c" {
+    fn ext(x: i64) -> i64;
+}
+
+fn run(p: extern fn(i64) -> i64) -> i64 {
+    unsafe("p is a live extern function pointer") {
+        return p(1); //~ indirect_call
+    }
+}

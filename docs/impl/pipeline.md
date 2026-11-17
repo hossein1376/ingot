@@ -390,6 +390,14 @@ expression. Because phase 10 is the same in both pipelines, so is that part of t
 report. The optimizer may delete more checks afterwards. Those are not reflected in
 `ingot cost`: the report states what is guaranteed, not what happened to be optimized.
 
+The `copy` row is the source-level copy or move of a value larger than 64 bytes:
+* a store whose value is a source place and whose destination is rooted at a user local
+  or a parameter, with any projection (a dereference, a field or an index);
+* a by-value argument of a call, `spawn` or `dispatch`;
+* a returned value.
+The construction of a literal in place is not a copy, and neither is a compiler
+temporary. A size that depends on a type parameter is skipped in the generic body.
+
 ## 6a. Instance discovery (phase 11a)
 
 * **Strategy.** Every instance reachable from the roots is compiled as its own copy.

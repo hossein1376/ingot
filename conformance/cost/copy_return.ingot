@@ -1,0 +1,8 @@
+//! expect: cost
+//! section: 31
+
+struct Big { v: [9]i64 }
+
+fn make(b: Big) -> Big {
+    return b; //~ copy
+}

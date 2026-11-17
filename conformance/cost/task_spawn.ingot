@@ -1,0 +1,10 @@
+//! expect: cost
+//! section: 31
+
+fn work() -> void {}
+
+fn run() -> void {
+    scope s {
+        spawn work() in s; //~ task_spawn
+    }
+}

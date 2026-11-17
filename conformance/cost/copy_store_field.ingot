@@ -1,0 +1,9 @@
+//! expect: cost
+//! section: 31
+
+struct Big { v: [9]i64 }
+struct Holder { b: Big }
+
+fn field(h: &mut Holder, b: Big) -> void {
+    h.b = b; //~ copy
+}

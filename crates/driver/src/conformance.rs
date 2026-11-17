@@ -305,7 +305,17 @@ fn marker_fits(expect: Expect, code: &str) -> bool {
         }
         Expect::Cost => matches!(
             code,
-            "bounds_check" | "overflow_check" | "div_check" | "shift_check"
+            "bounds_check"
+                | "overflow_check"
+                | "div_check"
+                | "shift_check"
+                | "scatter_check"
+                | "alloc"
+                | "indirect_call"
+                | "copy"
+                | "task_spawn"
+                | "lock"
+                | "park_point"
         ),
     }
 }
@@ -534,15 +544,6 @@ fn cost_markers(analysis: &Analysis) -> BTreeSet<Marker> {
     analysis
         .cost
         .iter()
-        .filter(|item| {
-            matches!(
-                item.kind,
-                ingot_cfg::removal::CostKind::BoundsCheck
-                    | ingot_cfg::removal::CostKind::OverflowCheck
-                    | ingot_cfg::removal::CostKind::DivCheck
-                    | ingot_cfg::removal::CostKind::ShiftCheck
-            )
-        })
         .filter_map(|item| {
             let source = analysis.sources.files.get(item.file)?;
             let line = source.position(item.span.start).line;

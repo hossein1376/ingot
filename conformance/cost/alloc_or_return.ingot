@@ -1,0 +1,14 @@
+//! expect: cost
+//! section: 31, 35
+
+import std.mem;
+
+fn put_or_return[A: mem.Allocator, T](a: A, v: T) -> i64 ! mem.AllocFail[T] {
+    @forget(a);
+    @forget(v);
+    return 0;
+}
+
+fn use_it[A: mem.Allocator, T: Discard](a: A, v: T) -> void ! mem.AllocFail[T] {
+    @forget(try put_or_return(a, v)); //~ alloc
+}

@@ -1,0 +1,11 @@
+//! expect: cost
+//! section: 31
+
+fn call(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+    return f(x); //~ indirect_call
+}
+
+fn run() -> i64 {
+    let f = fn [](x: i64) -> i64 { return x; };
+    return call(&f, 1);
+}

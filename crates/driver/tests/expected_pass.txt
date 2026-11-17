@@ -149,6 +149,8 @@ control/step_on_non_range.ingot
 control/struct_pattern_missing_field.ingot
 control/unreachable_arm.fixed.ingot
 control/unreachable_arm.ingot
+cost/alloc.ingot
+cost/alloc_or_return.ingot
 cost/assert_hoists_checks.ingot
 cost/assigned_len_keeps_check.ingot
 cost/assignment_between_keeps_check.ingot
@@ -164,6 +166,12 @@ cost/condition_hoists_index_check.ingot
 cost/constant_index_has_no_check.ingot
 cost/constant_item_operands_have_no_check.ingot
 cost/constant_operands_have_no_check.ingot
+cost/copy_argument.ingot
+cost/copy_let.ingot
+cost/copy_return.ingot
+cost/copy_store.ingot
+cost/copy_store_field.ingot
+cost/copy_struct_literal.ingot
 cost/counted_loop_constant_hi_has_no_checks.ingot
 cost/counted_loop_has_no_checks.ingot
 cost/dead_branch_has_no_checks.ingot
@@ -172,6 +180,9 @@ cost/for_index_has_no_bounds_check.ingot
 cost/generic_constant_length_has_no_check.ingot
 cost/generic_constant_range_keeps_check.ingot
 cost/guarded_increment_has_no_check.ingot
+cost/indirect_dyn.ingot
+cost/indirect_extern.ingot
+cost/indirect_fn.ingot
 cost/len_plus_one_keeps_bound.ingot
 cost/load_has_no_check.ingot
 cost/loop_counter_overflow_has_no_check.ingot
@@ -183,6 +194,7 @@ cost/reassigned_len_keeps_bound.ingot
 cost/second_identical_check_has_no_check.ingot
 cost/slice_has_no_check.ingot
 cost/store_has_no_check.ingot
+cost/task_spawn.ingot
 cost/two_phase_argument_keeps_check.ingot
 cost/two_phase_field_keeps_check.ingot
 cost/two_phase_receiver_keeps_check.ingot

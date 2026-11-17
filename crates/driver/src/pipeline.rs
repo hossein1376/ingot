@@ -264,6 +264,22 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         not_implemented.extend(removal.not_implemented);
         removed_cfgs = removal.cfgs;
         cost = removal.items;
+        // The cost rows that are properties of the checked CFG rather than a
+        // surviving check: alloc, indirect_call, copy and task_spawn (§31).
+        cost.extend(ingot_cfg::cost::cost_items(
+            &mut bodies.declarations,
+            &output.sema,
+            &cfgs,
+        ));
+        cost.sort_by(|a, b| {
+            (a.fn_name.clone(), a.file, a.span.start, a.span.end, a.kind).cmp(&(
+                b.fn_name.clone(),
+                b.file,
+                b.span.start,
+                b.span.end,
+                b.kind,
+            ))
+        });
         // Phase 11a: instance discovery, depth (E0809) and mangled names. Later
         // per-instance checks run on this set (part 2).
         let discovered = ingot_cfg::instances::discover(

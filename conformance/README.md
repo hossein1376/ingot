@@ -33,7 +33,7 @@ Each test starts with directive lines:
 | `//! expect: reject` | `ingot check` reports exactly the diagnostics marked in the file |
 | `//! expect: run` | the program builds, runs, and exits with the status given by `//! exit:` (default 0) |
 | `//! expect: trap` | the program builds, runs, prints one trap line and exits with status 101 |
-| `//! expect: cost` | `ingot check` reports nothing, and `ingot cost` reports exactly the marked check items |
+| `//! expect: cost` | `ingot check` reports nothing, and `ingot cost` reports exactly the marked cost items |
 | `//! section: N, M` | the specification sections the test exercises |
 | `//! target: NAME` | run only for that target. Absent: all targets |
 
@@ -48,9 +48,9 @@ A marker in an `ingot.toml` is written `#~ CODE`, since `#` starts a TOML commen
   marked. An unmarked diagnostic fails the test, and so does a missing one.
 * In a `trap` test, `//~ T03` means: the trap line names this file, this line and code
   `T03`.
-* In a `cost` test, `//~ bounds_check` means: `ingot cost` reports an item of that kind
-  whose span starts on this line. Only the four check kinds (`bounds_check`,
-  `overflow_check`, `div_check`, `shift_check`) are compared, and the set must be equal.
+* In a `cost` test, `//~ KIND` means: `ingot cost` reports an item of that kind whose
+  span starts on this line. Every kind `ingot cost` reports is compared, and the set
+  must be equal.
 * In a `reject` test, `//~ related CODE ROLE` means: some diagnostic with code `CODE`
   reported for this test has a related span of role `ROLE` that starts on this line,
   in this file. Each such marker must be matched. Related spans with no marker are
@@ -83,8 +83,8 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-626 test files: 157 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
-all), 411 `reject`, 13 `run`, 6 `trap`, 39 `cost`.
+638 test files: 157 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
+all), 411 `reject`, 13 `run`, 6 `trap`, 51 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|

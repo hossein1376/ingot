@@ -18,6 +18,7 @@
 //! body's CFG is dropped.
 
 pub mod check;
+pub mod cost;
 pub mod dump;
 pub mod eval;
 pub mod instances;

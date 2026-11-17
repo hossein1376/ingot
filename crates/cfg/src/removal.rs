@@ -32,6 +32,12 @@ pub enum CostKind {
     DivCheck,
     ShiftCheck,
     ScatterCheck,
+    Alloc,
+    IndirectCall,
+    Copy,
+    TaskSpawn,
+    Lock,
+    ParkPoint,
 }
 
 impl CostKind {
@@ -42,6 +48,12 @@ impl CostKind {
             CostKind::DivCheck => "div_check",
             CostKind::ShiftCheck => "shift_check",
             CostKind::ScatterCheck => "scatter_check",
+            CostKind::Alloc => "alloc",
+            CostKind::IndirectCall => "indirect_call",
+            CostKind::Copy => "copy",
+            CostKind::TaskSpawn => "task_spawn",
+            CostKind::Lock => "lock",
+            CostKind::ParkPoint => "park_point",
         }
     }
 }
@@ -55,6 +67,12 @@ pub struct CostItem {
     pub fn_name: String,
     pub file: usize,
     pub span: Span,
+    /// `indirect_call`: `fn`, `dyn` or `extern`.
+    pub through: Option<&'static str>,
+    /// `copy`: the size in bytes.
+    pub bytes: Option<u64>,
+    /// `alloc`: the static type of the callee's one `Allocator` argument.
+    pub allocator: Option<String>,
 }
 
 /// The result of phase 10 for a package.
@@ -276,6 +294,9 @@ impl Engine<'_> {
                     fn_name,
                     file: cfg.file,
                     span,
+                    through: None,
+                    bytes: None,
+                    allocator: None,
                 });
             }
             analysis.diagnostics.extend(step.diagnostics);

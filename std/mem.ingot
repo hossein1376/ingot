@@ -2,6 +2,34 @@
 // Capability types: they have no public field, so safe code outside `std` cannot make
 // one (spec section 4.2).
 
+/// Allocation failed, or the request was invalid.
+pub copy enum AllocErr: u8 {
+    out_of_memory,
+    bad_request,
+}
+
+/// The error of the `_or_return` forms: the value an allocating function had already
+/// received when allocation failed, given back.
+pub struct AllocFail[T] {
+    pub error: AllocErr,
+    pub value: T,
+}
+
+/// The allocator interface (spec section 14).
+pub interface Allocator: Copy {
+    fn alloc(self: Self, size: i64, align: i64) -> *mut u8 ! AllocErr;
+
+    unsafe fn free(self: Self, ptr: *mut u8, size: i64, align: i64);
+
+    unsafe fn resize(
+        self: Self,
+        ptr: *mut u8,
+        old: i64,
+        new: i64,
+        align: i64,
+    ) -> bool;
+}
+
 /// The general allocator. `Allocator` is `Copy` (section 14.1) and `Heap` is one, and
 /// `env.heap` is copied out of a `&Env`, so the type is `Copy`.
 pub copy struct Heap {}
