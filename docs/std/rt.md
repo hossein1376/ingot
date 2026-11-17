@@ -69,7 +69,12 @@ pub fn test_env() -> &testing.TestEnv
 guard-page handler, and calls `entry` once. It exits with status 101 after `trap` and
 with the status `entry` returns otherwise. `entry` is generated per package: it prints
 `error: ...` for a returned error in the structural form of that error's type, then
-returns 1. `start` itself performs no formatting and allocates nothing.
+returns 1. `start` itself performs no formatting and allocates nothing from an
+allocator. The one memory it needs, the table behind `Env.args` (one `[]u8` per
+argument, pointing into `argv`'s strings), is a single region reserved from the
+operating system through `std.sys` (`mmap` or `VirtualAlloc`), sized for `argc` entries,
+filled once and never freed. The capability values of `Env` are built by their modules'
+`pub(pkg)` constructors (`env.md`).
 
 On Windows there is no C runtime: the entry symbol takes no arguments and `start`
 reads the command line and environment from the system (05-tooling §33.2, review 2

@@ -318,6 +318,10 @@ code alone.
 * **Thread-local state through the OS calls, not a language feature** (review 2, B4). A
   call cannot be cached across a park by the optimizer; a `thread_local` variable would
   need that rule stated and enforced.
+* **`rt.start` takes the table behind `Env.args` from one OS mapping** (*user*,
+  2026-11-17, asked in B1; `docs/std/rt.md` §1). It is sized for `argc`, filled once, never
+  freed; `start` still uses no allocator. *Rejected:* a fixed static table (an arbitrary
+  limit) and an empty `args` until B3 (a value that is not true).
 * **The back end pins upstream LLVM 22** (*user*, 2026-11-17). On macOS that is
   Homebrew's `llvm@22`, found by path; Linux and Windows use the same major version.
   *Why:* one version on all three targets, checked at start-up. *Rejected:* Apple clang,
