@@ -318,6 +318,12 @@ code alone.
 * **Thread-local state through the OS calls, not a language feature** (review 2, B4). A
   call cannot be cached across a park by the optimizer; a `thread_local` variable would
   need that rule stated and enforced.
+* **The back end pins upstream LLVM 22** (*user*, 2026-11-17). On macOS that is
+  Homebrew's `llvm@22`, found by path; Linux and Windows use the same major version.
+  *Why:* one version on all three targets, checked at start-up. *Rejected:* Apple clang,
+  which needs no install on macOS but is a fork that rejects LLVM 22's textual IR (and
+  LLVM 22 rejects Apple's: `frame-pointer` and stack-probe attributes), and has no Linux
+  or Windows counterpart. Found: `alwaysinline` is honored at `-O0` on LLVM 22.
 
 ## 11. Standard library conventions
 
@@ -373,8 +379,7 @@ code alone.
 * **To confirm, before they are relied on** (review 2): that LLVM no longer requires a
   compare-exchange's failure order to be no stronger than its success order;
   `alwaysinline` at `-O0`; inline stack probes on aarch64 and Windows; the
-  `minimumNumber`/`maximumNumber` intrinsics in the pinned LLVM; whether Apple `clang`
-  reads the pinned LLVM's textual IR; which linker flags make a Mach-O byte-identical;
+  `minimumNumber`/`maximumNumber` intrinsics in the pinned LLVM; which linker flags make a Mach-O byte-identical;
   the x86 cost of the float `@min`/`@max` rule. COMPILER.md's back-end section assigns
   each to a step.
 * **Still unspecified** (pipeline §11): the builtin reference, `@format`'s type (with

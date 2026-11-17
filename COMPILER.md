@@ -353,7 +353,9 @@ v1, and no drop glue, since the language has no destructors.
 - LLVM IR as text, compiled by `clang`. It keeps the compiler free of dependencies
   (rule 5) and the IR readable in a review. Textual IR is not stable across LLVM
   versions: support one pinned major version, check it at start-up, and fail with a
-  named error otherwise.
+  named error otherwise. **The pin is upstream LLVM 22** (decided 2026-11-17): on macOS
+  Homebrew's `llvm@22`, found by its own path, never the system's Apple `clang`. Apple
+  clang 21 rejects LLVM 22's IR and LLVM 22 rejects Apple's, so the two are never mixed.
 - `--fast` is the same path at `-O0`. Everything up to and including the IR is shared,
   so "identical semantics, traps included" holds by construction, as long as the IR
   never relies on undefined behavior (pipeline §7): no `nsw`/`nuw` unless the check is
@@ -463,7 +465,7 @@ platform's.
 
 | Unknown | Settle in |
 |---|---|
-| The pinned LLVM version, and whether Apple `clang` reads its textual IR (this machine has Apple clang 21). It decides what a user must install | the first week of B1 |
+| ~~The pinned LLVM version~~ Settled: upstream LLVM 22 (Homebrew `llvm@22` on macOS). Apple clang does not read its IR, and the reverse; B1 checks the version at start-up | done |
 | `alwaysinline` honored at `-O0` | B1 |
 | Inline stack probes on aarch64 and on Windows | B1 (aarch64), T3 (Windows) |
 | LLVM no longer requiring a compare-exchange failure order no stronger than success | R2 |
