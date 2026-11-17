@@ -713,8 +713,9 @@ struct Ring[T, const n: i64] { items: [n]T, head: i64 }
   constant parameter is a value and is spelled like one (`const n: i64`); an argument for
   it is a literal (a negative number included: `Ring[u8, -1]` is written as in an
   expression, section 1), a constant name or `{ expr }`: `Ring[u8, max_depth]`.
-* A length or constant argument may be an expression over constant parameters:
-  `[n + 1]u8`, `Ring[u8, {2 * n}]`. Inside the generic it is part of the type as
+* A length or constant argument may be an expression over generic parameters: constant
+  parameters, and `@sizeof(T)` or `@alignof(T)` of a type parameter (`[n + 1]u8`,
+  `Ring[u8, {2 * n}]`, `[@sizeof(T)]u8`). Inside the generic it is part of the type as
   written. Two such types are the same when their expressions are the same tree after
   the parameters are substituted: the same operators, literals and parameters in the
   same places. So `[n + 1]T` and `[n+1]T` are one type, `[1 + n]T` is another, and a

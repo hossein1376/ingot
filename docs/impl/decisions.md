@@ -98,7 +98,8 @@ code alone.
 * **A length expression over constant parameters is part of the type, compared as a
   tree** (*user*, 2026-11-16, found reviewing P2; 01 §8). `[n + 1]T` and `[n+1]T` are one
   type, `[1 + n]T` another; substitution rewrites the tree, and a fully concrete one is
-  evaluated to an ordinary length. *Rejected:* normalizing `+` and `*` (a longer rule
+  evaluated to an ordinary length. `@sizeof(T)` and `@alignof(T)` of a type parameter are
+  allowed in the tree too, folded once `T` is concrete. *Rejected:* normalizing `+` and `*` (a longer rule
   for little gain) and forbidding expressions (contradicts "a length computed from a
   constant generic argument"). The first implementation keyed the type by a hash of
   the text and its owner, which rejected `Buf[3].{ data: @zero([4]u8) }`.
