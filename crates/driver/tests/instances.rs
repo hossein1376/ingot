@@ -67,3 +67,31 @@ fn instances_golden() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
+
+#[test]
+fn a_dispatch_reaches_its_kernel_and_helpers_under_build_roots() {
+    let bless = std::env::var_os("INGOT_BLESS").is_some();
+    let path = dir().join("dispatch_build.ingot");
+    let options = pipeline::Options {
+        roots: ingot_cfg::instances::Roots::Build,
+        ..pipeline::Options::default()
+    };
+    let analysis = pipeline::analyze_path_with(&path, &options).expect("analysis");
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let mut text = String::new();
+    for i in &analysis.instances {
+        text.push_str(&format!("{}\t{}\n", i.depth, i.mangled));
+    }
+    let expected = dir().join("dispatch_build.build.txt");
+    if bless {
+        std::fs::write(&expected, &text).expect("write golden");
+        return;
+    }
+    let want = std::fs::read_to_string(&expected)
+        .unwrap_or_else(|e| panic!("{}: {e}", expected.display()));
+    assert_eq!(want, text, "{}", path.display());
+}

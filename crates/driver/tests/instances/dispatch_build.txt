@@ -1,0 +1,3 @@
+0	_I1:t1:t6:t.kern
+0	_I1:t1:t6:t.main
+0	_I1:t1:t8:t.helper

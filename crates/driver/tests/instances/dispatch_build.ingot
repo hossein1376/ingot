@@ -1,0 +1,16 @@
+import std.Env;
+import std.exec;
+
+kernel fn helper(x: i64) -> i64 {
+    return x;
+}
+
+kernel fn kern(i: Idx, out: []mut i64) -> void {
+    out[i] = helper(1);
+}
+
+pub fn main(env: &Env) -> void {
+    _ = env;
+    var xs: [1]i64 = [1]i64.{ 0 };
+    dispatch kern(&mut xs[0..]) over 0..1 on exec.seq;
+}

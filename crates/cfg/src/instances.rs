@@ -475,6 +475,34 @@ impl<'a> Discovery<'a> {
                         span,
                     ));
                 }
+                Terminator::Dispatch {
+                    kernel,
+                    kernel_args,
+                    ..
+                } => {
+                    let mapped: Vec<GenericArg> = kernel_args
+                        .iter()
+                        .map(|a| self.decls.types.subst_arg(a, &subst))
+                        .collect();
+                    let mut kernel_subst = Subst::new();
+                    let params: Vec<DefId> = self
+                        .decls
+                        .generics_of(*kernel)
+                        .iter()
+                        .map(|g| g.def)
+                        .collect();
+                    for (p, a) in params.into_iter().zip(mapped) {
+                        kernel_subst.insert(p, a);
+                    }
+                    edges.push((
+                        InstanceKey {
+                            owner: *kernel,
+                            body: InstanceBody::Item,
+                            subst: self.canonical_subst(*kernel, &kernel_subst),
+                        },
+                        span,
+                    ));
+                }
                 _ => {}
             }
         }
