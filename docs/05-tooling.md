@@ -45,7 +45,7 @@ that is visible in its source. One object per item:
 |---|---|
 | `bounds_check`, `overflow_check`, `div_check`, `shift_check` | a check that survived, with the expression's span. A division has one check with two outcomes (T04, T05) and one `div_check`. The range checks of `@gather` and `@scatter` and the coverage check of `dispatch` are `bounds_check`s that are never removed |
 | `scatter_check` | the check that the indices of a `@scatter` are distinct (T15): cheap with AVX-512CD, a compare network on NEON |
-| `alloc` | a call whose error type is `std.mem.AllocErr` or converts to it by `from` (section 35's convention). `allocator` is the static type of the callee's one generic argument bound by `Allocator`, absent if there is none or more than one |
+| `alloc` | a call whose error type is `std.mem.AllocErr` or `std.mem.AllocFail[T]`: the ordinary and the `_or_return` form of section 35's convention. `allocator` is the static type of the callee's one generic argument bound by `Allocator`, absent if there is none or more than one |
 | `indirect_call` | a call whose callee is a `fn` value, a `&dyn` method or an `extern fn` pointer |
 | `copy` | a copy or move of a value larger than 64 bytes, arguments and results included. A size that depends on a type parameter is not reported in the generic body |
 | `not_inlined` | a call to a small function that was not inlined, and why |

@@ -336,6 +336,10 @@ code alone.
   as `@test_clock_step`, and a notion of a test-only function.
 * **The structural `Format` form is not an `impl`** (review 2, L4): generated per printed
   instance, writes the value as the language writes it, and prints only visible fields.
+* **The `alloc` cost item is a call whose error type is `AllocErr` or `AllocFail[T]`**
+  (found reviewing P3, 2026-11-16; 05 §31). The old words, "`AllocErr` or converts to
+  it by `from`", matched nothing beyond `AllocErr` (it has no `from` variants), so every
+  `_or_return` allocation was invisible to `ingot cost`.
 * **`Handle[T]` is 8 bytes** (*user*, review 2, S5-14): handles are stored everywhere in
   graph code; a slot whose generation is used up is retired.
 * **Zero-size allocation requests are valid** (review 2, S5-15), so containers need no

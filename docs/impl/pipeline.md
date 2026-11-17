@@ -508,7 +508,7 @@ importing them.
 | `std.sync.LoadOrder`, `std.sync.StoreOrder`, `std.sync.AtomicOrder` | the types of the `order` arguments of the atomic builtins (§15) |
 | `std.sync.Atomic` | maps its operations to single instructions; contains a `Cell` |
 | `std.sync.Mutex.lock`, `try_lock`, `std.sync.RwLock.read`, `write`, `try_read`, `try_write` | the `lock` cost item (§31) |
-| `std.mem.AllocErr` | the `alloc` cost item: a call whose error type is `AllocErr` or converts to it by `from` (§31) |
+| `std.mem.AllocErr`, `std.mem.AllocFail` | the `alloc` cost item: a call whose error type is `AllocErr` or `AllocFail[T]` (§31) |
 | `std.mem.Allocator` | the `allocator` of an `alloc` cost item: the static type of the callee's one generic argument bound by `Allocator` |
 
 ## 9. Tools

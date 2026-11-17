@@ -5,7 +5,7 @@ import std.sync.Cell;
 ```
 
 `std.mem` is the only module that defines allocation. A call whose error type is
-`AllocErr`, or converts to it by `from`, is what `ingot cost` reports as `alloc`, with
+`AllocErr` or `AllocFail[T]` is what `ingot cost` reports as `alloc`, with
 the callee's `Allocator` argument as its allocator (05-tooling §31, pipeline §8).
 Updated for the language designer's second review: the `_or_return` convention,
 `Arc.release_last`, `FnMut` cleanups, an 8-byte `Handle`, and zero-size requests. Every allocating function either
