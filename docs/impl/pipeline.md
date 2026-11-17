@@ -493,6 +493,13 @@ to the runtime's design document (`docs/std/rt.md`). The compiler needs:
 
 A program that uses none of the concurrency entry points must not link the scheduler.
 
+The entries that **may park** the current task, for the `park_point` cost item (05 §31):
+scope wait, handle join, select (and so a direct call of a `waitable fn`), park, and
+split-and-run (`par for` and a `dispatch` on `exec.par`, whose task waits for chunks
+another worker took). A contended `Mutex.lock`, `RwLock.read` or `RwLock.write` parks
+through park; their `try_` forms never do. Scope enter, spawn, cancel, trap and wake
+never park.
+
 For `spawn` of a generic call or one that takes a closure, the compiler makes one thunk
 per instance. The argument record lives in scope memory and is laid out by the compiler
 with the struct rules of §25.
