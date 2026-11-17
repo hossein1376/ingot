@@ -31,11 +31,21 @@ pub struct Marker {
     pub line: u32,
 }
 
+/// A `//~ related CODE ROLE` marker: a related span that must start on this line.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RelatedMarker {
+    pub file: String,
+    pub code: String,
+    pub role: String,
+    pub line: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Case {
     pub path: PathBuf,
     pub expect: Expect,
     pub markers: BTreeSet<Marker>,
+    pub related: BTreeSet<RelatedMarker>,
     pub exit: i32,
     pub target: Option<String>,
     /// Malformed directives or markers. A non-empty list fails the case.
@@ -92,6 +102,7 @@ pub fn read_case(path: &Path) -> Case {
         path: path.to_path_buf(),
         expect: Expect::Accept,
         markers: BTreeSet::new(),
+        related: BTreeSet::new(),
         exit: 0,
         target: None,
         errors: Vec::new(),
@@ -164,6 +175,19 @@ pub fn read_case(path: &Path) -> Case {
             ));
         }
     }
+    for marker in &case.related {
+        if case.expect != Expect::Reject {
+            case.errors.push(format!(
+                "{}:{}: a `related` marker fits only a `reject` test",
+                marker.file, marker.line
+            ));
+        } else if !marker_fits(Expect::Reject, &marker.code) || !known_role(&marker.role) {
+            case.errors.push(format!(
+                "{}:{}: `related {} {}` is not a diagnostic code and a related role",
+                marker.file, marker.line, marker.code, marker.role
+            ));
+        }
+    }
     case.has_fix = fixed_path(path).exists();
     case
 }
@@ -202,25 +226,60 @@ fn collect_markers(case: &mut Case, file: &str, text: &str) {
     let prefix = marker_prefix(file);
     for (i, line) in text.lines().enumerate() {
         let line_no = i as u32 + 1;
-        let Some(idx) = line.find(prefix) else {
-            continue;
-        };
-        let code = line[idx + prefix.len()..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
-        if code.is_empty() {
-            case.errors
-                .push(format!("{file}:{line_no}: marker without a kind"));
-        } else {
-            case.markers.insert(Marker {
-                file: file.to_string(),
-                code,
-                line: line_no,
-            });
+        let mut rest = line;
+        while let Some(idx) = rest.find(prefix) {
+            rest = &rest[idx + prefix.len()..];
+            let mut words = rest.split_whitespace();
+            let first = words.next().unwrap_or("");
+            if first == "related" {
+                let code = words.next().unwrap_or("").to_string();
+                let role = words.next().unwrap_or("").to_string();
+                if code.is_empty() || role.is_empty() {
+                    case.errors.push(format!(
+                        "{file}:{line_no}: `related` marker needs a code and a role"
+                    ));
+                } else {
+                    case.related.insert(RelatedMarker {
+                        file: file.to_string(),
+                        code,
+                        role,
+                        line: line_no,
+                    });
+                }
+            } else if first.is_empty() {
+                case.errors
+                    .push(format!("{file}:{line_no}: marker without a kind"));
+            } else {
+                case.markers.insert(Marker {
+                    file: file.to_string(),
+                    code: first.to_string(),
+                    line: line_no,
+                });
+            }
         }
     }
+}
+
+/// The closed set of related roles in diagnostics.md section 1.
+fn known_role(role: &str) -> bool {
+    matches!(
+        role,
+        "declared"
+            | "previous"
+            | "expected"
+            | "borrow"
+            | "move"
+            | "later_use"
+            | "scope_end"
+            | "defer"
+            | "signature"
+            | "callee"
+            | "spawn"
+            | "loop"
+            | "instantiation"
+            | "call"
+            | "candidate"
+    )
 }
 
 fn fixed_path(path: &Path) -> PathBuf {
@@ -365,14 +424,46 @@ fn run_expectation(case: &Case) -> Result<(), String> {
             Ok(())
         };
     }
-    if actual == case.markers {
-        Ok(())
-    } else {
-        Err(format!(
+    if actual != case.markers {
+        return Err(format!(
             "expected [{}], got [{}]",
             format_markers(&case.markers),
             format_markers(&actual)
-        ))
+        ));
+    }
+    check_related(case, &analysis)
+}
+
+/// Every `related` marker must match a related span of the named code on its line.
+fn check_related(case: &Case, analysis: &Analysis) -> Result<(), String> {
+    let mut missing = Vec::new();
+    for wanted in &case.related {
+        let found = analysis.diagnostics.iter().any(|d| {
+            if d.code != wanted.code {
+                return false;
+            }
+            d.related.iter().any(|r| {
+                r.role == wanted.role
+                    && r.file == wanted.file
+                    && analysis
+                        .sources
+                        .iter()
+                        .find(|s| s.path == r.file)
+                        .map(|s| s.position(r.span.start).line)
+                        .is_some_and(|line| line == wanted.line)
+            })
+        });
+        if !found {
+            missing.push(format!(
+                "{}:{}: no `{}` related {}",
+                wanted.file, wanted.line, wanted.role, wanted.code
+            ));
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing.join("; "))
     }
 }
 

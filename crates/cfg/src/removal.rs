@@ -72,7 +72,12 @@ const MAX_LEN: i128 = 1 << 62;
 
 /// Run phase 10 on every CFG of the checked package.
 pub fn remove_checks(decls: &Declarations, sources: &Sources, cfgs: &Cfgs) -> Removal {
-    let engine = Engine { decls, sources };
+    let empty = ingot_sema::ty::Subst::new();
+    let engine = Engine {
+        decls,
+        sources,
+        subst: &empty,
+    };
     let mut out = cfgs.clone();
     let mut items = Vec::new();
     let mut diagnostics = Vec::new();
@@ -114,9 +119,35 @@ pub fn remove_checks(decls: &Declarations, sources: &Sources, cfgs: &Cfgs) -> Re
     }
 }
 
+/// E0806 for the checks of one instance: the folded operations whose operands are all
+/// constants after the instance's substitution.
+pub fn check_instance(
+    decls: &Declarations,
+    sources: &Sources,
+    cfgs: &Cfgs,
+    owner: DefId,
+    subst: &ingot_sema::ty::Subst,
+) -> Vec<Diagnostic> {
+    let engine = Engine {
+        decls,
+        sources,
+        subst,
+    };
+    let mut diagnostics = Vec::new();
+    for (id, cfg) in cfgs.iter() {
+        if cfg.key.owner != owner {
+            continue;
+        }
+        diagnostics.extend(engine.analyze_cfg(id, cfg).diagnostics);
+    }
+    diagnostics
+}
+
 struct Engine<'a> {
     decls: &'a Declarations,
     sources: &'a Sources,
+    /// The instance's constant generic arguments (empty for phase 10).
+    subst: &'a ingot_sema::ty::Subst,
 }
 
 struct CfgAnalysis {
@@ -613,6 +644,72 @@ impl Engine<'_> {
         }
     }
 
+    /// The value of a constant-expression tree under the instance substitution.
+    fn const_expr_int(&self, id: ingot_sema::ty::ConstExprId) -> Option<i128> {
+        use ingot_sema::ty::ConstExpr;
+        match self.decls.types.const_expr(id).clone() {
+            ConstExpr::Int { value, .. } => Some(value),
+            ConstExpr::Param(p) => self.const_param(p),
+            ConstExpr::Unary { op, expr } => {
+                let value = self.const_expr_int(expr)?;
+                let ty = self.expr_int_ty(id)?;
+                ingot_sema::consteval::int_unary(op, ty, value).ok()
+            }
+            ConstExpr::Binary { op, lhs, rhs } => {
+                let a = self.const_expr_int(lhs)?;
+                let b = self.const_expr_int(rhs)?;
+                let ty = self.expr_int_ty(id)?;
+                match op {
+                    ingot_syntax::ast::BinOp::Eq => Some(i128::from(a == b)),
+                    ingot_syntax::ast::BinOp::Ne => Some(i128::from(a != b)),
+                    ingot_syntax::ast::BinOp::Lt => Some(i128::from(a < b)),
+                    ingot_syntax::ast::BinOp::Le => Some(i128::from(a <= b)),
+                    ingot_syntax::ast::BinOp::Gt => Some(i128::from(a > b)),
+                    ingot_syntax::ast::BinOp::Ge => Some(i128::from(a >= b)),
+                    _ => ingot_sema::consteval::int_binary(op, ty, a, b).ok(),
+                }
+            }
+            ConstExpr::Cast { to, expr } => {
+                let value = self.const_expr_int(expr)?;
+                let from = self.expr_int_ty(expr)?;
+                ingot_sema::consteval::lossless(from, to).then_some(value)
+            }
+            ConstExpr::Layout { .. } => None,
+            ConstExpr::Bool(_) => None,
+        }
+    }
+
+    fn expr_int_ty(&self, id: ingot_sema::ty::ConstExprId) -> Option<IntTy> {
+        use ingot_sema::ty::ConstExpr;
+        match self.decls.types.const_expr(id) {
+            ConstExpr::Int { ty, .. } => Some(*ty),
+            ConstExpr::Param(p) => {
+                self.decls
+                    .param_const_ty
+                    .get(p)
+                    .and_then(|t| match self.decls.types.kind(*t) {
+                        TyKind::Int(i) => Some(*i),
+                        _ => None,
+                    })
+            }
+            ConstExpr::Unary { expr, .. } | ConstExpr::Cast { expr, .. } => self.expr_int_ty(*expr),
+            ConstExpr::Binary { lhs, rhs, .. } => {
+                self.expr_int_ty(*lhs).or_else(|| self.expr_int_ty(*rhs))
+            }
+            _ => None,
+        }
+    }
+
+    /// The value bound to a constant generic parameter by the instance, if any.
+    fn const_param(&self, def: DefId) -> Option<i128> {
+        match self.subst.get(def) {
+            Some(ingot_sema::ty::GenericArg::Const(ingot_sema::ty::ConstArg::Value(
+                ConstValue::Int { value, .. },
+            ))) => Some(*value),
+            _ => None,
+        }
+    }
+
     fn const_named(&self, def: DefId) -> Option<i128> {
         match self.decls.consts.get(&def) {
             Some(ingot_sema::consteval::ConstState::Done(Ok(ConstValue::Int {
@@ -1047,10 +1144,13 @@ impl Engine<'_> {
         let TyKind::Array(_, len) = self.decls.types.kind(ty) else {
             return None;
         };
-        let ConstArg::Value(ConstValue::Int { value, .. }) = len else {
-            return None;
+        let len = match len {
+            ConstArg::Value(ConstValue::Int { value, .. }) => *value,
+            ConstArg::Param(p) => self.const_param(*p)?,
+            ConstArg::Expr(id) => self.const_expr_int(*id)?,
+            _ => return None,
         };
-        Some((index, *value))
+        Some((index, len))
     }
 
     fn fold_check(
@@ -1107,6 +1207,8 @@ impl Engine<'_> {
         match op {
             Operand::Const(Const::Int { value, .. }) => Some(*value),
             Operand::Const(Const::Named { def, .. }) => self.const_named(*def),
+            Operand::Const(Const::Param { def, .. }) => self.const_param(*def),
+            Operand::Const(Const::Expr { id, .. }) => self.const_expr_int(*id),
             Operand::Const(_) => None,
             Operand::Place(place, _) => {
                 if !place.proj.is_empty() {
@@ -1471,6 +1573,11 @@ impl Engine<'_> {
                     .map(|value| Val::constant(value.max(0)))
                     .unwrap_or(Val::constant(0));
                 return Some((lower, Val::symbol(Sym::Param(*def), 0)));
+            }
+            if let ingot_sema::ty::ConstArg::Expr(id) = length
+                && let Some(value) = self.const_expr_int(*id)
+            {
+                return Some((Val::constant(value), Val::constant(value)));
             }
         }
         let lower = state

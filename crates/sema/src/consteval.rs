@@ -16,7 +16,7 @@ use crate::defs::{DefId, DefKind, Sema};
 use crate::hir::{self, ExprId, ExprKind, Res};
 use crate::lowering::{Cur, Cx};
 use crate::sigs::{FnSig, ItemSig};
-use crate::ty::{ConstArg, ConstValue, IntTy, TyKind};
+use crate::ty::{ConstArg, ConstExpr, ConstExprId, ConstValue, IntTy, TyKind};
 use ingot_diag::source::Span;
 use ingot_syntax::ast::{BinOp, UnOp};
 
@@ -918,12 +918,131 @@ impl Cx<'_, '_> {
         match f {
             Fail::Reported => {}
             Fail::Interpret(m) | Fail::NotImplemented(m) => self.ni(m.clone()),
-            Fail::Generic => self.ni(crate::PER_INSTANCE_CHECKS),
+            // A length, alignment, lane index or assertion over a constant generic
+            // parameter is handled per instance by phase 11a. Other generic constant
+            // expressions are not distinguished here.
+            Fail::Generic => {}
             Fail::OutOfRange(_) => self.ni(
                 "type checking of a constant expression (an integer literal that does not fit \
                  its type, E0405)",
             ),
         }
+    }
+
+    fn expr_int_hint(&self, e: ExprId) -> Option<IntTy> {
+        let pkg = self.cur.pkg;
+        let mut e = e;
+        while let ExprKind::Paren(inner) = &self.pkgs[pkg].expr(e).kind {
+            e = *inner;
+        }
+        match &self.pkgs[pkg].expr(e).kind {
+            ExprKind::Int { .. } => Some(IntTy::I64),
+            ExprKind::Path(path) => match path.res {
+                Res::Def(d) => match self.d.param_const_ty.get(&d) {
+                    Some(t) => match self.d.types.kind(*t) {
+                        TyKind::Int(i) => Some(*i),
+                        _ => None,
+                    },
+                    None => match self.d.items.get(&d) {
+                        Some(ItemSig::Const(c)) => match self.d.types.kind(c.ty) {
+                            TyKind::Int(i) => Some(*i),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                },
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Build the expression tree for a constant argument over parameters. This is used
+    /// only when the direct evaluator says the expression is generic.
+    fn build_const_expr(&mut self, e: ExprId, hint: ValTy) -> Option<ConstExprId> {
+        self.build_expr_inner(e, Some(hint))
+    }
+
+    fn build_expr_inner(&mut self, e: ExprId, hint: Option<ValTy>) -> Option<ConstExprId> {
+        let pkg = self.cur.pkg;
+        let kind = self.pkgs[pkg].expr(e).kind.clone();
+        let node = match kind {
+            ExprKind::Int {
+                value, negative, ..
+            } => {
+                let ty = match hint {
+                    Some(ValTy::Int(i)) => i,
+                    _ => IntTy::I64,
+                };
+                let value = i128::try_from(value).ok()?;
+                let value = if negative { -value } else { value };
+                if !ty.contains(value) {
+                    return None;
+                }
+                ConstExpr::Int { ty, value }
+            }
+            ExprKind::Bool(b) => ConstExpr::Bool(b),
+            ExprKind::Paren(inner) => return self.build_expr_inner(inner, hint),
+            ExprKind::Path(path) => match path.res {
+                Res::Def(d) => {
+                    if self.sema.def(d).kind == (DefKind::GenericParam { is_const: true }) {
+                        ConstExpr::Param(d)
+                    } else if self.sema.def(d).kind == DefKind::Const {
+                        let v = self.const_value_direct(d).ok()?;
+                        match v {
+                            ConstValue::Int { ty, value } => ConstExpr::Int { ty, value },
+                            ConstValue::Bool(b) => ConstExpr::Bool(b),
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            },
+            ExprKind::Unary {
+                op: op @ (UnOp::Neg | UnOp::NegWrap | UnOp::Not | UnOp::BitNot),
+                expr,
+                ..
+            } => {
+                let expr = self.build_expr_inner(expr, hint)?;
+                ConstExpr::Unary { op, expr }
+            }
+            ExprKind::Binary { op, lhs, rhs, .. } => {
+                let h = match op {
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => self
+                        .expr_int_hint(lhs)
+                        .or_else(|| self.expr_int_hint(rhs))
+                        .map(ValTy::Int),
+                    BinOp::And | BinOp::Or => Some(ValTy::Bool),
+                    _ => hint,
+                };
+                let lhs = self.build_expr_inner(lhs, h)?;
+                let rhs = self.build_expr_inner(rhs, h)?;
+                ConstExpr::Binary { op, lhs, rhs }
+            }
+            ExprKind::Builtin {
+                name,
+                type_arg,
+                args,
+            } if args.is_empty() && (name == "sizeof" || name == "alignof") => {
+                let ty = self.lower_ty(type_arg.as_deref()?);
+                ConstExpr::Layout {
+                    size: name == "sizeof",
+                    ty,
+                }
+            }
+            ExprKind::Cast { expr, ty, .. } => {
+                let lowered = self.lower_ty(&ty);
+                let to = match self.d.types.kind(lowered) {
+                    TyKind::Int(i) => *i,
+                    _ => return None,
+                };
+                let expr = self.build_expr_inner(expr, None)?;
+                ConstExpr::Cast { to, expr }
+            }
+            _ => return None,
+        };
+        Some(self.d.types.intern_expr(node))
     }
 
     /// The constant argument or array length written as `e`: a constant generic
@@ -943,6 +1062,13 @@ impl Cx<'_, '_> {
         }
         match self.eval_signature_const(e, hint) {
             Ok(v) => ConstArg::Value(v),
+            Err(Fail::Generic) => match self.build_const_expr(inner, hint) {
+                Some(id) => ConstArg::Expr(id),
+                None => {
+                    self.note_failure(&Fail::Generic);
+                    ConstArg::Poison
+                }
+            },
             Err(f) => {
                 self.note_failure(&f);
                 ConstArg::Poison
@@ -1309,6 +1435,28 @@ impl Cx<'_, '_> {
         expr: ExprId,
         ty: crate::ty::TypeId,
     ) -> Result<crate::value::Value, Fail> {
+        self.eval_in_body_with(body, expr, ty, crate::ty::Subst::new())
+    }
+
+    /// Evaluate `expr` in `body` for one instance: `subst` binds the owner's generic
+    /// parameters (phase 11, pipeline §6a).
+    pub(crate) fn eval_in_body_with_subst(
+        &mut self,
+        body: &crate::typed::TypedBody,
+        expr: ExprId,
+        ty: crate::ty::TypeId,
+        subst: crate::ty::Subst,
+    ) -> Result<crate::value::Value, Fail> {
+        self.eval_in_body_with(body, expr, ty, subst)
+    }
+
+    fn eval_in_body_with(
+        &mut self,
+        body: &crate::typed::TypedBody,
+        expr: ExprId,
+        ty: crate::ty::TypeId,
+        subst: crate::ty::Subst,
+    ) -> Result<crate::value::Value, Fail> {
         self.ensure_impl_tables();
         let Some(factory) = self.interp else {
             return Err(Fail::Interpret(
@@ -1320,7 +1468,7 @@ impl Cx<'_, '_> {
         let saved = (self.eval_depth, self.eval_outer);
         let r = factory
             .make(saved.0, saved.1)
-            .eval_expr(self, body, expr, ty, file, span);
+            .eval_expr_with_subst(self, body, expr, ty, file, span, subst);
         (self.eval_depth, self.eval_outer) = saved;
         r
     }
@@ -1334,6 +1482,20 @@ impl Cx<'_, '_> {
         hint: ValTy,
         owner: DefId,
     ) -> Result<ConstValue, Fail> {
+        self.eval_signature_expr_with_subst(pkg, file, e, hint, owner, crate::ty::Subst::new())
+    }
+
+    /// Evaluate a constant expression of a signature or a length for one instance:
+    /// `subst` binds the owner's generic parameters (phase 11a).
+    pub(crate) fn eval_signature_expr_with_subst(
+        &mut self,
+        pkg: usize,
+        file: usize,
+        e: ExprId,
+        hint: ValTy,
+        owner: DefId,
+        subst: crate::ty::Subst,
+    ) -> Result<ConstValue, Fail> {
         let ty = self.type_of_val_ty(hint);
         self.ensure_impl_tables();
         let Some(factory) = self.interp else {
@@ -1346,7 +1508,7 @@ impl Cx<'_, '_> {
         let r = (|| {
             let body = crate::interp::Host::typed_expr(self, owner, e, ty).ok_or(Fail::Reported)?;
             let span = self.pkgs[pkg].expr(e).span;
-            interp.eval_expr(self, &body, e, ty, file, span)
+            interp.eval_expr_with_subst(self, &body, e, ty, file, span, subst)
         })();
         (self.eval_depth, self.eval_outer) = saved;
         match r {

@@ -1,6 +1,6 @@
-//! What phase 7 defers to instantiation must be a `not implemented` entry, never a
-//! silent acceptance: `@static_assert` over a generic parameter, constant evaluation
-//! over one, a kernel type that is a parameter, and polymorphic recursion (E0809).
+//! Phase 11a's per-instance checks and `instantiation` labels: a static assertion, a
+//! length, an alignment, a lane index, a shuffle index, a trapped operation and a
+//! kernel type are checked for each instance, with the shortest call chain.
 
 use ingot_driver::pipeline;
 
@@ -33,56 +33,95 @@ fn analyze_roots(
     analysis
 }
 
-fn has_phase11(analysis: &pipeline::Analysis) -> bool {
-    analysis
-        .not_implemented
+fn labels(d: &ingot_diag::diagnostic::Diagnostic) -> Vec<&ingot_diag::diagnostic::Related> {
+    d.related
         .iter()
-        .any(|m| m == ingot_sema::PER_INSTANCE_CHECKS)
+        .filter(|r| r.role == "instantiation")
+        .collect()
 }
 
 #[test]
-fn a_static_assert_over_a_generic_parameter_is_a_phase11_entry() {
-    let analysis = analyze(
-        "static-assert",
-        "fn f[T](x: T) -> i64 {\n    @static_assert(@sizeof(T) > 0, \"size\");\n    return 1;\n}\n",
-    );
-    assert!(
-        analysis.diagnostics.is_empty(),
+fn a_static_assert_over_a_generic_parameter_is_checked_per_instance() {
+    let source = "fn f[const n: i64]() -> i64 {\n    @static_assert(n > 0, \"positive\");\n    return n;\n}\n\nfn run() -> i64 {\n    return f.[0]();\n}\n";
+    let analysis = analyze("static-assert", source);
+    let d = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E0810")
+        .unwrap_or_else(|| panic!("{:?}", analysis.diagnostics));
+    assert!(d.message.contains("positive"));
+    let chain = labels(d);
+    assert_eq!(chain.len(), 1, "{:?}", d.related);
+    assert_eq!(
+        chain[0].span.start,
+        source.find("return f.[0]()").expect("the call"),
         "{:?}",
-        analysis.diagnostics
+        d.related
     );
-    assert!(has_phase11(&analysis), "{:?}", analysis.not_implemented);
+    assert!(chain[0].span.start < chain[0].span.end);
+    assert!(
+        analysis.not_implemented.is_empty(),
+        "{:?}",
+        analysis.not_implemented
+    );
 }
 
 #[test]
-fn a_constant_over_a_generic_parameter_is_a_phase11_entry() {
+fn a_length_over_a_generic_parameter_is_checked_per_instance() {
     let analysis = analyze(
         "generic-constant",
-        "fn f[T](x: T) -> i64 {\n    let a: [@sizeof(T)]u8 = [@sizeof(T)]u8.{};\n    @forget(a);\n    @forget(x);\n    return 0;\n}\n",
+        "fn f[const n: i64]() -> i64 {\n    let a: [n]u8 = [n]u8.{};\n    @forget(a);\n    return 0;\n}\n\nfn run() -> i64 {\n    return f.[-1]();\n}\n",
     );
+    let d = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E0521")
+        .unwrap_or_else(|| panic!("{:?}", analysis.diagnostics));
+    assert_eq!(labels(d).len(), 1, "{:?}", d.related);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis.not_implemented.is_empty(),
         "{:?}",
-        analysis.diagnostics
+        analysis.not_implemented
     );
-    assert!(has_phase11(&analysis), "{:?}", analysis.not_implemented);
 }
 
 #[test]
-fn polymorphic_recursion_is_e0809() {
+fn a_generic_operation_that_traps_is_e0806_per_instance() {
     let analysis = analyze(
-        "polymorphic",
-        "fn grow[T](x: T) -> i64 {\n    return grow((x, 1));\n}\n\nfn run() -> i64 {\n    return grow(1);\n}\n",
+        "generic-trap",
+        "fn f[const n: i64]() -> i64 {\n    return n * 2;\n}\n\nfn run() -> i64 {\n    return f.[9223372036854775807]();\n}\n",
     );
-    let codes: Vec<&str> = analysis.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, vec!["E0809"], "{:?}", analysis.diagnostics);
+    let d = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E0806")
+        .unwrap_or_else(|| panic!("{:?}", analysis.diagnostics));
+    assert!(d.message.contains("T03"));
+    assert_eq!(labels(d).len(), 1, "{:?}", d.related);
+}
+
+#[test]
+fn a_chain_is_innermost_first_and_has_no_empty_span() {
+    let analysis = analyze(
+        "chain",
+        "fn h[const n: i64]() -> i64 {\n    @static_assert(n > 0, \"positive\");\n    return n;\n}\n\nfn g[const n: i64]() -> i64 {\n    return h.[n]();\n}\n\nfn run() -> i64 {\n    return g.[0]();\n}\n",
+    );
+    let d = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E0810")
+        .unwrap_or_else(|| panic!("{:?}", analysis.diagnostics));
+    let chain = labels(d);
+    assert_eq!(chain.len(), 2, "{:?}", d.related);
     assert!(
-        analysis
-            .diagnostics
-            .first()
-            .is_some_and(|d| d.related.iter().any(|r| r.role == "instantiation")),
+        chain[0].span.start < chain[1].span.start,
+        "innermost first: {:?}",
+        d.related
+    );
+    assert!(
+        chain.iter().all(|r| r.span.start < r.span.end),
         "{:?}",
-        analysis.diagnostics
+        d.related
     );
 }
 
@@ -122,7 +161,11 @@ fn forwarding_a_generic_argument_is_not_growing() {
         "{:?}",
         analysis.diagnostics
     );
-    assert!(!has_phase11(&analysis), "{:?}", analysis.not_implemented);
+    assert!(
+        analysis.not_implemented.is_empty(),
+        "{:?}",
+        analysis.not_implemented
+    );
 }
 
 #[test]
@@ -194,7 +237,7 @@ fn build_test_and_check_have_their_own_roots() {
 }
 
 #[test]
-fn monomorphic_generic_recursion_is_not_a_phase11_entry() {
+fn monomorphic_generic_recursion_is_not_e0809() {
     let analysis = analyze(
         "monomorphic",
         "fn f[T](x: T, go: bool) -> i64 {\n    if go {\n        return f(x, false);\n    }\n    @forget(x);\n    return 1;\n}\n",
@@ -204,5 +247,9 @@ fn monomorphic_generic_recursion_is_not_a_phase11_entry() {
         "{:?}",
         analysis.diagnostics
     );
-    assert!(!has_phase11(&analysis), "{:?}", analysis.not_implemented);
+    assert!(
+        analysis.not_implemented.is_empty(),
+        "{:?}",
+        analysis.not_implemented
+    );
 }

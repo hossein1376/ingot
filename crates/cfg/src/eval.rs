@@ -20,7 +20,9 @@ use ingot_sema::defs::{DefId, DefKind};
 use ingot_sema::hir::ExprId;
 use ingot_sema::interp::{ConstLookup, Host, Interpreter};
 use ingot_sema::sigs::ItemSig;
-use ingot_sema::ty::{ConstArg, ConstValue, FloatTy, GenericArg, IntTy, Subst, TyKind, TypeId};
+use ingot_sema::ty::{
+    ConstArg, ConstExprId, ConstValue, FloatTy, GenericArg, IntTy, Subst, TyKind, TypeId,
+};
 use ingot_sema::typed::{BodyRoot, CastKind, FnRef, FnSource, InterfaceVia, TypedBody};
 use ingot_sema::value::{AggKind as ValueAgg, AllocRef, PackElems, PathComp, SliceSource, Value};
 use ingot_syntax::ast::{BinOp, UnOp};
@@ -1478,6 +1480,132 @@ impl<'a> Evaluator<'a> {
 
     // ----------------------------------------------------------- operands
 
+    fn const_expr_value(
+        &mut self,
+        host: &mut dyn Host,
+        fi: usize,
+        id: ConstExprId,
+    ) -> Result<Value, Fail> {
+        use ingot_sema::ty::ConstExpr;
+        match host.declarations().types.const_expr(id).clone() {
+            ConstExpr::Int { ty, value } => {
+                let ty = host.declarations_mut().types.int(ty);
+                Ok(Value::Int { ty, value })
+            }
+            ConstExpr::Bool(b) => Ok(Value::Bool(b)),
+            ConstExpr::Param(p) => {
+                let arg = self.frames.get(fi).and_then(|f| f.subst.get(&p)).cloned();
+                match arg {
+                    Some(GenericArg::Const(ConstArg::Value(v))) => Ok(value_of_const(host, v)),
+                    Some(GenericArg::Const(ConstArg::Expr(id))) => {
+                        self.const_expr_value(host, fi, id)
+                    }
+                    _ => Err(Fail::NotImplemented(
+                        "constant evaluation of a constant generic parameter with no value"
+                            .to_string(),
+                    )),
+                }
+            }
+            ConstExpr::Unary { op, expr } => match self.const_expr_value(host, fi, expr)? {
+                Value::Int { ty, value } => {
+                    let it = match host.declarations().types.kind(ty) {
+                        TyKind::Int(i) => *i,
+                        _ => return Err(self.inconsistent(host, "a non-integer constant")),
+                    };
+                    let value = consteval::int_unary(op, it, value)
+                        .map_err(|t| self.tree_trap(host, &t))?;
+                    Ok(Value::Int { ty, value })
+                }
+                Value::Bool(b) if op == UnOp::Not => Ok(Value::Bool(!b)),
+                _ => Err(self.inconsistent(host, "an invalid unary constant operation")),
+            },
+            ConstExpr::Binary { op, lhs, rhs } => {
+                let a = self.const_expr_value(host, fi, lhs)?;
+                let b = self.const_expr_value(host, fi, rhs)?;
+                match (a, b) {
+                    (Value::Int { ty, value: x }, Value::Int { value: y, .. }) => {
+                        let it = match host.declarations().types.kind(ty) {
+                            TyKind::Int(i) => *i,
+                            _ => return Err(self.inconsistent(host, "a non-integer constant")),
+                        };
+                        match op {
+                            BinOp::Eq => Ok(Value::Bool(x == y)),
+                            BinOp::Ne => Ok(Value::Bool(x != y)),
+                            BinOp::Lt => Ok(Value::Bool(x < y)),
+                            BinOp::Le => Ok(Value::Bool(x <= y)),
+                            BinOp::Gt => Ok(Value::Bool(x > y)),
+                            BinOp::Ge => Ok(Value::Bool(x >= y)),
+                            _ => {
+                                let value = consteval::int_binary(op, it, x, y)
+                                    .map_err(|t| self.tree_trap(host, &t))?;
+                                Ok(Value::Int { ty, value })
+                            }
+                        }
+                    }
+                    (Value::Bool(x), Value::Bool(y)) => match op {
+                        BinOp::Eq => Ok(Value::Bool(x == y)),
+                        BinOp::Ne => Ok(Value::Bool(x != y)),
+                        BinOp::And => Ok(Value::Bool(x && y)),
+                        BinOp::Or => Ok(Value::Bool(x || y)),
+                        _ => Err(self.inconsistent(host, "an invalid boolean constant operation")),
+                    },
+                    _ => Err(self.inconsistent(host, "mismatched constant operands")),
+                }
+            }
+            ConstExpr::Cast { to, expr } => match self.const_expr_value(host, fi, expr)? {
+                Value::Int { ty, value } => {
+                    let from = match host.declarations().types.kind(ty) {
+                        TyKind::Int(i) => *i,
+                        _ => return Err(self.inconsistent(host, "a non-integer constant")),
+                    };
+                    if !consteval::lossless(from, to) {
+                        return Err(Fail::NotImplemented(
+                            "constant evaluation of a lossy integer cast".to_string(),
+                        ));
+                    }
+                    let ty = host.declarations_mut().types.int(to);
+                    Ok(Value::Int { ty, value })
+                }
+                Value::Bool(b) => {
+                    let ty = host.declarations_mut().types.int(to);
+                    Ok(Value::Int {
+                        ty,
+                        value: i128::from(b),
+                    })
+                }
+                _ => Err(self.inconsistent(host, "an invalid constant cast")),
+            },
+            ConstExpr::Layout { size, ty } => {
+                let ty = self.subst_ty(host, ty);
+                let Some(layout) = host.layout(ty) else {
+                    return Err(Fail::NotImplemented(
+                        "constant evaluation of `@sizeof` of a type with no layout".to_string(),
+                    ));
+                };
+                let ty = self.i64_ty(host);
+                Ok(Value::Int {
+                    ty,
+                    value: i128::from(if size { layout.size } else { layout.align }),
+                })
+            }
+        }
+    }
+
+    fn tree_trap(&self, host: &mut dyn Host, trap: &ingot_sema::consteval::Trap) -> Fail {
+        host.report(
+            "E0806",
+            format!(
+                "constant evaluation trapped: {}: {}",
+                trap.code(),
+                trap.text()
+            ),
+            self.at.0,
+            self.at.1,
+            self.cur_label(),
+        );
+        Fail::Reported
+    }
+
     fn operands(
         &mut self,
         host: &mut dyn Host,
@@ -1533,6 +1661,7 @@ impl<'a> Evaluator<'a> {
                     )),
                 }
             }
+            Const::Expr { id, .. } => self.const_expr_value(host, fi, *id),
             Const::Named { def, .. } => self.named_const(host, *def),
             Const::Fn { fn_ref, name } => Ok(Value::Fn {
                 fn_ref: fn_ref.clone(),
@@ -1650,9 +1779,18 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn const_len(&mut self, _host: &mut dyn Host, len: ConstArg) -> Result<usize, Fail> {
+    fn const_len(&mut self, host: &mut dyn Host, len: ConstArg) -> Result<usize, Fail> {
         match len {
             ConstArg::Value(ConstValue::Int { value, .. }) if value >= 0 => Ok(value as usize),
+            ConstArg::Expr(id) => {
+                let fi = self.frames.len().saturating_sub(1);
+                match self.const_expr_value(host, fi, id)? {
+                    Value::Int { value, .. } if value >= 0 => Ok(value as usize),
+                    _ => Err(Fail::NotImplemented(
+                        "constant evaluation of an array length that is not an integer".to_string(),
+                    )),
+                }
+            }
             ConstArg::Param(p) => {
                 for f in self.frames.iter().rev() {
                     if let Some(GenericArg::Const(ConstArg::Value(ConstValue::Int {
@@ -2607,6 +2745,35 @@ impl Interpreter for Evaluator<'_> {
         file: usize,
         span: Span,
     ) -> Result<Value, Fail> {
+        self.eval_expr_in(host, body, expr, ty, file, span, BTreeMap::new())
+    }
+
+    fn eval_expr_with_subst(
+        &mut self,
+        host: &mut dyn Host,
+        body: &TypedBody,
+        expr: ingot_sema::hir::ExprId,
+        ty: TypeId,
+        file: usize,
+        span: Span,
+        subst: Subst,
+    ) -> Result<Value, Fail> {
+        self.eval_expr_in(host, body, expr, ty, file, span, subst.map)
+    }
+}
+
+impl Evaluator<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn eval_expr_in(
+        &mut self,
+        host: &mut dyn Host,
+        body: &TypedBody,
+        expr: ingot_sema::hir::ExprId,
+        ty: TypeId,
+        file: usize,
+        span: Span,
+        subst: BTreeMap<DefId, GenericArg>,
+    ) -> Result<Value, Fail> {
         self.reset((file, span));
         self.root_def = None;
         // The expression is the root of its own CFG, with the caller's type; the
@@ -2616,9 +2783,9 @@ impl Interpreter for Evaluator<'_> {
         root.ret = ty;
         root.params.clear();
         root.error = None;
-        let r = self.lower_body(host, &root, false).and_then(|idx| {
-            self.run_cfg(host, idx, Vec::new(), None, None, false, BTreeMap::new())
-        });
+        let r = self
+            .lower_body(host, &root, false)
+            .and_then(|idx| self.run_cfg(host, idx, Vec::new(), None, None, false, subst));
         self.frames.clear();
         r
     }

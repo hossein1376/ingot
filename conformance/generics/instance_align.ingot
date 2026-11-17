@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 8
+
+struct S[const a: i64] { x: i64 align(a) } //~ E0515
+
+fn make[const a: i64]() -> i64 {
+    let s: S[a] = S[a].{ x: 1 };
+    return s.x;
+}
+
+fn run() -> i64 {
+    return make.[4](); //~ related E0515 instantiation
+}

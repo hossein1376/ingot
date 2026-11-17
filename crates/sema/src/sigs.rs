@@ -96,6 +96,9 @@ pub struct GenericSig {
 pub struct AlignAttr {
     pub value: i128,
     pub span: Span,
+    /// Set when the value depends on a constant generic parameter; phase 11 evaluates
+    /// it per instance. `value` is then 0 and must not be used for layout.
+    pub raw: Option<(DefId, crate::hir::ExprId)>,
 }
 
 #[derive(Clone, Debug)]
@@ -491,6 +494,9 @@ pub struct Obligation {
 pub struct ConcreteType {
     pub file: usize,
     pub span: Span,
+    /// The item whose signature or body wrote the type; a per-instance check runs
+    /// only for that owner's instances.
+    pub owner: Option<DefId>,
     /// The argument that became an invalid array length, when there is one.
     pub length_span: Option<Span>,
     pub ty: TypeId,
@@ -546,6 +552,9 @@ pub struct Declarations {
     pub obligations: Vec<Obligation>,
     /// Concrete types that need the E0521 length and size check (01-core §3).
     pub concrete_types: Vec<ConcreteType>,
+    /// Types that still mention a generic parameter (or an expression over one), for
+    /// the per-instance E0521 and E0515 checks of phase 11a.
+    pub generic_types: Vec<ConcreteType>,
     /// For each associated type of an interface: the interface and the name.
     pub assoc_info: BTreeMap<DefId, (DefId, String)>,
     /// The definitions behind the builtin names `Eq`, `Ord`, ... (section 4.4).
@@ -579,6 +588,7 @@ impl Declarations {
             layouts: BTreeMap::new(),
             obligations: Vec::new(),
             concrete_types: Vec::new(),
+            generic_types: Vec::new(),
             assoc_info: BTreeMap::new(),
             builtins: BuiltinNames::default(),
             infinite: BTreeSet::new(),

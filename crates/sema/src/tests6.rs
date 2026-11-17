@@ -962,8 +962,8 @@ fn align_must_be_a_power_of_two_not_below_the_natural_alignment_e0515() {
             ("E0515".to_string(), 7)
         ]
     );
-    // Checked per instance, and recorded as such.
-    assert!(d.has_ni("natural alignment"), "{:?}", d.ni());
+    // `G[T]`'s natural alignment is checked per instance in phase 11a, not here.
+    assert!(!d.has_ni("natural alignment"), "{:?}", d.ni());
 }
 
 #[test]

@@ -51,8 +51,13 @@ A marker in an `ingot.toml` is written `#~ CODE`, since `#` starts a TOML commen
 * In a `cost` test, `//~ bounds_check` means: `ingot cost` reports an item of that kind
   whose span starts on this line. Only the four check kinds (`bounds_check`,
   `overflow_check`, `div_check`, `shift_check`) are compared, and the set must be equal.
+* In a `reject` test, `//~ related CODE ROLE` means: some diagnostic with code `CODE`
+  reported for this test has a related span of role `ROLE` that starts on this line,
+  in this file. Each such marker must be matched. Related spans with no marker are
+  not compared, so a test checks only the roles it names.
 
-Columns and message text are not compared. Related spans are not compared yet.
+Columns and message text are not compared. Related spans are compared only where a
+`related` marker names them.
 
 ## Fix tests
 
@@ -78,8 +83,8 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-609 test files: 152 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
-all), 399 `reject`, 13 `run`, 6 `trap`, 39 `cost`.
+626 test files: 157 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
+all), 411 `reject`, 13 `run`, 6 `trap`, 39 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|
@@ -96,7 +101,7 @@ all), 399 `reject`, 13 `run`, 6 `trap`, 39 `cost`.
 | E12xx | 6 of 7 | E1207 |
 | E13xx | 5 of 5 | |
 | E14xx | 9 of 10 | E1406 |
-| E15xx | 12 of 14 | E1514, E1518 |
+| E15xx | 13 of 14 | E1518 |
 | E16xx | 5 of 6 | E1605 |
 | E17xx | 5 of 7 | E1703, E1704 |
 | traps | 6 of 17 | T02, T05, T08, T09, T10, T11, T12, T13, T15, T16, T17 |
@@ -104,7 +109,7 @@ all), 399 `reject`, 13 `run`, 6 `trap`, 39 `cost`.
 Retired codes are not counted: the catalog marks E0512 and E0513 as retired, so they
 appear in no row and in no total below.
 
-165 of 199 catalog codes have a test.
+166 of 199 catalog codes have a test.
 
 E1701 for a *missing* `ingot.toml` has no conformance test, because the harness supplies
 a manifest by convention; `crates/driver/tests/cli.rs` covers it. The other cases of

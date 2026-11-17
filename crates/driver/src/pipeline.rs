@@ -275,8 +275,45 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             &cfgs,
             options.roots,
         );
-        diagnostics.extend(discovered.diagnostics);
+        for d in discovered.diagnostics {
+            let duplicate = diagnostics.iter().any(|e| {
+                e.code == d.code && e.file == d.file && e.span == d.span && e.message == d.message
+            });
+            if !duplicate {
+                diagnostics.push(d);
+            }
+        }
         not_implemented.extend(discovered.not_implemented);
+        // Per-instance checks that need typed bodies or the interpreter (E0810,
+        // E0521, E0515, E1502, E1504, E1514).
+        let scopes: Vec<ingot_sema::InstanceArgs> = discovered
+            .instances
+            .iter()
+            .filter(|i| matches!(i.key.body, ingot_cfg::instances::InstanceBody::Item))
+            .map(|i| ingot_sema::InstanceArgs {
+                owner: i.key.owner,
+                subst: i.key.subst.clone(),
+                labels: i.labels.clone(),
+            })
+            .collect();
+        let checked = ingot_sema::check_instances(
+            &all,
+            &output,
+            bodies.declarations,
+            &bodies.bodies,
+            &target,
+            std_count,
+            Some(&evaluator),
+            &scopes,
+        );
+        bodies.declarations = checked.declarations;
+        diagnostics.extend(checked.diagnostics);
+        not_implemented.extend(
+            checked
+                .not_implemented
+                .into_iter()
+                .filter(|m| m != UNCHECKED),
+        );
         instances = discovered.instances;
         front_end = Some(FrontEnd {
             resolved: output,

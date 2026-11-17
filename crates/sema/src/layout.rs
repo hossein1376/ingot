@@ -96,10 +96,12 @@ impl Declarations {
             }
             TyKind::Mask(lanes) => Ok(Layout::scalar(u64::from(lanes), u64::from(lanes))),
             TyKind::Array(elem, n) => {
+                let n = self.fold_layout_const(n);
                 let len = match n {
                     ConstArg::Value(ConstValue::Int { value, .. }) if value >= 0 => value as u64,
                     ConstArg::Value(_) => return Err(LayoutError::Poison),
                     ConstArg::Param(_) => return Err(LayoutError::Params),
+                    ConstArg::Expr(_) => return Err(LayoutError::Params),
                     ConstArg::Poison => return Err(LayoutError::Poison),
                 };
                 let e = self.layout_inner(elem, stack)?;
@@ -272,6 +274,7 @@ impl Declarations {
                 let mut fields = Vec::new();
                 for f in &st.fields {
                     let t = self.types.subst(f.ty, &s);
+                    let t = self.fold_layout_exprs(t);
                     let l = self.layout_inner(t, stack)?;
                     let raised = f.align.and_then(|a| valid_align(a.value)).unwrap_or(1);
                     fields.push((f.name.clone(), l, raised));
@@ -297,6 +300,7 @@ impl Declarations {
                     let p = match v.payload {
                         Some(t) => {
                             let t = self.types.subst(t, &s);
+                            let t = self.fold_layout_exprs(t);
                             Some(self.layout_inner(t, stack)?)
                         }
                         None => None,

@@ -587,7 +587,7 @@ impl AssignOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UnOp {
     Neg,
     NegWrap,
@@ -598,7 +598,7 @@ pub enum UnOp {
     Try,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BinOp {
     Add,
     Sub,

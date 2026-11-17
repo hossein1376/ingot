@@ -488,10 +488,138 @@ impl Declarations {
         }
     }
 
-    /// `subst`, then replace the projections that the impls can now decide.
+    /// `subst`, fold `@sizeof`/`@alignof` once their type is concrete, then replace
+    /// the projections that the impls can now decide.
     pub fn instantiate(&mut self, ty: TypeId, s: &Subst) -> TypeId {
         let t = self.types.subst(ty, s);
+        let t = self.fold_layout_exprs(t);
         self.normalize(t)
+    }
+
+    /// Fold `@sizeof`/`@alignof` nodes in a type once they have no parameters.
+    pub(crate) fn fold_layout_exprs(&mut self, ty: TypeId) -> TypeId {
+        let kind = self.types.kind(ty).clone();
+        let rebuilt = match kind {
+            TyKind::Array(elem, len) => {
+                TyKind::Array(self.fold_layout_exprs(elem), self.fold_layout_const(len))
+            }
+            TyKind::Tuple(ts) => {
+                TyKind::Tuple(ts.into_iter().map(|t| self.fold_layout_exprs(t)).collect())
+            }
+            TyKind::Adt(d, args) => TyKind::Adt(d, self.fold_layout_args(args)),
+            TyKind::Dyn(m, d, args) => TyKind::Dyn(m, d, self.fold_layout_args(args)),
+            TyKind::Closure(d, i, args) => TyKind::Closure(d, i, self.fold_layout_args(args)),
+            TyKind::Optional(t) => TyKind::Optional(self.fold_layout_exprs(t)),
+            TyKind::Result(a, b) => {
+                TyKind::Result(self.fold_layout_exprs(a), self.fold_layout_exprs(b))
+            }
+            TyKind::Ref(m, t) => TyKind::Ref(m, self.fold_layout_exprs(t)),
+            TyKind::Slice(m, t) => TyKind::Slice(m, self.fold_layout_exprs(t)),
+            TyKind::RawPtr(m, t) => TyKind::RawPtr(m, self.fold_layout_exprs(t)),
+            TyKind::FnPtr(sig) => TyKind::FnPtr(self.fold_layout_sig(sig)),
+            TyKind::DynFn(m, k, sig) => TyKind::DynFn(m, k, self.fold_layout_sig(sig)),
+            TyKind::Projection(t, d) => TyKind::Projection(self.fold_layout_exprs(t), d),
+            other => other,
+        };
+        self.types.intern(rebuilt)
+    }
+
+    pub(crate) fn fold_layout_const(&mut self, c: ConstArg) -> ConstArg {
+        if let ConstArg::Expr(id) = c
+            && let Some(v) = self.eval_layout_expr(id)
+        {
+            return ConstArg::Value(v);
+        }
+        c
+    }
+
+    fn fold_layout_args(&mut self, args: Vec<GenericArg>) -> Vec<GenericArg> {
+        args.into_iter()
+            .map(|a| match a {
+                GenericArg::Ty(t) => GenericArg::Ty(self.fold_layout_exprs(t)),
+                GenericArg::Const(c) => GenericArg::Const(self.fold_layout_const(c)),
+            })
+            .collect()
+    }
+
+    fn fold_layout_sig(&mut self, sig: FnPtrSig) -> FnPtrSig {
+        FnPtrSig {
+            ext: sig.ext,
+            params: sig
+                .params
+                .into_iter()
+                .map(|t| self.fold_layout_exprs(t))
+                .collect(),
+            ret: self.fold_layout_exprs(sig.ret),
+            error: sig.error.map(|t| self.fold_layout_exprs(t)),
+        }
+    }
+
+    fn eval_layout_expr(&mut self, id: ConstExprId) -> Option<ConstValue> {
+        match self.types.const_expr(id).clone() {
+            ConstExpr::Int { ty, value } => Some(ConstValue::Int { ty, value }),
+            ConstExpr::Bool(b) => Some(ConstValue::Bool(b)),
+            ConstExpr::Param(_) => None,
+            ConstExpr::Layout { size, ty } => {
+                let ty = self.fold_layout_exprs(ty);
+                let layout = self.layout_of(ty).ok()?;
+                Some(ConstValue::Int {
+                    ty: IntTy::I64,
+                    value: i128::from(if size { layout.size } else { layout.align }),
+                })
+            }
+            ConstExpr::Unary { op, expr } => match self.eval_layout_expr(expr)? {
+                ConstValue::Int { ty, value } => {
+                    let value = crate::consteval::int_unary(op, ty, value).ok()?;
+                    Some(ConstValue::Int { ty, value })
+                }
+                ConstValue::Bool(b) if op == ingot_syntax::ast::UnOp::Not => {
+                    Some(ConstValue::Bool(!b))
+                }
+                ConstValue::Bool(_) => None,
+            },
+            ConstExpr::Binary { op, lhs, rhs } => {
+                let a = self.eval_layout_expr(lhs)?;
+                let b = self.eval_layout_expr(rhs)?;
+                match (a, b) {
+                    (ConstValue::Int { ty, value: x }, ConstValue::Int { value: y, .. }) => {
+                        match op {
+                            ingot_syntax::ast::BinOp::Eq => Some(ConstValue::Bool(x == y)),
+                            ingot_syntax::ast::BinOp::Ne => Some(ConstValue::Bool(x != y)),
+                            ingot_syntax::ast::BinOp::Lt => Some(ConstValue::Bool(x < y)),
+                            ingot_syntax::ast::BinOp::Le => Some(ConstValue::Bool(x <= y)),
+                            ingot_syntax::ast::BinOp::Gt => Some(ConstValue::Bool(x > y)),
+                            ingot_syntax::ast::BinOp::Ge => Some(ConstValue::Bool(x >= y)),
+                            _ => {
+                                let value = crate::consteval::int_binary(op, ty, x, y).ok()?;
+                                Some(ConstValue::Int { ty, value })
+                            }
+                        }
+                    }
+                    (ConstValue::Bool(x), ConstValue::Bool(y)) => match op {
+                        ingot_syntax::ast::BinOp::Eq => Some(ConstValue::Bool(x == y)),
+                        ingot_syntax::ast::BinOp::Ne => Some(ConstValue::Bool(x != y)),
+                        ingot_syntax::ast::BinOp::And => Some(ConstValue::Bool(x && y)),
+                        ingot_syntax::ast::BinOp::Or => Some(ConstValue::Bool(x || y)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            ConstExpr::Cast { to, expr } => match self.eval_layout_expr(expr)? {
+                ConstValue::Int { ty, value } => {
+                    if crate::consteval::lossless(ty, to) {
+                        Some(ConstValue::Int { ty: to, value })
+                    } else {
+                        None
+                    }
+                }
+                ConstValue::Bool(b) => Some(ConstValue::Int {
+                    ty: to,
+                    value: i128::from(b),
+                }),
+            },
+        }
     }
 
     /// Replace `Base.Item` by the type the impl of the interface for `Base` gives.

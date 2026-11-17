@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 1, 8
+
+fn f[const n: i64](x: [n + 1]u8) -> u8 {
+    return x[n + 1]; //~ E0806
+}
+
+fn run() -> i64 {
+    let a: [4]u8 = [4]u8.{ 1, 2, 3, 4 };
+    @forget(f.[3](a)); //~ related E0806 instantiation
+    return 0;
+}

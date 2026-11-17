@@ -2084,6 +2084,10 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                         let name = self.cx.sema.def(d).name.clone();
                         Const::Param { def: d, name }
                     }
+                    ConstArg::Expr(id) => Const::Expr {
+                        id,
+                        name: self.cx.decls.types.display_const_expr(self.cx.sema, id),
+                    },
                     ConstArg::Value(ConstValue::Bool(b)) => Const::Bool(b),
                     ConstArg::Poison => {
                         self.fail("an array length that is poison");
@@ -4732,6 +4736,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                         b.to_string()
                     }
                     ingot_sema::ty::ConstArg::Param(d) => self.cx.sema.def(*d).name.clone(),
+                    ingot_sema::ty::ConstArg::Expr(id) => {
+                        crate::instances::spell_const_expr(self.cx.decls, self.cx.sema, *id)
+                    }
                     ingot_sema::ty::ConstArg::Poison => "{error}".to_string(),
                 },
             };

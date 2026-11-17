@@ -8,7 +8,7 @@
 use ingot_diag::source::Span;
 use ingot_sema::defs::DefId;
 use ingot_sema::hir::{ExprId, LocalId, StmtId};
-use ingot_sema::ty::{Mutability, TypeId};
+use ingot_sema::ty::{ConstExprId, Mutability, TypeId};
 use ingot_sema::typed::{CallMode, DynCoercion, FnDynCoercion, FnRef};
 use ingot_syntax::ast::{BinOp, UnOp};
 
@@ -308,6 +308,11 @@ pub enum Const {
     /// A constant generic parameter used as a value.
     Param {
         def: DefId,
+        name: String,
+    },
+    /// An expression over constant parameters (`[n + 1]`'s length, `x.len`).
+    Expr {
+        id: ConstExprId,
         name: String,
     },
     /// A `const` item: its value is evaluated from its typed body (S5b) or folded.

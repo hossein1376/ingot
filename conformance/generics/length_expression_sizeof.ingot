@@ -1,0 +1,18 @@
+//! expect: accept
+//! section: 1, 8
+
+struct S[T] { data: [@sizeof(T)]u8 }
+
+fn make[T: Copy + Discard](x: T) -> i64 {
+    let a: [@sizeof(T)]u8 = [@sizeof(T)]u8.{};
+    let s: S[T] = S[T].{ data: a };
+    @forget(s);
+    @forget(x);
+    return 0;
+}
+
+fn run() -> i64 {
+    let a: [@sizeof(bool)]u8 = [1]u8.{ 0 };
+    @forget(a);
+    return make(1);
+}

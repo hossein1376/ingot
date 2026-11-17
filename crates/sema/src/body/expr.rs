@@ -1013,7 +1013,7 @@ impl Checker<'_, '_, '_> {
                 false
             }
             Err(crate::consteval::Fail::Generic) => {
-                self.ni("a lane index that depends on a generic parameter");
+                // Checked for each instance in phase 11a.
                 false
             }
         }

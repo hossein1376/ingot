@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 8, 15
+
+fn lane[const n: i64](v: i32x4) -> i32 {
+    return v[n]; //~ E1502
+}
+
+fn run() -> i32 {
+    return lane.[4](@zero); //~ related E1502 instantiation
+}

@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 1, 8
+
+fn swap[const n: i64](x: [n + 1]u8) -> [1 + n]u8 {
+    return x; //~ E0401
+}
+
+fn run() -> i64 {
+    let x = swap.[3](@zero([4]u8));
+    @forget(x);
+    return 0;
+}

@@ -13,7 +13,7 @@ use crate::defs::{DefId, Sema};
 use crate::hir;
 use crate::hir::ExprId;
 use crate::sigs::{Declarations, FnSig};
-use crate::ty::{ConstValue, TypeId};
+use crate::ty::{ConstValue, Subst, TypeId};
 use crate::typed::TypedBody;
 use crate::value::Value;
 use ingot_diag::source::{Sources, Span};
@@ -155,5 +155,20 @@ pub trait Interpreter {
         ty: TypeId,
         file: usize,
         span: Span,
+    ) -> Result<Value, Fail>;
+
+    /// Evaluate `expr` of the typed body `body` for one instance: `subst` binds the
+    /// owner's generic parameters. Phase 11 uses this for `@static_assert`, lane
+    /// indices and lengths computed from constant generic arguments.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_expr_with_subst(
+        &mut self,
+        host: &mut dyn Host,
+        body: &TypedBody,
+        expr: ExprId,
+        ty: TypeId,
+        file: usize,
+        span: Span,
+        subst: Subst,
     ) -> Result<Value, Fail>;
 }

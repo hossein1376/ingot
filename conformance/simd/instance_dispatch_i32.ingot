@@ -1,0 +1,14 @@
+//! expect: reject
+//! section: 8, 27
+
+kernel fn write(i: Idx, v: []mut i32) -> void {
+    v[i] = 1;
+}
+
+fn run[E: Executor](xs: []mut i32, e: E) -> void {
+    dispatch write(xs) over 0..1 on e; //~ E1514
+}
+
+fn start(xs: []mut i32, e: &dyn Executor) -> void {
+    run.[&dyn Executor](xs, e); //~ related E1514 instantiation
+}

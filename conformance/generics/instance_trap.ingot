@@ -1,0 +1,10 @@
+//! expect: reject
+//! section: 8
+
+fn grow[const n: i64]() -> i64 {
+    return n * 2; //~ E0806
+}
+
+fn run() -> i64 {
+    return grow.[9223372036854775807](); //~ related E0806 instantiation
+}

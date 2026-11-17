@@ -1,0 +1,21 @@
+//! expect: accept
+//! section: 1, 8
+
+struct S[const n: i64] {}
+
+impl[const n: i64] S[n] {
+    fn a(self: &S[n]) -> i64 {
+        let a: [n]u8 = [n]u8.{};
+        @forget(a);
+        return 0;
+    }
+
+    fn b(self: &S[n]) -> i64 { return n; }
+}
+
+fn run() -> i64 {
+    let s = S[-1].{};
+    let r = s.b();
+    @forget(s);
+    return r;
+}

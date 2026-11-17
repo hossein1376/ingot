@@ -1,0 +1,12 @@
+//! expect: reject
+//! section: 1, 8
+
+fn make[const n: i64]() -> i64 {
+    let a: [n + 1]u8 = [n + 1]u8.{}; //~ E0521
+    @forget(a);
+    return 0;
+}
+
+fn run() -> i64 {
+    return make.[-2](); //~ related E0521 instantiation
+}

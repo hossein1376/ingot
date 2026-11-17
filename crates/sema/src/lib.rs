@@ -16,6 +16,7 @@ mod checks;
 pub mod consteval;
 pub mod defs;
 pub mod hir;
+mod instance;
 pub mod interp;
 mod kernel;
 mod layout;
@@ -63,11 +64,6 @@ pub const BUILTIN_SOURCE: &str = include_str!("builtin.ingot");
 /// [`resolve`] and [`check_declarations`] turn one that would into a
 /// `not_implemented` entry, since it is a compiler failure, not an error in the program.
 pub const BUILTIN_PATH: &str = "<builtin>";
-
-/// What phase 7 defers to instantiation: an `@static_assert` whose condition depends
-/// on a generic parameter, a kernel uniform or element type that is a type parameter
-/// (E1514), a constant evaluation over a generic parameter, and E0809.
-pub const PER_INSTANCE_CHECKS: &str = "per-instance checks (pipeline phase 11)";
 
 /// The module path of the builtin declarations: a hidden module of the package `std`
 /// (whose `hash` and `fmt` modules the declarations name). No `import` can spell it.
@@ -199,6 +195,61 @@ pub fn check_declarations(
     let mut d = cx.d;
     d.diagnostics = scrub_builtin(std::mem::take(&mut d.diagnostics), &mut d.not_implemented);
     d
+}
+
+/// One instance of a body, for the per-instance checks of phase 11a: the owner, the
+/// substitution of its generic parameters, and the `instantiation` chain (innermost
+/// call site first).
+#[derive(Clone, Debug)]
+pub struct InstanceArgs {
+    pub owner: DefId,
+    pub subst: ty::Subst,
+    /// `(file, span)` of each use, innermost first.
+    pub labels: Vec<(usize, ingot_diag::source::Span)>,
+}
+
+/// The result of the per-instance checks of phase 11a.
+pub struct InstanceOutput {
+    pub declarations: Declarations,
+    pub diagnostics: Vec<Diagnostic>,
+    pub not_implemented: Vec<String>,
+}
+
+/// Run the checks that phase 7 defers to phase 11a: `@static_assert` conditions, lane
+/// and shuffle indices, lengths and alignments from constant generic arguments, and
+/// kernel types at a `dispatch`.
+#[allow(clippy::too_many_arguments)]
+pub fn check_instances(
+    sources: &Sources,
+    resolved: &Output,
+    declarations: Declarations,
+    bodies: &typed::Bodies,
+    target: &Target,
+    checked: usize,
+    interpreter: Option<&dyn interp::InterpreterFactory>,
+    instances: &[InstanceArgs],
+) -> InstanceOutput {
+    let mut cx = lowering::Cx::resume(
+        declarations,
+        &resolved.sema,
+        &resolved.packages,
+        sources,
+        target,
+        checked,
+        interpreter,
+    );
+    let first_diagnostic = cx.d.diagnostics.len();
+    let first_gap = cx.d.not_implemented.len();
+    cx.check_instance_checks(bodies, instances);
+    // Only what this pass added: earlier phases' diagnostics are already reported.
+    let mut diagnostics = cx.d.diagnostics.split_off(first_diagnostic);
+    let mut not_implemented = cx.d.not_implemented.split_off(first_gap);
+    let diagnostics = scrub_builtin(std::mem::take(&mut diagnostics), &mut not_implemented);
+    InstanceOutput {
+        declarations: cx.d,
+        diagnostics,
+        not_implemented,
+    }
 }
 
 /// The result of phase 7.

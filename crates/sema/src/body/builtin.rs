@@ -367,9 +367,7 @@ impl Checker<'_, '_, '_> {
                     }
                     // A condition over a type or constant generic parameter is checked
                     // for each instance in phase 11 (section 9).
-                    Err(crate::consteval::Fail::Generic) => {
-                        self.ni(crate::PER_INSTANCE_CHECKS);
-                    }
+                    Err(crate::consteval::Fail::Generic) => {}
                     Err(crate::consteval::Fail::Interpret(_reason)) => {
                         let ty = self.cx.d.types.bool_;
                         let body = self.out.clone();
@@ -395,7 +393,7 @@ impl Checker<'_, '_, '_> {
                                 self.err("E0405", "the condition does not fit its type", sp);
                             }
                             Err(crate::consteval::Fail::Generic) => {
-                                self.ni(crate::PER_INSTANCE_CHECKS);
+                                // Checked for each instance in phase 11a.
                             }
                             Err(crate::consteval::Fail::NotImplemented(m))
                             | Err(crate::consteval::Fail::Interpret(m)) => {
@@ -1636,21 +1634,24 @@ impl Checker<'_, '_, '_> {
                 }
                 let (m, elems) = match self.kind(it) {
                     TyKind::Array(el, len) if matches!(self.kind(el), TyKind::Int(IntTy::I32)) => {
-                        match len.as_len() {
-                            Some(n) => match &self.hir.expr(self.unparen(idx)).kind {
-                                ExprKind::ArrayLit { elems, .. } => (n, elems.clone()),
-                                _ => {
-                                    self.err(
-                                        "E1504",
-                                        "the index of `@shuffle` must be a constant `[M]i32` \
-                                         array literal",
-                                        self.span_of(idx),
-                                    );
-                                    return (poison, None);
-                                }
-                            },
-                            None => {
-                                self.ni("a `@shuffle` index whose length depends on a generic parameter");
+                        match &self.hir.expr(self.unparen(idx)).kind {
+                            ExprKind::ArrayLit { elems, .. } => {
+                                // A length that depends on a constant generic parameter
+                                // is checked for each instance in phase 11a; the array
+                                // literal gives its indices now.
+                                let n = match len.as_len() {
+                                    Some(n) => n,
+                                    None => elems.len() as i128,
+                                };
+                                (n, elems.clone())
+                            }
+                            _ => {
+                                self.err(
+                                    "E1504",
+                                    "the index of `@shuffle` must be a constant `[M]i32` \
+                                     array literal",
+                                    self.span_of(idx),
+                                );
                                 return (poison, None);
                             }
                         }
@@ -1688,9 +1689,12 @@ impl Checker<'_, '_, '_> {
                             self.errors += 1;
                             return (poison, None);
                         }
+                        Err(crate::consteval::Fail::Generic) => {
+                            // An index over a constant generic parameter is checked per
+                            // instance in phase 11a.
+                        }
                         Err(crate::consteval::Fail::NotImplemented(_))
-                        | Err(crate::consteval::Fail::Interpret(_))
-                        | Err(crate::consteval::Fail::Generic) => {
+                        | Err(crate::consteval::Fail::Interpret(_)) => {
                             bad = true;
                             break;
                         }

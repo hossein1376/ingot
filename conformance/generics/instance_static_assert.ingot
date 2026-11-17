@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 8
+
+fn check[const n: i64]() -> i64 {
+    @static_assert(n > 0, "positive"); //~ E0810
+    return n;
+}
+
+fn run() -> i64 {
+    return check.[0](); //~ related E0810 instantiation
+}

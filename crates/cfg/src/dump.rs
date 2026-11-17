@@ -213,6 +213,7 @@ impl<'a> Dumper<'a> {
             Const::Zero { name, .. } => format!("@zero {name}"),
             Const::Uninit { name, .. } => format!("@uninit {name}"),
             Const::Param { name, .. } => format!("const-param {name}"),
+            Const::Expr { name, .. } => format!("const-expr {name}"),
             Const::Named { name, .. } => format!("const {name}"),
             Const::Fn { name, .. } => format!("fn {name}"),
         }

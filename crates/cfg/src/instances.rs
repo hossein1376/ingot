@@ -67,6 +67,8 @@ pub struct Instance {
     pub key: InstanceKey,
     pub depth: usize,
     pub mangled: String,
+    /// The `instantiation` chain, innermost call site first.
+    pub labels: Vec<(usize, Span)>,
 }
 
 /// What phase 11a found.
@@ -272,6 +274,30 @@ impl<'a> Discovery<'a> {
             self.add_chain(&mut d, &parent, span);
             diagnostics.push(d);
         }
+        // E0806 for an operation that is constant only after substitution; the
+        // labels name the call sites of its instance.
+        for key in self.depth.keys() {
+            if !matches!(key.body, InstanceBody::Item)
+                || !key
+                    .subst
+                    .map
+                    .values()
+                    .any(|a| matches!(a, GenericArg::Const(_)))
+            {
+                continue;
+            }
+            let mut found = crate::removal::check_instance(
+                self.decls,
+                self.sources,
+                self.cfgs,
+                key.owner,
+                &key.subst,
+            );
+            for d in &mut found {
+                self.add_instance_labels(d, key);
+            }
+            diagnostics.extend(found);
+        }
         let mut instances: Vec<Instance> = self
             .depth
             .iter()
@@ -279,6 +305,7 @@ impl<'a> Discovery<'a> {
                 key: key.clone(),
                 depth: *depth,
                 mangled: self.mangle(key),
+                labels: self.chain(key),
             })
             .collect();
         instances.sort_by(|a, b| a.mangled.cmp(&b.mangled));
@@ -287,6 +314,24 @@ impl<'a> Discovery<'a> {
             diagnostics,
             not_implemented: self.not_implemented,
         }
+    }
+
+    fn add_instance_labels(&self, d: &mut Diagnostic, key: &InstanceKey) {
+        for (file, span) in self.chain(key) {
+            let source = self.sources.get(file);
+            d.relate_in("instantiation", &source.path, span);
+        }
+    }
+
+    /// The call sites from `key` up to its root, innermost first.
+    fn chain(&self, key: &InstanceKey) -> Vec<(usize, Span)> {
+        let mut out = Vec::new();
+        let mut cur = key;
+        while let Some((parent, span)) = self.parent.get(cur) {
+            out.push((self.file_of(parent.owner), *span));
+            cur = parent;
+        }
+        out
     }
 
     /// The `instantiation` labels of the shortest chain, innermost first.
@@ -951,6 +996,39 @@ fn spell_args(decls: &Declarations, sema: &Sema, args: &[GenericArg]) -> String 
     out
 }
 
+/// The one-to-one spelling of a constant-expression tree, for mangling.
+pub fn spell_const_expr(
+    decls: &Declarations,
+    sema: &Sema,
+    id: ingot_sema::ty::ConstExprId,
+) -> String {
+    use ingot_sema::ty::ConstExpr;
+    match decls.types.const_expr(id) {
+        ConstExpr::Int { ty, value } => format!("i{}{}", ty.name(), value),
+        ConstExpr::Bool(b) => format!("b{}", u8::from(*b)),
+        ConstExpr::Param(p) => format!("g[{}]", item_path(sema, decls, *p)),
+        ConstExpr::Unary { op, expr } => {
+            format!("u{:?}({})", op, spell_const_expr(decls, sema, *expr))
+        }
+        ConstExpr::Binary { op, lhs, rhs } => format!(
+            "o{:?}({},{})",
+            op,
+            spell_const_expr(decls, sema, *lhs),
+            spell_const_expr(decls, sema, *rhs)
+        ),
+        ConstExpr::Cast { to, expr } => format!(
+            "cast{}({})",
+            to.name(),
+            spell_const_expr(decls, sema, *expr)
+        ),
+        ConstExpr::Layout { size, ty } => format!(
+            "{}({})",
+            if *size { "sizeof" } else { "alignof" },
+            spell_type(decls, sema, *ty)
+        ),
+    }
+}
+
 fn spell_arg(decls: &Declarations, sema: &Sema, arg: &GenericArg) -> String {
     match arg {
         GenericArg::Ty(t) => spell_type(decls, sema, *t),
@@ -959,6 +1037,9 @@ fn spell_arg(decls: &Declarations, sema: &Sema, arg: &GenericArg) -> String {
             ConstValue::Bool(b) => format!("cbool{}", u8::from(*b)),
         },
         GenericArg::Const(ConstArg::Param(p)) => format!("cp{}", sema.def(*p).name),
+        GenericArg::Const(ConstArg::Expr(id)) => {
+            format!("ce[{}]", spell_const_expr(decls, sema, *id))
+        }
         GenericArg::Const(ConstArg::Poison) => "cp?".to_string(),
     }
 }
@@ -1083,6 +1164,7 @@ fn spell_const(decls: &Declarations, sema: &Sema, c: &ConstArg) -> String {
         ConstArg::Value(ConstValue::Int { ty, value }) => format!("{}{}", ty.name(), value),
         ConstArg::Value(ConstValue::Bool(b)) => format!("bool{}", u8::from(*b)),
         ConstArg::Param(p) => format!("g[{}]", item_path(sema, decls, *p)),
+        ConstArg::Expr(id) => format!("e[{}]", spell_const_expr(decls, sema, *id)),
         ConstArg::Poison => "?".to_string(),
     }
 }

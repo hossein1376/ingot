@@ -446,8 +446,20 @@ impl<'a, 'i> Cx<'a, 'i> {
     fn align_attr(&mut self, e: hir::ExprId) -> Option<AlignAttr> {
         let span = self.pkgs[self.cur.pkg].expr(e).span;
         match self.eval_signature_const(e, ValTy::Int(IntTy::I64)) {
-            Ok(ConstValue::Int { value, .. }) => Some(AlignAttr { value, span }),
+            Ok(ConstValue::Int { value, .. }) => Some(AlignAttr {
+                value,
+                span,
+                raw: None,
+            }),
             Ok(_) => None,
+            Err(Fail::Generic) => {
+                let owner = self.sig_stack.last().copied().or(self.body_owner)?;
+                Some(AlignAttr {
+                    value: 0,
+                    span,
+                    raw: Some((owner, e)),
+                })
+            }
             Err(Fail::OutOfRange(_)) => {
                 self.note_failure(&Fail::OutOfRange(span));
                 None
@@ -904,21 +916,30 @@ impl<'a, 'i> Cx<'a, 'i> {
         };
         // 01-core §3: a length or size that depends on a constant generic argument is
         // checked where the type is concrete. The check runs after every signature
-        // exists (check_obligations), for a type in a signature or in a body.
-        if !self.d.types.has_params(lowered)
-            && !self.d.types.has_poison(lowered)
+        // exists (check_obligations) for a concrete type, and per instance in phase 11a
+        // for one that still mentions a parameter.
+        if !self.d.types.has_poison(lowered)
             && matches!(
                 self.d.types.kind(lowered),
                 TyKind::Array(..) | TyKind::Adt(..)
             )
         {
-            let length_span = self.invalid_argument_span(ty, lowered);
-            self.d.concrete_types.push(crate::sigs::ConcreteType {
+            let length_span = match &ty.kind {
+                hir::TyKind::Array { len, .. } => Some(self.pkgs[self.cur.pkg].expr(*len).span),
+                _ => self.invalid_argument_span(ty, lowered),
+            };
+            let c = crate::sigs::ConcreteType {
                 file: self.cur.file,
                 span: ty.span,
+                owner: self.body_owner.or(self.sig_stack.last().copied()),
                 length_span,
                 ty: lowered,
-            });
+            };
+            if self.d.types.has_params(lowered) {
+                self.d.generic_types.push(c);
+            } else {
+                self.d.concrete_types.push(c);
+            }
         }
         lowered
     }

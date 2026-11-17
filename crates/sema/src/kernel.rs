@@ -1013,10 +1013,7 @@ impl Cx<'_, '_> {
         }
         match self.eval_expr(pkg, file, e, None) {
             Ok(_) => Constness::Constant,
-            Err(crate::consteval::Fail::Generic) => {
-                self.ni(crate::PER_INSTANCE_CHECKS);
-                Constness::Generic
-            }
+            Err(crate::consteval::Fail::Generic) => Constness::Constant,
             Err(crate::consteval::Fail::Reported) => Constness::AlreadyReported,
             Err(crate::consteval::Fail::OutOfRange(_)) => Constness::AlreadyReported,
             Err(crate::consteval::Fail::NotImplemented(m))
@@ -1047,7 +1044,6 @@ fn finding(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Constness {
     Constant,
-    Generic,
     Runtime,
     Unimplemented,
     AlreadyReported,

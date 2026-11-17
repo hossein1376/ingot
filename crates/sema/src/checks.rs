@@ -988,10 +988,7 @@ impl Cx<'_, '_> {
             return false;
         }
         match self.d.types.kind(t).clone() {
-            TyKind::Param(_) => {
-                self.ni(crate::PER_INSTANCE_CHECKS);
-                true
-            }
+            TyKind::Param(_) => true,
             TyKind::Vector(l, n) => {
                 n <= 4
                     && match l {
@@ -1847,6 +1844,10 @@ impl Cx<'_, '_> {
     /// E0515: the argument of `align(...)` is a power of two, not below the natural
     /// alignment of what it applies to.
     fn check_align(&mut self, file: usize, a: AlignAttr, natural: Result<u64, LayoutError>) {
+        if a.raw.is_some() {
+            // A value from a constant generic argument: checked per instance.
+            return;
+        }
         match valid_align(a.value) {
             None => {
                 self.error(
@@ -1869,10 +1870,9 @@ impl Cx<'_, '_> {
                     );
                 }
                 Ok(_) => {}
-                Err(LayoutError::Params) => self.ni(
-                    "a check of `align(...)` against the natural alignment of a type that \
-                     depends on a generic parameter (computed per instance)",
-                ),
+                // Checked per instance (phase 11a) when the natural alignment depends on
+                // a generic parameter.
+                Err(LayoutError::Params) => {}
                 Err(LayoutError::Unspecified(m)) => self.ni(m),
                 Err(LayoutError::Poison | LayoutError::Cycle) => {}
             },
@@ -2001,7 +2001,21 @@ impl Cx<'_, '_> {
     /// E0521 for a concrete type: a length from a constant generic argument that is
     /// negative or above 2^62, or a size above 2^62 bytes (01-core §3, the catalog).
     fn check_concrete_type(&mut self, c: &ConcreteType) {
-        match self.d.layout_of(c.ty) {
+        let ty = self.d.instantiate(c.ty, &Subst::new());
+        if let Some(trap) = self.concrete_expr_trap(ty, &mut BTreeSet::new(), 0) {
+            self.error(
+                "E0806",
+                format!(
+                    "constant evaluation trapped: {}: {}",
+                    trap.code(),
+                    trap.text()
+                ),
+                c.file,
+                c.length_span.unwrap_or(c.span),
+            );
+            return;
+        }
+        match self.d.layout_of(ty) {
             Ok(layout) => {
                 if layout.size > 1 << 62 {
                     self.error(
@@ -2022,7 +2036,7 @@ impl Cx<'_, '_> {
             }
             Err(LayoutError::Poison) => {
                 let mut seen = BTreeSet::new();
-                if let Some(value) = self.invalid_array_length(c.ty, &mut seen, 0) {
+                if let Some(value) = self.invalid_array_length(ty, &mut seen, 0) {
                     let message = if value < 0 {
                         format!("an array cannot have the negative length {value}")
                     } else {
@@ -2034,6 +2048,33 @@ impl Cx<'_, '_> {
             }
             Err(_) => {}
         }
+    }
+
+    /// A length expression in `ty` that is concrete and traps when evaluated.
+    fn concrete_expr_trap(
+        &mut self,
+        ty: TypeId,
+        seen: &mut BTreeSet<TypeId>,
+        depth: u32,
+    ) -> Option<crate::consteval::Trap> {
+        if depth > 64 || !seen.insert(ty) {
+            return None;
+        }
+        if let TyKind::Array(_, ConstArg::Expr(id)) = self.d.types.kind(ty)
+            && let Some(trap) = self.d.types.expr_trap(*id)
+        {
+            return Some(trap);
+        }
+        let children: Vec<TypeId> = match self.d.types.kind(ty).clone() {
+            TyKind::Adt(def, args) => self.d.adt_part_types(def, &args).unwrap_or_default(),
+            _ => self.d.types.children(ty),
+        };
+        for child in children {
+            if let Some(trap) = self.concrete_expr_trap(child, seen, depth + 1) {
+                return Some(trap);
+            }
+        }
+        None
     }
 
     /// A length in `ty` that is negative or above 2^62, after substitution.

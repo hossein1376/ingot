@@ -6,6 +6,7 @@
 //! generic type are equal when their arguments are.
 
 use crate::defs::{DefId, Sema};
+use ingot_syntax::ast::BinOp;
 use ingot_syntax::token::ScalarTy;
 use std::collections::BTreeMap;
 
@@ -162,12 +163,50 @@ pub enum ConstValue {
     Bool(bool),
 }
 
+/// The identity of an interned constant-expression tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConstExprId(pub u32);
+
+/// A length or constant argument written as an expression over constant parameters.
+/// Interning makes two types equal exactly when their trees are equal.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ConstExpr {
+    Int {
+        ty: IntTy,
+        value: i128,
+    },
+    Bool(bool),
+    /// A constant generic parameter, known per instance.
+    Param(DefId),
+    Unary {
+        op: ingot_syntax::ast::UnOp,
+        expr: ConstExprId,
+    },
+    Binary {
+        op: ingot_syntax::ast::BinOp,
+        lhs: ConstExprId,
+        rhs: ConstExprId,
+    },
+    /// `e as ty` between integer types.
+    Cast {
+        to: IntTy,
+        expr: ConstExprId,
+    },
+    /// `@sizeof(T)` (`size`) or `@alignof(T)`; folded once `ty` is concrete.
+    Layout {
+        size: bool,
+        ty: TypeId,
+    },
+}
+
 /// The length of an array or the value of a constant generic argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConstArg {
     Value(ConstValue),
     /// A constant generic parameter (`N` in `[N]T`), known per instance.
     Param(DefId),
+    /// An expression over constant generic parameters, as an interned tree.
+    Expr(ConstExprId),
     Poison,
 }
 
@@ -257,16 +296,6 @@ pub struct Subst {
     pub map: BTreeMap<DefId, GenericArg>,
 }
 
-fn subst_const(c: ConstArg, s: &Subst) -> ConstArg {
-    match c {
-        ConstArg::Param(p) => match s.get(p) {
-            Some(GenericArg::Const(v)) => *v,
-            _ => c,
-        },
-        _ => c,
-    }
-}
-
 impl Subst {
     pub fn new() -> Subst {
         Subst::default()
@@ -293,6 +322,8 @@ pub struct TypeTable {
     pub void: TypeId,
     pub never: TypeId,
     pub i64_: TypeId,
+    const_exprs: Vec<ConstExpr>,
+    const_expr_ids: BTreeMap<ConstExpr, ConstExprId>,
 }
 
 impl Default for TypeTable {
@@ -311,6 +342,8 @@ impl TypeTable {
             void: TypeId(0),
             never: TypeId(0),
             i64_: TypeId(0),
+            const_exprs: Vec::new(),
+            const_expr_ids: BTreeMap::new(),
         };
         t.poison = t.intern(TyKind::Poison);
         t.bool_ = t.intern(TyKind::Bool);
@@ -318,6 +351,198 @@ impl TypeTable {
         t.never = t.intern(TyKind::Never);
         t.i64_ = t.intern(TyKind::Int(IntTy::I64));
         t
+    }
+
+    /// Intern a constant-expression tree; equal trees have one id.
+    pub fn intern_expr(&mut self, expr: ConstExpr) -> ConstExprId {
+        if let Some(&id) = self.const_expr_ids.get(&expr) {
+            return id;
+        }
+        let id = ConstExprId(self.const_exprs.len() as u32);
+        self.const_exprs.push(expr.clone());
+        self.const_expr_ids.insert(expr, id);
+        id
+    }
+
+    pub fn const_expr(&self, id: ConstExprId) -> &ConstExpr {
+        &self.const_exprs[id.0 as usize]
+    }
+
+    /// The value of a constant argument, when it has one (an expression tree with a
+    /// folded value).
+    pub fn const_arg_value(&self, c: ConstArg) -> Option<ConstValue> {
+        match c {
+            ConstArg::Value(v) => Some(v),
+            ConstArg::Expr(id) if !self.expr_has_params(id) => self.fold_expr(id),
+            _ => None,
+        }
+    }
+
+    /// Whether a constant-expression tree still mentions a parameter.
+    fn expr_has_params(&self, id: ConstExprId) -> bool {
+        match self.const_expr(id) {
+            ConstExpr::Param(_) => true,
+            ConstExpr::Unary { expr, .. } => self.expr_has_params(*expr),
+            ConstExpr::Binary { lhs, rhs, .. } => {
+                self.expr_has_params(*lhs) || self.expr_has_params(*rhs)
+            }
+            ConstExpr::Cast { expr, .. } => self.expr_has_params(*expr),
+            ConstExpr::Layout { ty, .. } => self.has_params(*ty),
+            ConstExpr::Int { .. } | ConstExpr::Bool(_) => false,
+        }
+    }
+
+    fn expr_of_value(&mut self, value: ConstValue) -> ConstExprId {
+        self.intern_expr(match value {
+            ConstValue::Int { ty, value } => ConstExpr::Int { ty, value },
+            ConstValue::Bool(b) => ConstExpr::Bool(b),
+        })
+    }
+
+    fn finish_expr(&mut self, id: ConstExprId) -> ConstArg {
+        if !self.expr_has_params(id)
+            && let Some(value) = self.fold_expr(id)
+        {
+            return ConstArg::Value(value);
+        }
+        ConstArg::Expr(id)
+    }
+
+    /// Substitute constant parameters in a tree and fold it when no parameter is left.
+    fn subst_const(&mut self, c: ConstArg, s: &Subst) -> ConstArg {
+        match c {
+            ConstArg::Param(p) => match s.get(p) {
+                Some(GenericArg::Const(ConstArg::Value(v))) => ConstArg::Value(*v),
+                Some(GenericArg::Const(ConstArg::Param(q))) => ConstArg::Param(*q),
+                Some(GenericArg::Const(ConstArg::Expr(id))) => self.subst_expr(*id, s),
+                Some(GenericArg::Const(ConstArg::Poison)) => ConstArg::Poison,
+                _ => ConstArg::Param(p),
+            },
+            ConstArg::Expr(id) => self.subst_expr(id, s),
+            other => other,
+        }
+    }
+
+    fn subst_expr(&mut self, id: ConstExprId, s: &Subst) -> ConstArg {
+        let node = self.const_expr(id).clone();
+        let rebuilt = match node {
+            ConstExpr::Int { .. } | ConstExpr::Bool(_) => return ConstArg::Expr(id),
+            ConstExpr::Param(p) => {
+                return self.subst_const(ConstArg::Param(p), s);
+            }
+            ConstExpr::Unary { op, expr } => {
+                let expr = self.subst_expr_id(expr, s);
+                ConstExpr::Unary { op, expr }
+            }
+            ConstExpr::Binary { op, lhs, rhs } => ConstExpr::Binary {
+                op,
+                lhs: self.subst_expr_id(lhs, s),
+                rhs: self.subst_expr_id(rhs, s),
+            },
+            ConstExpr::Cast { to, expr } => ConstExpr::Cast {
+                to,
+                expr: self.subst_expr_id(expr, s),
+            },
+            ConstExpr::Layout { size, ty } => ConstExpr::Layout {
+                size,
+                ty: self.subst(ty, s),
+            },
+        };
+        let id = self.intern_expr(rebuilt);
+        self.finish_expr(id)
+    }
+
+    fn subst_expr_id(&mut self, id: ConstExprId, s: &Subst) -> ConstExprId {
+        match self.subst_expr(id, s) {
+            ConstArg::Expr(id) => id,
+            ConstArg::Value(v) => self.expr_of_value(v),
+            ConstArg::Param(p) => self.intern_expr(ConstExpr::Param(p)),
+            ConstArg::Poison => id,
+        }
+    }
+
+    /// The value of a tree with no parameters, when its operations do not trap.
+    fn fold_expr(&self, id: ConstExprId) -> Option<ConstValue> {
+        self.fold_expr_result(id)?.ok()
+    }
+
+    /// A trap in a tree with no parameters, for E0806 at a concrete type.
+    pub fn expr_trap(&self, id: ConstExprId) -> Option<crate::consteval::Trap> {
+        match self.fold_expr_result(id) {
+            Some(Err(trap)) => Some(trap),
+            _ => None,
+        }
+    }
+
+    fn fold_expr_result(
+        &self,
+        id: ConstExprId,
+    ) -> Option<Result<ConstValue, crate::consteval::Trap>> {
+        match self.const_expr(id) {
+            ConstExpr::Int { ty, value } => Some(Ok(ConstValue::Int {
+                ty: *ty,
+                value: *value,
+            })),
+            ConstExpr::Bool(b) => Some(Ok(ConstValue::Bool(*b))),
+            ConstExpr::Param(_) => None,
+            ConstExpr::Unary { op, expr } => {
+                let v = self.fold_expr_result(*expr)?.ok()?;
+                match v {
+                    ConstValue::Int { ty, value } => {
+                        match crate::consteval::int_unary(*op, ty, value) {
+                            Ok(value) => Some(Ok(ConstValue::Int { ty, value })),
+                            Err(trap) => Some(Err(trap)),
+                        }
+                    }
+                    ConstValue::Bool(b) if *op == ingot_syntax::ast::UnOp::Not => {
+                        Some(Ok(ConstValue::Bool(!b)))
+                    }
+                    ConstValue::Bool(_) => None,
+                }
+            }
+            ConstExpr::Binary { op, lhs, rhs } => {
+                let a = self.fold_expr_result(*lhs)?.ok()?;
+                let b = self.fold_expr_result(*rhs)?.ok()?;
+                match (a, b) {
+                    (ConstValue::Int { ty, value: x, .. }, ConstValue::Int { value: y, .. }) => {
+                        match op {
+                            BinOp::Eq => Some(Ok(ConstValue::Bool(x == y))),
+                            BinOp::Ne => Some(Ok(ConstValue::Bool(x != y))),
+                            BinOp::Lt => Some(Ok(ConstValue::Bool(x < y))),
+                            BinOp::Le => Some(Ok(ConstValue::Bool(x <= y))),
+                            BinOp::Gt => Some(Ok(ConstValue::Bool(x > y))),
+                            BinOp::Ge => Some(Ok(ConstValue::Bool(x >= y))),
+                            _ => match crate::consteval::int_binary(*op, ty, x, y) {
+                                Ok(value) => Some(Ok(ConstValue::Int { ty, value })),
+                                Err(trap) => Some(Err(trap)),
+                            },
+                        }
+                    }
+                    (ConstValue::Bool(x), ConstValue::Bool(y)) => match op {
+                        BinOp::Eq => Some(Ok(ConstValue::Bool(x == y))),
+                        BinOp::Ne => Some(Ok(ConstValue::Bool(x != y))),
+                        BinOp::And => Some(Ok(ConstValue::Bool(x && y))),
+                        BinOp::Or => Some(Ok(ConstValue::Bool(x || y))),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            ConstExpr::Cast { to, expr } => match self.fold_expr_result(*expr)?.ok()? {
+                ConstValue::Int { ty, value } => {
+                    if crate::consteval::lossless(ty, *to) {
+                        Some(Ok(ConstValue::Int { ty: *to, value }))
+                    } else {
+                        None
+                    }
+                }
+                ConstValue::Bool(b) => Some(Ok(ConstValue::Int {
+                    ty: *to,
+                    value: i128::from(b),
+                })),
+            },
+            ConstExpr::Layout { .. } => None,
+        }
     }
 
     pub fn intern(&mut self, kind: TyKind) -> TypeId {
@@ -408,9 +633,14 @@ impl TypeTable {
         self.any(id, &mut seen, &mut |k| match k {
             TyKind::Param(_) => true,
             TyKind::Array(_, ConstArg::Param(_)) => true,
-            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) | TyKind::Closure(_, _, a) => a
-                .iter()
-                .any(|g| matches!(g, GenericArg::Const(ConstArg::Param(_)))),
+            TyKind::Array(_, ConstArg::Expr(id)) => self.expr_has_params(*id),
+            TyKind::Adt(_, a) | TyKind::Dyn(_, _, a) | TyKind::Closure(_, _, a) => {
+                a.iter().any(|g| match g {
+                    GenericArg::Const(ConstArg::Param(_)) => true,
+                    GenericArg::Const(ConstArg::Expr(id)) => self.expr_has_params(*id),
+                    _ => false,
+                })
+            }
             _ => false,
         })
     }
@@ -514,13 +744,7 @@ impl TypeTable {
         let rebuilt = match kind {
             TyKind::Array(t, n) => {
                 let t = self.subst_consts(t, s);
-                let n = match n {
-                    ConstArg::Param(p) => match s.get(p) {
-                        Some(GenericArg::Const(c)) => *c,
-                        _ => n,
-                    },
-                    n => n,
-                };
+                let n = self.subst_const(n, s);
                 TyKind::Array(t, n)
             }
             TyKind::Tuple(ts) => {
@@ -545,7 +769,7 @@ impl TypeTable {
                 args.into_iter()
                     .map(|a| match a {
                         GenericArg::Ty(t) => GenericArg::Ty(self.subst(t, s)),
-                        GenericArg::Const(c) => GenericArg::Const(subst_const(c, s)),
+                        GenericArg::Const(c) => GenericArg::Const(self.subst_const(c, s)),
                     })
                     .collect(),
             ),
@@ -559,11 +783,7 @@ impl TypeTable {
         args.into_iter()
             .map(|g| match g {
                 GenericArg::Ty(t) => GenericArg::Ty(self.subst_consts(t, s)),
-                GenericArg::Const(ConstArg::Param(p)) => match s.get(p) {
-                    Some(GenericArg::Const(c)) => GenericArg::Const(*c),
-                    _ => GenericArg::Const(ConstArg::Param(p)),
-                },
-                c => c,
+                GenericArg::Const(c) => GenericArg::Const(self.subst_const(c, s)),
             })
             .collect()
     }
@@ -584,11 +804,7 @@ impl TypeTable {
     pub fn subst_arg(&mut self, arg: &GenericArg, s: &Subst) -> GenericArg {
         match arg {
             GenericArg::Ty(t) => GenericArg::Ty(self.subst(*t, s)),
-            GenericArg::Const(ConstArg::Param(p)) => match s.get(*p) {
-                Some(GenericArg::Const(c)) => GenericArg::Const(*c),
-                _ => arg.clone(),
-            },
-            GenericArg::Const(_) => arg.clone(),
+            GenericArg::Const(c) => GenericArg::Const(self.subst_const(*c, s)),
         }
     }
 
@@ -729,11 +945,86 @@ impl TypeTable {
         out.push(']');
     }
 
+    /// Print a constant-expression tree as written.
+    pub fn display_const_expr(&self, sema: &Sema, id: ConstExprId) -> String {
+        let mut out = String::new();
+        self.write_expr(sema, id, &mut out);
+        out
+    }
+
+    fn write_expr(&self, sema: &Sema, id: ConstExprId, out: &mut String) {
+        self.write_expr_at(sema, id, 0, out);
+    }
+
+    fn write_expr_at(&self, sema: &Sema, id: ConstExprId, parent: u8, out: &mut String) {
+        let prec = |op: BinOp| match op {
+            BinOp::Or => 1,
+            BinOp::And => 2,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
+            BinOp::BitOr => 4,
+            BinOp::BitXor => 5,
+            BinOp::BitAnd => 6,
+            BinOp::Shl | BinOp::Shr => 7,
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::AddWrap
+            | BinOp::SubWrap
+            | BinOp::AddSat
+            | BinOp::SubSat => 8,
+            BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::MulWrap | BinOp::MulSat => 9,
+        };
+        let mine = match self.const_expr(id) {
+            ConstExpr::Binary { op, .. } => prec(*op),
+            ConstExpr::Unary { .. } | ConstExpr::Cast { .. } => 10,
+            _ => 11,
+        };
+        let parens = mine < parent;
+        if parens {
+            out.push('(');
+        }
+        match self.const_expr(id) {
+            ConstExpr::Int { value, .. } => out.push_str(&value.to_string()),
+            ConstExpr::Bool(b) => out.push_str(&b.to_string()),
+            ConstExpr::Param(d) => out.push_str(&sema.def(*d).name),
+            ConstExpr::Unary { op, expr } => {
+                out.push_str(match op {
+                    ingot_syntax::ast::UnOp::Neg => "-",
+                    ingot_syntax::ast::UnOp::NegWrap => "-%",
+                    ingot_syntax::ast::UnOp::Not => "!",
+                    ingot_syntax::ast::UnOp::BitNot => "~",
+                    _ => "?",
+                });
+                self.write_expr_at(sema, *expr, 10, out);
+            }
+            ConstExpr::Binary { op, lhs, rhs } => {
+                self.write_expr_at(sema, *lhs, prec(*op), out);
+                out.push(' ');
+                out.push_str(op.symbol());
+                out.push(' ');
+                self.write_expr_at(sema, *rhs, prec(*op) + 1, out);
+            }
+            ConstExpr::Cast { to, expr } => {
+                self.write_expr_at(sema, *expr, 10, out);
+                out.push_str(" as ");
+                out.push_str(to.name());
+            }
+            ConstExpr::Layout { size, ty } => {
+                out.push_str(if *size { "@sizeof(" } else { "@alignof(" });
+                out.push_str(&self.display(sema, *ty));
+                out.push(')');
+            }
+        }
+        if parens {
+            out.push(')');
+        }
+    }
+
     fn write_const(&self, sema: &Sema, c: &ConstArg, out: &mut String) {
         match c {
             ConstArg::Value(ConstValue::Int { value, .. }) => out.push_str(&value.to_string()),
             ConstArg::Value(ConstValue::Bool(b)) => out.push_str(&b.to_string()),
             ConstArg::Param(d) => out.push_str(&sema.def(*d).name),
+            ConstArg::Expr(id) => self.write_expr(sema, *id, out),
             ConstArg::Poison => out.push_str("{error}"),
         }
     }
