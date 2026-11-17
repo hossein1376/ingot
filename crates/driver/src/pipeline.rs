@@ -291,15 +291,15 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             &cfgs,
             options.roots,
         );
-        for d in discovered.diagnostics {
+        for d in &discovered.diagnostics {
             let duplicate = diagnostics.iter().any(|e| {
                 e.code == d.code && e.file == d.file && e.span == d.span && e.message == d.message
             });
             if !duplicate {
-                diagnostics.push(d);
+                diagnostics.push(d.clone());
             }
         }
-        not_implemented.extend(discovered.not_implemented);
+        not_implemented.extend(discovered.not_implemented.iter().cloned());
         // Per-instance checks that need typed bodies or the interpreter (E0810,
         // E0521, E0515, E1502, E1504, E1514).
         let scopes: Vec<ingot_sema::InstanceArgs> = discovered
@@ -330,6 +330,21 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
                 .into_iter()
                 .filter(|m| m != UNCHECKED),
         );
+        cost.extend(ingot_cfg::cost::park_points(
+            &mut bodies.declarations,
+            &output.sema,
+            &cfgs,
+            &discovered,
+        ));
+        cost.sort_by(|a, b| {
+            (a.fn_name.clone(), a.file, a.span.start, a.span.end, a.kind).cmp(&(
+                b.fn_name.clone(),
+                b.file,
+                b.span.start,
+                b.span.end,
+                b.kind,
+            ))
+        });
         instances = discovered.instances;
         front_end = Some(FrontEnd {
             resolved: output,

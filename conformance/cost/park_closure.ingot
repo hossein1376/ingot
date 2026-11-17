@@ -1,0 +1,24 @@
+//! expect: cost
+//! section: 31
+
+fn work() -> void {}
+
+fn parker() -> void {
+    scope s { //~ park_point
+        spawn work() in s; //~ task_spawn
+    }
+}
+
+fn apply(f: &dyn Fn() -> void) -> void {
+    f(); //~ indirect_call //~ park_point
+}
+
+fn apply_bound[F: Fn() -> void](f: F) -> void {
+    f(); //~ park_point
+}
+
+fn run() -> void {
+    let f = fn []() -> void { parker(); }; //~ park_point
+    apply(&f); //~ park_point
+    apply_bound(f); //~ park_point
+}

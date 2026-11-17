@@ -76,6 +76,8 @@ pub struct Instance {
 pub struct Instances {
     /// The finished set, sorted by `mangled`.
     pub instances: Vec<Instance>,
+    /// Call edges between instances: `(caller, callee, span in the caller)`.
+    pub call_edges: Vec<(InstanceKey, InstanceKey, Span)>,
     pub diagnostics: Vec<Diagnostic>,
     pub not_implemented: Vec<String>,
 }
@@ -105,6 +107,7 @@ pub fn discover(
         edge_cache: BTreeMap::new(),
         extra_cfgs: BTreeMap::new(),
         table_spans: BTreeMap::new(),
+        call_edges: Vec::new(),
         not_implemented: Vec::new(),
     };
     d.add_roots(roots);
@@ -136,6 +139,8 @@ struct Discovery<'a> {
     extra_cfgs: BTreeMap<crate::model::CfgKey, Cfg>,
     /// The source span of a method table, for its methods' `instantiation` labels.
     table_spans: BTreeMap<InstanceKey, Span>,
+    /// Edges created by call terminators only (not values and coercions).
+    call_edges: Vec<(InstanceKey, InstanceKey, Span)>,
     not_implemented: Vec<String>,
 }
 
@@ -298,6 +303,7 @@ impl<'a> Discovery<'a> {
             }
             diagnostics.extend(found);
         }
+        let call_edges = self.call_edges.clone();
         let mut instances: Vec<Instance> = self
             .depth
             .iter()
@@ -311,6 +317,7 @@ impl<'a> Discovery<'a> {
         instances.sort_by(|a, b| a.mangled.cmp(&b.mangled));
         Instances {
             instances,
+            call_edges,
             diagnostics,
             not_implemented: self.not_implemented,
         }
@@ -428,7 +435,13 @@ impl<'a> Discovery<'a> {
             let span = block.term_span;
             match &block.term {
                 Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
+                    let before = edges.len();
                     self.call_edges(key.owner, &cfg, &subst, target, span, &mut edges);
+                    if matches!(&block.term, Terminator::Call { .. }) {
+                        for edge in &edges[before..] {
+                            self.call_edges.push((key.clone(), edge.0.clone(), edge.1));
+                        }
+                    }
                     if let Terminator::Spawn { target, .. } = &block.term
                         && self.spawn_needs_thunk(target)
                     {
@@ -470,6 +483,7 @@ impl<'a> Discovery<'a> {
             self.edge_cache.insert(key.clone(), edges.clone());
             return edges;
         };
+        let call_callees = self.call_callee_ids(body.package);
         for (e, info) in &body.exprs {
             let span = self.body_expr_span(&body, *e);
             if let Some(c) = &info.coerce {
@@ -495,6 +509,7 @@ impl<'a> Discovery<'a> {
                 self.closure_and_fn_table(key.owner, fd, &subst, span, &mut edges);
             }
             if let ExprRes::Fn(fn_ref) = &info.res
+                && !call_callees.contains(e)
                 && let Some((child, _)) = self.callee(fn_ref, &subst)
             {
                 edges.push((child, span));
@@ -502,6 +517,32 @@ impl<'a> Discovery<'a> {
         }
         self.edge_cache.insert(key.clone(), edges.clone());
         edges
+    }
+
+    /// The expressions used as call callees, including the base of a generic
+    /// application or parentheses. Their edge is the call's, not a separate value edge.
+    fn call_callee_ids(
+        &self,
+        package: usize,
+    ) -> std::collections::BTreeSet<ingot_sema::hir::ExprId> {
+        use ingot_sema::hir::ExprKind;
+        let mut out = std::collections::BTreeSet::new();
+        let Some(pkg) = self.packages.get(package) else {
+            return out;
+        };
+        for expr in &pkg.exprs {
+            if let ExprKind::Call { callee, .. } = &expr.kind {
+                let mut e = *callee;
+                loop {
+                    out.insert(e);
+                    match &pkg.expr(e).kind {
+                        ExprKind::TypeApply { base, .. } | ExprKind::Paren(base) => e = *base,
+                        _ => break,
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn body_expr_span(

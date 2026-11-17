@@ -163,14 +163,6 @@ pub fn failure_summary(command: &str, started: Instant) -> String {
     )
 }
 
-/// `ingot cost`: what the survivors of phase 10 are (`tools.md` §4, spec §31).
-///
-/// The `ingot cost` rows other than checks (`alloc`, `indirect_call`, `copy`,
-/// `task_spawn`, `lock`, `park_point`) are not in this step. They are one
-/// `not implemented` entry, so the command exits with status 2 until they exist.
-pub const COST_UNIMPLEMENTED: &str =
-    "cost items other than checks (alloc, indirect_call, copy, task_spawn, lock, park_point)";
-
 /// `ingot cost [PATH] [--fn NAME]` as lines and a status.
 pub fn cost(path: &Path, function: Option<&str>, overlays: &Overlays) -> Output {
     let started = Instant::now();
@@ -249,7 +241,6 @@ pub fn cost(path: &Path, function: Option<&str>, overlays: &Overlays) -> Output 
         }
     }
     let mut not_implemented = analysis.not_implemented.clone();
-    not_implemented.push(COST_UNIMPLEMENTED.to_string());
     not_implemented.sort();
     not_implemented.dedup();
     let mut list = String::new();
@@ -270,7 +261,7 @@ pub fn cost(path: &Path, function: Option<&str>, overlays: &Overlays) -> Output 
     let exit = if !analysis.diagnostics.is_empty() {
         1
     } else {
-        2
+        0
     };
     Output {
         lines,

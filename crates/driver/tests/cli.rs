@@ -385,14 +385,14 @@ fn the_output_is_the_same_on_every_run() {
 }
 
 #[test]
-fn cost_prints_surviving_checks_and_names_the_missing_kinds() {
+fn cost_prints_surviving_checks_and_exits_clean() {
     let dir = package(
         "cost",
         "name = \"app\"\n",
         "fn first(xs: []i64, i: i64) -> i64 {\n    return xs[i];\n}\n\nfn second() -> i64 {\n    return 2 + 3;\n}\n",
     );
     let o = ingot(&["cost", "--json"], &dir);
-    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    assert_eq!(o.status.code(), Some(0), "{}{}", stdout(&o), stderr(&o));
     let out = stdout(&o);
     assert!(
         out.contains("\"type\":\"cost\",\"kind\":\"bounds_check\",\"fn\":\"app.first\""),
@@ -401,11 +401,8 @@ fn cost_prints_surviving_checks_and_names_the_missing_kinds() {
     assert!(!out.contains("app.second"), "{out}");
     let summary = out.lines().last().unwrap();
     assert!(summary.contains("\"checks\":1"), "{summary}");
-    assert!(
-        summary.contains("cost items other than checks"),
-        "{summary}"
-    );
-    assert!(stderr(&o).contains("not implemented: cost items other than checks"));
+    assert!(summary.contains("\"not_implemented\":[]"), "{summary}");
+    assert!(!stderr(&o).contains("not implemented"), "{}", stderr(&o));
 
     let o = ingot(&["cost", "--json", "--fn", "app.second"], &dir);
     let out = stdout(&o);

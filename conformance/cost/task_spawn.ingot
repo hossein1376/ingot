@@ -4,7 +4,7 @@
 fn work() -> void {}
 
 fn run() -> void {
-    scope s {
+    scope s { //~ park_point
         spawn work() in s; //~ task_spawn
     }
 }

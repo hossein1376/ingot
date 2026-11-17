@@ -397,11 +397,7 @@ fn run_expectation(case: &Case) -> Result<(), String> {
                 format_markers(&diagnostics_markers(&analysis))
             ));
         }
-        let blocking: Vec<&String> = analysis
-            .not_implemented
-            .iter()
-            .filter(|entry| *entry != crate::commands::COST_UNIMPLEMENTED)
-            .collect();
+        let blocking: Vec<&String> = analysis.not_implemented.iter().collect();
         if !blocking.is_empty() {
             return Err(format!("not implemented: {blocking:?}"));
         }
@@ -537,9 +533,8 @@ fn diagnostics_markers(analysis: &Analysis) -> BTreeSet<Marker> {
         .collect()
 }
 
-/// The surviving check markers of a `cost` test. Only the four check kinds are
-/// compared (`conformance/README.md`); `scatter_check` is a cost line but has no
-/// marker.
+/// The cost markers of a `cost` test: every reported kind is compared
+/// (`conformance/README.md`).
 fn cost_markers(analysis: &Analysis) -> BTreeSet<Marker> {
     analysis
         .cost

@@ -11,7 +11,7 @@ use crate::removal::{CostItem, CostKind};
 use ingot_diag::source::Span;
 use ingot_sema::defs::{DefId, Sema};
 use ingot_sema::sigs::{Bound, Declarations, ItemSig};
-use ingot_sema::ty::{GenericArg, TyKind, TypeId};
+use ingot_sema::ty::{GenericArg, Subst, TyKind, TypeId};
 use ingot_sema::typed::{FnSource, InterfaceVia};
 use std::collections::BTreeMap;
 
@@ -118,45 +118,32 @@ fn add_call(
     span: Span,
     items: &mut Vec<CostItem>,
 ) {
-    let mut indirect = None;
+    let indirect = indirect_kind(decls, cfg, target);
     let mut alloc_def = None;
     let mut alloc_args: Vec<GenericArg> = Vec::new();
     match target {
         CallTarget::Fn { fn_ref, .. } => {
-            if let FnSource::Interface {
-                via: InterfaceVia::Dyn,
-                ..
-            } = &fn_ref.source
-            {
-                indirect = Some("dyn");
-            }
             alloc_def = Some(fn_ref.def);
             alloc_args = fn_ref.args.clone();
         }
-        CallTarget::Value { kind, callee, .. } => match kind {
-            ValueKind::FnPtr => {
-                let through = match operand_type(decls, cfg, callee).map(|t| decls.types.kind(t)) {
-                    Some(TyKind::FnPtr(sig)) if sig.ext => "extern",
-                    _ => "fn",
-                };
-                indirect = Some(through);
-            }
-            ValueKind::DynFn => indirect = Some("dyn"),
-            ValueKind::Closure(_) | ValueKind::Bound => {}
-        },
+        CallTarget::Value { .. } => {}
     }
     if let Some(through) = indirect {
         let mut item = item(id, cfg, CostKind::IndirectCall, span);
         item.through = Some(through);
         items.push(item);
     }
-    if let Some(def) = alloc_def
-        && let Some(err) = decls.fn_sig(def).and_then(|sig| sig.error)
-        && is_alloc_error(decls, sema, err)
-    {
-        let mut item = item(id, cfg, CostKind::Alloc, span);
-        item.allocator = allocator_arg(decls, sema, def, &alloc_args);
-        items.push(item);
+    if let Some(def) = alloc_def {
+        if let Some(err) = decls.fn_sig(def).and_then(|sig| sig.error)
+            && is_alloc_error(decls, sema, err)
+        {
+            let mut item = item(id, cfg, CostKind::Alloc, span);
+            item.allocator = allocator_arg(decls, sema, def, &alloc_args);
+            items.push(item);
+        }
+        if is_lock_call(sema, def) {
+            items.push(item(id, cfg, CostKind::Lock, span));
+        }
     }
 }
 
@@ -200,9 +187,181 @@ fn allocator_arg(
     found
 }
 
+/// `fn`, `dyn` or `extern` when a call is indirect (§31), shared by `indirect_call`
+/// and `park_point`.
+fn indirect_kind(decls: &mut Declarations, cfg: &Cfg, target: &CallTarget) -> Option<&'static str> {
+    match target {
+        CallTarget::Fn { fn_ref, .. } => match &fn_ref.source {
+            FnSource::Interface {
+                via: InterfaceVia::Dyn,
+                ..
+            } => Some("dyn"),
+            _ => None,
+        },
+        CallTarget::Value { kind, callee, .. } => match kind {
+            ValueKind::FnPtr => {
+                let through = match operand_type(decls, cfg, callee).map(|t| decls.types.kind(t)) {
+                    Some(TyKind::FnPtr(sig)) if sig.ext => "extern",
+                    _ => "fn",
+                };
+                Some(through)
+            }
+            ValueKind::DynFn => Some("dyn"),
+            ValueKind::Closure(_) | ValueKind::Bound => None,
+        },
+    }
+}
+
+/// The lock functions of pipeline §8, recognized by path.
+fn is_lock_call(sema: &Sema, def: DefId) -> bool {
+    lock_path(&sema.qualified_name(def))
+}
+
+fn lock_path(q: &str) -> bool {
+    matches!(
+        q,
+        "std.sync.Mutex.lock"
+            | "std.sync.Mutex.try_lock"
+            | "std.sync.RwLock.read"
+            | "std.sync.RwLock.write"
+            | "std.sync.RwLock.try_read"
+            | "std.sync.RwLock.try_write"
+    )
+}
+
+/// The runtime entries that park today, and a future `Task.join`.
+fn parks_on_lock(q: &str) -> bool {
+    matches!(
+        q,
+        "std.sync.Mutex.lock" | "std.sync.RwLock.read" | "std.sync.RwLock.write"
+    )
+}
+
+fn is_park_entry(sema: &Sema, def: DefId) -> bool {
+    park_path(&sema.qualified_name(def))
+}
+
+fn park_path(q: &str) -> bool {
+    q == "std.sys.rt.park" || q == "std.task.Task.join"
+}
+
 fn item_in_module(sema: &Sema, module: &str, name: &str) -> Option<DefId> {
     let m = sema.module_paths.get(module)?;
     sema.module(*m).types.get(name).copied()
+}
+
+/// `park_point` rows over phase 11a's instance call graph: a terminator or call that
+/// may park, and every instance that can reach one. Indirect calls are assumed to park.
+pub fn park_points(
+    decls: &mut Declarations,
+    sema: &Sema,
+    cfgs: &Cfgs,
+    instances: &crate::instances::Instances,
+) -> Vec<CostItem> {
+    use std::collections::{BTreeSet, VecDeque};
+    let mut direct = BTreeSet::new();
+    for i in &instances.instances {
+        if cfg_for_key(cfgs, &i.key)
+            .is_some_and(|(_, cfg)| cfg_has_park(decls, sema, cfg, &i.key.subst))
+        {
+            direct.insert(i.key.clone());
+        }
+    }
+    let mut park = direct;
+    let mut queue: VecDeque<_> = park.iter().cloned().collect();
+    while let Some(callee) = queue.pop_front() {
+        for (caller, target, _) in &instances.call_edges {
+            if *target == callee && park.insert(caller.clone()) {
+                queue.push_back(caller.clone());
+            }
+        }
+    }
+    let mut items = Vec::new();
+    for key in &park {
+        let Some((id, cfg)) = cfg_for_key(cfgs, key) else {
+            continue;
+        };
+        for block in &cfg.blocks {
+            if term_park(decls, sema, cfg, &key.subst, &block.term) {
+                items.push(item(id, cfg, CostKind::ParkPoint, block.term_span));
+            }
+        }
+    }
+    for (caller, callee, span) in &instances.call_edges {
+        if !park.contains(callee) {
+            continue;
+        }
+        let Some((id, cfg)) = cfg_for_key(cfgs, caller) else {
+            continue;
+        };
+        items.push(item(id, cfg, CostKind::ParkPoint, *span));
+    }
+    let mut seen = BTreeSet::new();
+    items.retain(|i| seen.insert((i.fn_name.clone(), i.file, i.span.start)));
+    items
+}
+
+fn cfg_for_key<'a>(
+    cfgs: &'a Cfgs,
+    key: &crate::instances::InstanceKey,
+) -> Option<(CfgId, &'a Cfg)> {
+    let body = match key.body {
+        crate::instances::InstanceBody::Item => BodyKey::Item,
+        crate::instances::InstanceBody::Closure(e) => BodyKey::Closure(e),
+        crate::instances::InstanceBody::ParFor(s) => BodyKey::ParFor(s),
+        _ => return None,
+    };
+    let want = CfgKey {
+        owner: key.owner,
+        body,
+    };
+    cfgs.iter().find(|(_, cfg)| cfg.key == want)
+}
+
+fn cfg_has_park(decls: &mut Declarations, sema: &Sema, cfg: &Cfg, subst: &Subst) -> bool {
+    cfg.blocks
+        .iter()
+        .any(|block| term_park(decls, sema, cfg, subst, &block.term))
+}
+
+fn term_park(
+    decls: &mut Declarations,
+    sema: &Sema,
+    cfg: &Cfg,
+    subst: &Subst,
+    term: &Terminator,
+) -> bool {
+    match term {
+        Terminator::ScopeWait { .. } | Terminator::Select { .. } | Terminator::ParFor { .. } => {
+            true
+        }
+        Terminator::Dispatch { executor, .. } => {
+            let ty = operand_type(decls, cfg, executor).map(|ty| decls.instantiate(ty, subst));
+            ty.is_some_and(|ty| is_exec_par(decls, sema, ty))
+        }
+        Terminator::Call { target, .. } => {
+            if let CallTarget::Fn { fn_ref, .. } = target
+                && (is_park_entry(sema, fn_ref.def)
+                    || parks_on_lock(&sema.qualified_name(fn_ref.def)))
+            {
+                return true;
+            }
+            indirect_kind(decls, cfg, target).is_some()
+        }
+        _ => false,
+    }
+}
+
+fn is_exec_par(decls: &Declarations, sema: &Sema, ty: TypeId) -> bool {
+    let ty = match decls.types.kind(ty) {
+        TyKind::Ref(_, inner) => *inner,
+        _ => ty,
+    };
+    let TyKind::Adt(def, _) = decls.types.kind(ty) else {
+        return false;
+    };
+    let d = sema.def(*def);
+    sema.module(d.module).path == "std.exec" && d.name == "Par"
 }
 
 fn operand_type(decls: &mut Declarations, cfg: &Cfg, op: &Operand) -> Option<TypeId> {
@@ -219,7 +378,11 @@ fn const_type(decls: &Declarations, c: &Const) -> Option<TypeId> {
         Const::Unit => Some(decls.types.void),
         Const::Str(_) | Const::CStr(_) => None,
         Const::Zero { ty, .. } | Const::Uninit { ty, .. } => Some(*ty),
-        Const::Param { .. } | Const::Named { .. } => None,
+        Const::Param { def, .. } => decls.param_const_ty.get(def).copied(),
+        Const::Named { def, .. } => match decls.items.get(def) {
+            Some(ItemSig::Const(c)) => Some(c.ty),
+            _ => None,
+        },
         Const::Expr { .. } => Some(decls.types.i64_),
         Const::Fn { .. } => None,
     }
@@ -312,4 +475,38 @@ fn place_type(decls: &mut Declarations, cfg: &Cfg, place: &Place) -> Option<Type
         };
     }
     Some(ty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_functions_are_recognized_by_path() {
+        for q in [
+            "std.sync.Mutex.lock",
+            "std.sync.Mutex.try_lock",
+            "std.sync.RwLock.read",
+            "std.sync.RwLock.write",
+            "std.sync.RwLock.try_read",
+            "std.sync.RwLock.try_write",
+        ] {
+            assert!(lock_path(q), "{q}");
+        }
+        assert!(!lock_path("app.Mutex.lock"));
+        assert!(!lock_path("std.sync.Cell.lock"));
+        assert!(parks_on_lock("std.sync.Mutex.lock"));
+        assert!(parks_on_lock("std.sync.RwLock.read"));
+        assert!(parks_on_lock("std.sync.RwLock.write"));
+        assert!(!parks_on_lock("std.sync.Mutex.try_lock"));
+        assert!(!parks_on_lock("std.sync.RwLock.try_read"));
+        assert!(!parks_on_lock("std.sync.RwLock.try_write"));
+    }
+
+    #[test]
+    fn park_entries_are_recognized_by_path() {
+        assert!(park_path("std.sys.rt.park"));
+        assert!(park_path("std.task.Task.join"));
+        assert!(!park_path("std.sync.Mutex.lock"));
+    }
 }

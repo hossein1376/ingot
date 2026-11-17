@@ -188,6 +188,11 @@ cost/load_has_no_check.ingot
 cost/loop_counter_overflow_has_no_check.ingot
 cost/negative_index_keeps_check.ingot
 cost/negative_lo_keeps_bound.ingot
+cost/park_closure.ingot
+cost/park_dispatch_par.ingot
+cost/park_dispatch_seq.ingot
+cost/park_par_for.ingot
+cost/park_transitive.ingot
 cost/raw_pointer_does_not_keep_check.ingot
 cost/reassigned_borrow_keeps_check.ingot
 cost/reassigned_len_keeps_bound.ingot

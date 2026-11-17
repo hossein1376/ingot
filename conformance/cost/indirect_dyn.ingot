@@ -1,11 +1,26 @@
 //! expect: cost
 //! section: 31
 
-fn call(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
-    return f(x); //~ indirect_call
+interface Named {
+    fn name(self: &Self) -> i64;
+}
+
+struct Item { n: i64 }
+
+impl Named for Item {
+    fn name(self: &Item) -> i64 { return self.n; }
+}
+
+fn call_named(x: &dyn Named) -> i64 {
+    return x.name(); //~ indirect_call //~ park_point
+}
+
+fn call_fn(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+    return f(x); //~ indirect_call //~ park_point
 }
 
 fn run() -> i64 {
     let f = fn [](x: i64) -> i64 { return x; };
-    return call(&f, 1);
+    let item = Item.{ n: 1 };
+    return call_fn(&f, 1) + call_named(&item); //~ park_point //~ overflow_check
 }

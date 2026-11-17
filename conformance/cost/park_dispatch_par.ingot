@@ -1,0 +1,12 @@
+//! expect: cost
+//! section: 31
+
+import std.exec;
+
+kernel fn k(i: Idx, out: []mut i64) -> void {
+    out[i] = 1; //~ bounds_check
+}
+
+fn run(out: []mut i64) -> void {
+    dispatch k(out) over 0..1 on exec.par; //~ bounds_check //~ park_point
+}
