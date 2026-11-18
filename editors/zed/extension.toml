@@ -8,7 +8,7 @@ repository = "https://github.com/hossein1376/ingot"
 
 [grammars.ingot]
 repository = "file:///Users/hossein/Code/ingot"
-rev = "bfd91dcf6294ddb71226d87622969702582ab7ee"
+rev = "1eabde22a0d2bd28a8eaa0902c5b5c126210fcc8"
 path = "editors/tree-sitter-ingot"
 
 [language_servers.ingot-lsp]
