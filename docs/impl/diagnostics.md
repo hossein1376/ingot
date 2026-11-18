@@ -21,6 +21,9 @@ One JSON object per line on standard output, for `check`, `build`, `test` and `f
   compiler versions. Tools match on `code`.
 * **Positions.** Lines and columns are 1-based. Columns count bytes. Spans are half-open.
   `file` is the path relative to the package root, with `/` separators on every system.
+  A file of a dependency or of `std` is the package's name, `/`, and its path in that
+  package; a run over a workspace shows its members' files relative to the workspace
+  root (05 §33.2).
 * **Order.** Diagnostics are sorted by file path (byte order), then by the start of the
   primary span, then by code. The order never depends on how the compiler was scheduled.
 * **Completeness.** All independent errors of a run are reported. An error whose only
@@ -110,7 +113,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 |---|---|---|---|---|
 | E0301 | `unresolved_import` | an import path names no module and no public item | the first segment that fails | — |
 | E0302 | `duplicate_import_name` | two imports bind the same name | the second binding (`previous`: the first) | — |
-| E0303 | `package_cycle` | packages depend on each other in a cycle | the import that closes it | — |
+| E0303 | `package_cycle` | packages depend on each other in a cycle (05 §33.2) | the `[deps]` entry that closes it | — |
 | E0304 | `undefined_name` | a value identifier resolves to nothing | the name | if exactly one imported module exports the name, qualify it; else if one name in scope is within edit distance 2, replace |
 | E0305 | `undefined_type` | a type identifier resolves to nothing | the name | as E0304 |
 | E0306 | `private_item` | an item is named where it is not visible: a private item from another module, or a `pub(pkg)` item from another package. The message names the level | the name (`declared`) | — |
@@ -346,6 +349,7 @@ Their `file` is `ingot.toml` or the file concerned.
 | E1709 | `dependency_lacks_target` | a dependency does not list the target being built (§33.2) | the `[deps]` entry | — |
 | E1710 | `compiler_too_old` | a package's `ingot` key names a newer compiler than this one | the key | — |
 | E1711 | `duplicate_export` | two `export fn`s with one name in a build (§33.2) | the second (`previous`) | — |
+| E1712 | `dependency_not_fetched` | a git dependency is not in the cache; `build`, `check` and `test` never fetch (§33.2) | the `[deps]` or `[override]` entry | — |
 
 ## 18. Traps
 

@@ -291,7 +291,7 @@ code alone.
 ## 10. Packages, ABI and builds
 
 * **Dependencies** (*user*, review 2, U2; 05 §33.2). Each choice and its reason:
-  * a BLAKE3 hash over exactly the files a build reads; `rev` says where to fetch,
+  * a SHA-256 hash over exactly the files a build reads; `rev` says where to fetch,
     `hash` is what is checked, so a mirror or moved tag cannot change a build;
   * no lock file: every git dependency is pinned in the manifest that names it, and a
     dependency's manifest is inside its hash, so the root determines the whole graph;
@@ -304,6 +304,30 @@ code alone.
     an import; unreached code costs nothing in the executable;
   * `std` is tied to the compiler, because the language items make any other
     arrangement unsafe.
+* **Packages in a build** (*user*, 2026-11-18, before P4a; 05 §33.2). A dependency's
+  diagnostics are reported like the root's (`std` excepted), and its files are shown as
+  `name/path`, as `std`'s are. *Why:* a dependency that does not check stops the build
+  anyway, and one spelling works for path and git dependencies without an absolute path.
+  *Rejected:* one summary code at the `[deps]` entry (hides where the error is); paths
+  relative to the root (`../csv/x.ingot`), which git dependencies cannot have.
+* **Git dependencies come from the system `git` into a cache keyed by hash**, and one
+  missing from the cache is its own code, E1712 (*user*, 2026-11-18). *Why:* no Rust
+  dependency, and "not fetched" is a different fix from "content changed" (E1703).
+* **The dependency hash is SHA-256, not BLAKE3** (*user*, 2026-11-18, before P4a).
+  *Why:* the compiler takes no crates, so the hash is written by hand, and SHA-256 is the
+  smaller one to get right; `shasum -a 256` ships with every system for checking it; and
+  `conformance/programs/sha256.ingot` already implements it in Ingot for a self-hosted
+  compiler. *Rejected:* BLAKE3, whose speed does not matter for source trees and whose
+  tool is not installed by default. The `sha256:` prefix leaves room for another
+  algorithm later.
+* **Smaller package rules** (*reviewer*, 2026-11-18, for P4a; 01 §2, 05 §33, §33.2):
+  a nested `ingot.toml` ends a package (workspaces and in-tree path dependencies need
+  it); a module imports only its own package, `std` and its own `[deps]` (a transitive
+  dependency is an implementation detail of the package that names it); no `targets`
+  key means all three (a single file has no manifest and must check everywhere); the
+  hash frames lengths as 8 bytes little-endian; graph order is breadth-first with
+  `[deps]` by name; a `[deps]` cycle is E0303 at the entry; an override that matches
+  nothing is inert; `ingot` is `MAJOR.MINOR`.
 * **The C ABI** (review 2, U3; 04 §29): `bool` is C's `_Bool`; `copy struct`s cross by
   value by each system's rule; `?extern fn` crosses as a nullable function pointer;
   other optionals, results and enums do not. No unwinding; unwind tables are still

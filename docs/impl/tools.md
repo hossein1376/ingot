@@ -64,6 +64,8 @@ package directory or a single file. The default is the current package.
 * `targets` lists the targets on which the diagnostic occurs. With `--all-targets` an
   identical diagnostic on several targets is one line with several entries.
 * Summary fields: `errors`, `files`, `targets`.
+* At a workspace root, `check` runs over every member (and the root, if it is a
+  package) and prints one sorted list of diagnostics; `files` counts each file once.
 
 ### `ingot fix [PATH] [--dry-run]`
 
@@ -236,13 +238,26 @@ and `missing` names what was not.
 
 ### `ingot deps [update NAME [--rev R] | fetch]`
 
-The only commands that use the network (05-tooling §33.2). `ingot deps` prints one
+`deps update` and `deps fetch` are the only commands that use the network (05-tooling
+§33.2); `ingot deps` itself reads the cache, as `check` does (E1712). It prints one
 `{"type":"dep","name":N,"source":"path"|"git","path":P,"rev":R,"hash":H,"via":[...]}`
-per package of the graph, in canonical order, where `via` is the chain of package names
-from the root. `ingot deps update NAME` fetches `NAME` at `--rev R` (default: the
-manifest's `rev`), computes its hash, and rewrites `rev` and `hash` in the manifest that
-names it, printing the `dep` line. `ingot deps fetch` fills the cache for every git
-dependency and prints nothing but the summary. A fetch failure is an `error` line.
+per package of the graph other than the root and `std`, in graph order (05 §33.2), once
+even when several chains reach it. `via` is the first chain, as package names from the
+root (first) to the package whose manifest names this one (last): `["app"]` for a
+dependency of the root `app`, `["app","csv"]` for one of `csv`. A path dependency has
+`path`, relative to the root with `/` separators, and no `rev` or `hash`; a git
+dependency has `rev` and `hash` and no `path`. A package taken from the root's
+`[override]` has `"override":true`. The summary holds `packages`, the number of lines.
+
+`ingot deps update NAME [--rev R]` fetches `NAME` at `R` (default: the manifest's
+`rev`), computes its hash, and rewrites `rev` and `hash` in the entry for `NAME` in the
+root's `[override]` if it has one; otherwise in every git entry for `NAME` in the
+manifests reached from the root through path dependencies alone (the root's included).
+Only those two values change; the rest of each file is kept byte for byte. It prints the
+`dep` line. A `NAME` with no such entry is an `error` line. `ingot deps fetch` fills the
+cache for every git dependency of the graph and prints nothing but the summary; it never
+edits a manifest, and a fetched tree whose hash differs from the manifest's is E1703. A
+fetch failure is an `error` line.
 
 ### `ingot asm FILE --fn NAME`
 

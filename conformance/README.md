@@ -18,6 +18,12 @@ only way to test E17xx). `main.ingot` is the package's root module (spec section
 a test that imports its own modules writes `import dirname.lib;`. Only the header of
 `main.ingot` is read; the other files of a directory test have none.
 
+A directory test may hold other packages, subdirectories with an `ingot.toml` of their
+own, that its manifest names as path dependencies (the only way to test two packages).
+Markers count in every file of the test, the dependencies' files and manifests included.
+For git dependencies the harness uses the test's `cache` directory as `$INGOT_CACHE`
+when it has one, and an empty cache otherwise; it never fetches.
+
 These are conventions of the test harness. A command-line `ingot check DIR` needs a real
 `ingot.toml` (E1701 otherwise), and a file called `x.fixed.ingot` is an ordinary module.
 In a directory test, `main.fixed.ingot` is the fix result of `main.ingot`, and is not

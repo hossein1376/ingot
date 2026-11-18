@@ -53,7 +53,8 @@ warnings.
 ## 2. Modules
 
 * One file is one module. A directory with an `ingot.toml` is a package (section 33).
-  The module `net/http.ingot` in package `app` has the path `app.net.http`.
+  The module `net/http.ingot` in package `app` has the path `app.net.http`. A
+  subdirectory with an `ingot.toml` of its own is another package, not part of this one.
 * `main.ingot` at the package root is the package's **root module**. Its path is the
   package name itself, so its public items are reached as `app.name`: `std.Env` is the
   item `Env` of `std/main.ingot`. A package with no `main.ingot` has no root module.
@@ -67,6 +68,9 @@ warnings.
   resolved for the whole package at once and no code runs at load time (section 4.5),
   so there is no initialization order to get wrong. Packages form a directed acyclic
   graph.
+* A module may import from its own package, from `std`, and from the packages its own
+  package's `[deps]` names (section 33.2). Any other package name in an import is
+  E0301, even when the build holds that package as a dependency of a dependency.
 * An item is private to its module unless it is marked. `pub(pkg)` makes it visible in
   every module of its package, and `pub` everywhere. A struct field is marked the same
   way. Enum variants and interface methods are as visible as their type. A function in

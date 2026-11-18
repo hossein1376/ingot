@@ -126,10 +126,10 @@ targets = ["aarch64-macos-m4", "x86_64-linux-znver4", "x86_64-windows-znver4"]
 
 [deps]
 csv = { path = "../csv" }
-zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "b3:9f2c..." }
+zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256:9f2c..." }
 
 [override]
-zlib = { git = "https://example.com/zlib-ingot", rev = "77ab...", hash = "b3:01de..." }
+zlib = { git = "https://example.com/zlib-ingot", rev = "77ab...", hash = "sha256:01de..." }
 
 [runtime]
 task_stack = "1MiB"
@@ -149,6 +149,8 @@ libs = ["vulkan-1"]
   not need one.
 * A dependency is source. There is no registry, no version solving and no version
   number the compiler reads (a `version` key may exist for people). See section 33.2.
+* `targets` lists the targets the package supports. A manifest without it, and a
+  file with no manifest, support all three.
 * A build is deterministic: the same sources, compiler and target give the same bytes.
 * `--target NAME` selects one of the listed targets and defaults to the host. `ingot
   check --all-targets` type-checks every listed target, which needs nothing from the
@@ -207,45 +209,83 @@ to standard error from anywhere, and `ingot audit` lists it too.
 
 ### 33.2 Dependencies and workspaces
 
+```toml
+[deps]
+csv = { path = "../csv" }
+zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256:9f2c..." }
+```
+
 * **A git dependency** is pinned in the manifest that names it: `rev` says where to fetch
   and `hash` is what is checked (E1703), so a mirror or a moved tag cannot change a
-  build. The hash is BLAKE3 over the files a build can read: `ingot.toml`, every
-  `.ingot` file, and every file the manifest names (`asm` sources, a profile). For each,
-  in byte order of the relative path with `/` separators: the path's length, the path,
-  the content's length, the content. Nothing else in the directory counts.
+  build. All three keys are required. The hash is SHA-256 over the files a build can
+  read: every `ingot.toml` and every `.ingot` file in the dependency's directory tree
+  (nested packages included, a `.git` directory excluded), and every file a manifest
+  names (`asm` sources, a profile). For each, in byte order of the relative path with `/`
+  separators: the path's length, the path, the content's length, the content, each
+  length as eight bytes little-endian. It is written `sha256:` followed by the 64 lowercase
+  hex digits of the 32-byte digest.
+* **The cache.** Git dependencies are fetched with the system's `git` into a cache,
+  `$INGOT_CACHE` or else `~/.cache/ingot`, one directory per hash, named by its 64 hex
+  digits and holding the files of the checked-out `rev`. `build`, `check` and
+  `test` read the cache and check the hash on every load; a git dependency that is not
+  there is E1712 (`ingot deps fetch` fetches it).
 * **A path dependency** is not pinned: it is your own source, in the same repository or
-  workspace. A path dependency of a git dependency must stay inside that dependency's
-  tree, so that its hash covers it.
+  workspace. Its `path` is relative to the manifest that names it, and its directory
+  must have an `ingot.toml` (E1701 at the entry otherwise). A path dependency of a git
+  dependency must stay inside that dependency's tree, so that its hash covers it (E1701
+  at the `path` otherwise).
 * **There is no lock file.** A dependency's own manifest is inside its hash, so the root
   manifest determines the whole graph.
 * **Updating** is a command that edits the manifest: `ingot deps update NAME [--rev R]`
   fetches, computes and writes `rev` and `hash`. `ingot deps` prints the graph and
   `ingot deps fetch` fills the cache. `build`, `check` and `test` never use the network.
   E1703 has no fix edit: accepting changed content is a deliberate command.
+* **The graph** is walked breadth-first from the root, each manifest's `[deps]` in name
+  order; `ingot deps` lists packages in this order, and "reached second" below means
+  later in it. The dependencies must not form a cycle (E0303 at the `[deps]` entry that
+  closes it).
 * **One package per name.** A package is identified by its `name`, and a build holds one
-  package per name. If the graph reaches two different contents under one name, that is
-  E1708, naming both chains; the root's `[override]` picks the one used everywhere. The
-  key in `[deps]` must equal the package's `name`, and renaming is at the import only
-  (`import zstd.frame as zf;`).
+  package per name. Two git sources are the same content when their hashes are equal,
+  and two path sources when they name the same directory; anything else is different. If
+  the graph reaches two different contents under one name, that is E1708 at the entry
+  reached second, naming both chains. The root's `[override]`, whose entries have the
+  form of `[deps]` entries, picks the one used everywhere; an override of a name the
+  graph does not reach has no effect, and `[override]` in any manifest but the root's
+  has none either. The key in `[deps]` must equal the package's `name` (E1701 at the
+  key otherwise), and renaming is at the import only (`import zstd.frame as zf;`).
+* **A dependency's errors are the build's errors.** Diagnostics are reported for every
+  package of the graph, `std` excepted. A file of a dependency is shown as the
+  package's name followed by its path in that package, `csv/reader.ingot`, as `std`'s
+  files are shown as `std/...`.
 * **No dev-dependencies.** An import used only by a `test` block is still an import of
   the module. A dependency that only tests use costs a fetch and nothing in the
   executable, since unreached code is not compiled.
 * **Workspaces.** `[workspace] members = ["tools/*"]` in a root manifest gives one build
   directory and one `[override]` table to all members, and `check`, `test` and `fmt`
-  at the root run over every member. A root may be a package too.
+  at the root run over every member. A root may be a package too; a manifest with
+  `[workspace]` needs no `name`, and without one it is not a package. A member is a
+  directory relative to the root; `*` may only be a whole last segment, and stands for
+  every subdirectory with an `ingot.toml`, in byte order. A member's own `[workspace]`
+  and `[override]` have no effect. A command run inside a member uses the nearest
+  workspace above it that lists the member. When a command runs over a workspace, the
+  files of its members are shown relative to the workspace root, however they are
+  reached, and a diagnostic two members share is reported once.
 * **`[link]` is the union** over every package in the build, without duplicates, in
   package order; the build summary lists the result. **`[runtime]` is the root's**: in a
   dependency it has no effect. `[link.<target>] asm`, a list of assembly sources, is
   allowed in `std`'s manifest only (E1701 elsewhere); `ingot audit` lists the files.
-* **Targets.** Building for a target needs every package in the graph to list it (E1709
-  at the `[deps]` entry otherwise). `--all-targets` uses the root's list.
+* **Targets.** Building or checking for a target needs every package in the graph to
+  list it (E1709 at the `[deps]` entry otherwise). `--all-targets` uses the root's list.
 * **`std` is tied to the compiler.** It ships with it, is not in `[deps]`, cannot be
   overridden, and is not hashed per package. `ingot = "0.4"` states the oldest compiler
-  a package works with (E1710 when the compiler is older).
+  a package works with, as `MAJOR.MINOR`, compared as two numbers (E1710 when the
+  compiler is older, E1701 when the value has another form).
 * **Output.** `ingot build` produces an executable. A C-callable library is deferred
   (rationale section 12). Every Ingot symbol is local to the executable; only the
   `export fn`s and the entry are global. Two `export fn`s with one name in a build are
-  E1711; a package should prefix its exported names, and `std` uses `ingot_rt_`.
+  E1711, at the second in declaration order (packages by name, then modules by path,
+  then position; pipeline.md §2); a package should prefix its exported names,
+  and `std` uses `ingot_rt_`.
 * **Reproducible output.** No timestamps, a build identifier computed from content (ELF
   build-id, Mach-O UUID), no absolute paths (inputs are passed by relative path), and a
   fixed order of inputs.
