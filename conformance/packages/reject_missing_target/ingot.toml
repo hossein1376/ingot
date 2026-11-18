@@ -1,0 +1,5 @@
+name = "reject_missing_target"
+targets = ["aarch64-macos-m4"]
+
+[deps]
+lib = { path = "lib" } #~ E1709

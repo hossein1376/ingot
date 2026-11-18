@@ -42,12 +42,14 @@ fn run(args: &[String]) -> Result<u8, String> {
     let json = has_flag(args, "--json");
     match command {
         "check" => {
-            if has_flag(args, "--all-targets") {
-                return Err("not implemented: `check --all-targets`".to_string());
+            let all_targets = has_flag(args, "--all-targets");
+            if all_targets && has_flag(args, "--target") {
+                return Err("use either `--target` or `--all-targets`, not both".to_string());
             }
             let path = positional(args, &["--target"]).unwrap_or_else(|| PathBuf::from("."));
             let target = flag_value(args, "--target")?;
-            let output = commands::check(&path, target.as_deref(), &Overlays::default());
+            let output =
+                commands::check(&path, target.as_deref(), all_targets, &Overlays::default());
             if json {
                 for line in &output.lines {
                     println!("{line}");
@@ -157,6 +159,48 @@ fn run(args: &[String]) -> Result<u8, String> {
             }
             Ok(0)
         }
+        "deps" => {
+            let positional: Vec<&String> = args
+                .iter()
+                .skip(1)
+                .filter(|arg| !arg.starts_with('-'))
+                .collect();
+            let sub = positional.first().map(|arg| arg.as_str()).unwrap_or("");
+            let output = match sub {
+                "fetch" => ingot_driver::deps::fetch(&PathBuf::from("."), &Overlays::default()),
+                "update" => {
+                    let rev = flag_value(args, "--rev")?;
+                    let name = positional
+                        .get(1)
+                        .map(|name| (*name).clone())
+                        .unwrap_or_default();
+                    if name.is_empty() || name.starts_with('-') {
+                        return Err("`deps update` needs a package NAME".to_string());
+                    }
+                    ingot_driver::deps::update(
+                        &PathBuf::from("."),
+                        &name,
+                        rev.as_deref(),
+                        &Overlays::default(),
+                    )
+                }
+                "" => ingot_driver::deps::list(&PathBuf::from("."), &Overlays::default()),
+                other => {
+                    return Err(format!("unknown `deps` command `{other}`"));
+                }
+            };
+            if json {
+                for line in &output.lines {
+                    println!("{line}");
+                }
+            } else {
+                print!("{}", output.human);
+                if let Some(message) = &output.error {
+                    eprintln!("ingot: {message}");
+                }
+            }
+            Ok(output.exit)
+        }
         "cost" => {
             let path = path_arg(args, &["--fn"])?;
             let function = flag_value(args, "--fn")?;
@@ -194,14 +238,19 @@ fn run(args: &[String]) -> Result<u8, String> {
                 return Err("`run` has no `--target`; it builds for the host target".to_string());
             }
             let fast = has_flag(args, "--fast");
-            let options = pipeline::Options {
+            let mut options = pipeline::Options {
                 roots: ingot_cfg::instances::Roots::Build,
                 ..pipeline::Options::default()
             };
+            options.load.cache = ingot_driver::cache::default_cache();
             let path = PathBuf::from(".");
             let mut analysis =
                 pipeline::analyze_path_with(&path, &options).map_err(|e| e.to_string())?;
             print_analysis(&analysis, false);
+            if analysis.workspace_root_without_package {
+                eprintln!("ingot: this workspace root is not a package; run one of its members");
+                return Ok(2);
+            }
             if !analysis.diagnostics.is_empty() {
                 return Ok(1);
             }
@@ -319,6 +368,36 @@ fn print_no_entry(analysis: &pipeline::Analysis, json: bool) {
     }
 }
 
+/// The `[link]` union of the build's packages for the target being built (05 §33.2),
+/// as the build summary's `link` object.
+fn link_json(analysis: &pipeline::Analysis) -> String {
+    let empty = ingot_driver::manifest::Link::default();
+    let link = analysis.link.get(&analysis.target).unwrap_or(&empty);
+    let mut out = String::from("{\"frameworks\":[");
+    for (i, framework) in link.frameworks.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        ingot_diag::diagnostic::json_string(&mut out, framework);
+    }
+    out.push_str("],\"libs\":[");
+    for (i, lib) in link.libs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        ingot_diag::diagnostic::json_string(&mut out, lib);
+    }
+    out.push_str("],\"asm\":[");
+    for (i, asm) in link.asm.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        ingot_diag::diagnostic::json_string(&mut out, asm);
+    }
+    out.push_str("]}");
+    out
+}
+
 fn print_analysis(analysis: &pipeline::Analysis, json: bool) {
     if json {
         for line in analysis
@@ -347,6 +426,7 @@ fn build_command(
         roots: ingot_cfg::instances::Roots::Build,
         ..pipeline::Options::default()
     };
+    options.load.cache = ingot_driver::cache::default_cache();
     if let Some(name) = target {
         if ingot_sema::Target::by_name(name).is_none() {
             return Err(format!("`{name}` is not a target"));
@@ -365,6 +445,17 @@ fn build_command(
         }
     };
     print_analysis(&analysis, json);
+    if analysis.workspace_root_without_package {
+        let message = "this workspace root is not a package; build one of its members".to_string();
+        if json {
+            for line in commands::failure_lines("build", &message, started) {
+                println!("{line}");
+            }
+        } else {
+            eprintln!("ingot: {message}");
+        }
+        return Ok(2);
+    }
     if !analysis.diagnostics.is_empty() {
         if json {
             println!(
@@ -411,7 +502,7 @@ fn build_command(
     };
     if json {
         println!(
-            "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":true,\"protocol\":1,\"errors\":0,\"files\":{},\"target\":\"{}\",\"artifact\":{},\"ms\":{}}}",
+            "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":true,\"protocol\":1,\"errors\":0,\"files\":{},\"target\":\"{}\",\"artifact\":{},\"link\":{},\"ms\":{}}}",
             analysis.files,
             analysis.target,
             {
@@ -419,6 +510,7 @@ fn build_command(
                 ingot_diag::diagnostic::json_string(&mut s, &built.artifact.display().to_string());
                 s
             },
+            link_json(&analysis),
             started.elapsed().as_millis()
         );
     } else {

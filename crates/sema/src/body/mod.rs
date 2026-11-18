@@ -611,36 +611,38 @@ impl<'c, 'a, 'i> Checker<'c, 'a, 'i> {
 // ----------------------------------------------------------------- the driver
 
 impl Cx<'_, '_> {
-    /// Phase 7 for the package being checked: the typed body of every function with a
-    /// body, test, constant and static. Diagnostics and `not implemented` entries go
+    /// Phase 7 for the packages being checked: the typed body of every function with
+    /// a body, test, constant and static. Diagnostics and `not implemented` entries go
     /// to `self.d`.
     pub fn check_bodies(&mut self) -> Bodies {
         let mut bodies = Bodies::default();
         let pkgs: &[hir::Package] = self.pkgs;
-        let Some(package) = pkgs.get(self.reported_pkg) else {
-            return bodies;
-        };
-        for (&def, item) in &package.items {
-            // A body a constant evaluation reached was typed already; never type one
-            // twice (its diagnostics were reported once).
-            if let Some(t) = self.d.bodies.get(&def) {
-                bodies.bodies.insert(def, t.clone());
-                continue;
-            }
-            self.typing.insert(def);
-            let typed = match item {
-                hir::Item::Fn(f) => match f.body {
-                    Some(b) => self.check_fn_body(def, f, b),
-                    None => None,
-                },
-                hir::Item::Test(t) => self.check_test_body(def, t),
-                hir::Item::Const(c) => self.check_const_body(def, c),
-                hir::Item::Static(s) => self.check_static_body(def, s),
-                _ => None,
-            };
-            self.typing.remove(&def);
-            if let Some(t) = typed {
-                bodies.bodies.insert(def, t);
+        let checked: Vec<usize> = (0..pkgs.len())
+            .filter(|pkg| self.is_checked(*pkg))
+            .collect();
+        for pkg in checked {
+            for (&def, item) in &pkgs[pkg].items {
+                // A body a constant evaluation reached was typed already; never type
+                // one twice (its diagnostics were reported once).
+                if let Some(t) = self.d.bodies.get(&def) {
+                    bodies.bodies.insert(def, t.clone());
+                    continue;
+                }
+                self.typing.insert(def);
+                let typed = match item {
+                    hir::Item::Fn(f) => match f.body {
+                        Some(b) => self.check_fn_body(def, f, b),
+                        None => None,
+                    },
+                    hir::Item::Test(t) => self.check_test_body(def, t),
+                    hir::Item::Const(c) => self.check_const_body(def, c),
+                    hir::Item::Static(s) => self.check_static_body(def, s),
+                    _ => None,
+                };
+                self.typing.remove(&def);
+                if let Some(t) = typed {
+                    bodies.bodies.insert(def, t);
+                }
             }
         }
         self.check_obligations();

@@ -77,8 +77,10 @@ pub struct Program<'a> {
     pub instances: &'a [Instance],
     /// Lowered bodies that are not in `cfgs`: the `std.sys` runtime core.
     pub extra_cfgs: &'a [Cfg],
-    /// Index of the checked package among `sema.packages`.
+    /// Index of the root package among `sema.packages`.
     pub checked: usize,
+    /// The checked packages among `sema.packages` (every package but `std`).
+    pub checked_packages: &'a [usize],
     /// The target name, `aarch64-macos-m4` and so on.
     pub target: &'a str,
 }
@@ -603,10 +605,13 @@ impl<'p> Codegen<'p> {
         seen: &mut BTreeSet<InstanceKey>,
     ) -> Result<(), BuildError> {
         if seen.insert(key.clone()) {
-            // Phase 11a sees the checked package and runs its per-instance checks.
+            // Phase 11a sees every checked package and runs its per-instance checks.
             // A checked-package key it did not report is a bug in the shared
             // discovery code, not a key for this walk to add silently.
-            if self.def_package(key.owner) == self.program.checked
+            if self
+                .program
+                .checked_packages
+                .contains(&self.def_package(key.owner))
                 && !self.program.instances.iter().any(|i| i.key == key)
             {
                 return Err(BuildError::Internal(format!(

@@ -64,13 +64,13 @@ impl Cx<'_, '_> {
     /// Function and test bodies belong to phases 7 to 10, which do not exist yet: a
     /// package that has one is not accepted.
     fn note_unchecked_bodies(&mut self) {
-        let Some(package) = self.pkgs.get(self.reported_pkg) else {
-            return;
-        };
-        let any = package.items.values().any(|i| match i {
-            hir::Item::Fn(f) => f.body.is_some(),
-            hir::Item::Test(_) => true,
-            _ => false,
+        let any = self.pkgs.iter().enumerate().any(|(pkg, package)| {
+            self.is_checked(pkg)
+                && package.items.values().any(|i| match i {
+                    hir::Item::Fn(f) => f.body.is_some(),
+                    hir::Item::Test(_) => true,
+                    _ => false,
+                })
         });
         if any {
             self.ni(crate::UNCHECKED_BODIES);
@@ -129,7 +129,7 @@ impl Cx<'_, '_> {
                 defs.extend(i.members.iter().copied());
             }
             for d in defs {
-                let quiet = self.pkg_of(d) != self.reported_pkg;
+                let quiet = !self.is_checked(self.pkg_of(d));
                 if quiet {
                     self.quiet += 1;
                 }
@@ -1305,16 +1305,29 @@ impl Cx<'_, '_> {
                 _ => None,
             })
             .collect();
-        let mut exports: BTreeMap<String, (usize, Span)> = BTreeMap::new();
+        let mut exports: BTreeMap<String, (usize, usize, Span)> = BTreeMap::new();
         // Exports in the canonical order, for the shared-symbol check.
         let mut order: Vec<&FnSig> = fns.iter().collect();
-        order.sort_by_key(|f| (self.pkg_of(f.def), self.file_of(f.def), f.span.start));
+        order.sort_by(|a, b| {
+            let key = |f: &FnSig| {
+                let pkg = self.pkg_of(f.def);
+                let package = self
+                    .sema
+                    .packages
+                    .get(pkg)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                let module = self.sema.module(self.sema.def(f.def).module).path.clone();
+                (package, module, f.span.start)
+            };
+            key(a).cmp(&key(b))
+        });
         for f in order {
             let file = self.file_of(f.def);
             self.check_fn(f, file);
             if f.mods.export {
                 match exports.get(&f.name) {
-                    Some(&(pfile, pspan)) => {
+                    Some(&(pkg, pfile, pspan)) if pkg == self.pkg_of(f.def) => {
                         let path = self.path_of(pfile);
                         self.error(
                             "E1604",
@@ -1324,8 +1337,23 @@ impl Cx<'_, '_> {
                         )
                         .relate_in("previous", &path, pspan);
                     }
+                    Some(&(_, pfile, pspan)) => {
+                        // Two packages export one symbol: E1711, at the second in
+                        // declaration order (05 §33.2).
+                        let path = self.path_of(pfile);
+                        self.error(
+                            "E1711",
+                            format!(
+                                "another package already exports the symbol `{}`; prefix exported names with the package",
+                                f.name
+                            ),
+                            file,
+                            f.name_span,
+                        )
+                        .relate_in("previous", &path, pspan);
+                    }
                     None => {
-                        exports.insert(f.name.clone(), (file, f.name_span));
+                        exports.insert(f.name.clone(), (self.pkg_of(f.def), file, f.name_span));
                     }
                 }
             }
@@ -1600,7 +1628,7 @@ impl Cx<'_, '_> {
 
     /// E0514 for the `main` of the package being checked.
     fn check_main(&mut self) {
-        let pkg = self.reported_pkg;
+        let pkg = self.root_pkg;
         let Some(package) = self.sema.packages.get(pkg) else {
             return;
         };

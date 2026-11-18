@@ -1,0 +1,4 @@
+name = "reject_std_dependency"
+
+[deps]
+std = { path = "std" } #~ E1701

@@ -67,6 +67,7 @@ fn build(with_std: bool, text: &str) -> D {
         }
         PackageInput {
             name: name.to_string(),
+            deps: Vec::new(),
             modules: mods,
         }
     };
@@ -83,7 +84,7 @@ fn build(with_std: bool, text: &str) -> D {
     inputs.push(app_pkg);
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, app, None);
+    let decls = check_declarations(&sources, &out, &target, &[app], None);
     D {
         out,
         decls,
@@ -2108,6 +2109,7 @@ fn a_diagnostic_inside_the_builtin_declarations_is_a_compiler_failure_not_an_err
         &mut sources,
         vec![PackageInput {
             name: "std".to_string(),
+            deps: Vec::new(),
             modules,
         }],
         &target,

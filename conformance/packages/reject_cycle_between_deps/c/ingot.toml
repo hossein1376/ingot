@@ -1,0 +1,4 @@
+name = "c"
+
+[deps]
+b = { path = "../b" } #~ E0303

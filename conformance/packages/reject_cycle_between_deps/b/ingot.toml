@@ -1,0 +1,4 @@
+name = "b"
+
+[deps]
+c = { path = "../c" }

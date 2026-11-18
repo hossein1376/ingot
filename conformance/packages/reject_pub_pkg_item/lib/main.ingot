@@ -1,0 +1,3 @@
+pub(pkg) fn secret() -> i64 {
+    return 1;
+}

@@ -1,0 +1,4 @@
+name = "accept_git_dependency"
+
+[deps]
+lib = { git = "https://example.com/lib", rev = "abc", hash = "sha256:2d20442891869f23e3147287c51c1004d7a9cc9bfe45a34479e58bc6b00ce340" }

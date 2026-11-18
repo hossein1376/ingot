@@ -89,14 +89,14 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-678 test files: 159 `accept` (44 of them `.fixed.ingot` tests; 44 fix results in
-all), 412 `reject`, 44 `run`, 6 `trap`, 57 `cost`.
+697 test files: 163 `accept` (44 of them `.fixed.ingot` tests; 44 fix results in
+all), 426 `reject`, 45 `run`, 6 `trap`, 57 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|
 | E01xx | 2 of 11 | E0101, E0102, E0103, E0106, E0107, E0108, E0109, E0110, E0111 |
 | E02xx | 7 of 13 | E0202, E0203, E0208, E0211, E0212, E0213 |
-| E03xx | 16 of 17 | E0303 |
+| E03xx | 17 of 17 | |
 | E04xx | 22 of 22 | |
 | E05xx | 23 of 23 | |
 | E06xx | 13 of 13 | |
@@ -109,14 +109,15 @@ all), 412 `reject`, 44 `run`, 6 `trap`, 57 `cost`.
 | E14xx | 9 of 10 | E1406 |
 | E15xx | 13 of 14 | E1518 |
 | E16xx | 5 of 6 | E1605 |
-| E17xx | 5 of 7 | E1703, E1704 |
+| E17xx | 11 of 12 | E1704 |
 | traps | 6 of 17 | T02, T05, T08, T09, T10, T11, T12, T13, T15, T16, T17 |
 
 Retired codes are not counted: the catalog marks E0512 and E0513 as retired, so they
 appear in no row and in no total below.
 
-166 of 199 catalog codes have a test.
+173 of 199 catalog codes have a test.
 
 E1701 for a *missing* `ingot.toml` has no conformance test, because the harness supplies
 a manifest by convention; `crates/driver/tests/cli.rs` covers it. The other cases of
-E1701, and E1702, E1705, have tests in `packages/`.
+E1701, E1702 and E1705 have tests in `packages/`, and so do the dependency codes
+E1703 and E1708 to E1712.

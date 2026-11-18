@@ -1,0 +1,4 @@
+name = "reject_cycle"
+
+[deps]
+a = { path = "a" }

@@ -36,6 +36,7 @@ fn small_program_has_pinned_ir() {
         extra_cfgs: &analysis.extra_cfgs,
         instances: &analysis.instances,
         checked: front.checked,
+        checked_packages: &front.checked_packages,
         target: &analysis.target,
     };
     let ir = ingot_codegen::emit(program).expect("emit IR");
@@ -68,6 +69,7 @@ fn the_same_program_gives_byte_identical_ir() {
             extra_cfgs: &first.extra_cfgs,
             instances: &first.instances,
             checked: front.checked,
+            checked_packages: &front.checked_packages,
             target: &first.target,
         })
         .expect("emit IR")
@@ -82,6 +84,7 @@ fn the_same_program_gives_byte_identical_ir() {
             extra_cfgs: &second.extra_cfgs,
             instances: &second.instances,
             checked: front.checked,
+            checked_packages: &front.checked_packages,
             target: &second.target,
         })
         .expect("emit IR")

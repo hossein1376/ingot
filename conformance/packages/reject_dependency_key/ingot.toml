@@ -1,0 +1,4 @@
+name = "reject_dependency_key"
+
+[deps]
+other = { path = "lib" } #~ E1701

@@ -1,0 +1,18 @@
+pub struct Point { pub x: i64 }
+
+pub struct Pair[T] {
+    pub first: T,
+    pub second: T,
+}
+
+pub fn twice(x: i64) -> i64 {
+    return x * 2;
+}
+
+pub fn first(p: Point) -> i64 {
+    return p.x;
+}
+
+pub fn id[T](x: T) -> T {
+    return x;
+}

@@ -83,6 +83,9 @@ pub struct ModuleInput {
 
 pub struct PackageInput {
     pub name: String,
+    /// The package names its manifest's `[deps]` names (05 §33.2): the only packages
+    /// its modules may import, besides their own package and `std`.
+    pub deps: Vec<String>,
     pub modules: Vec<ModuleInput>,
 }
 
@@ -130,6 +133,7 @@ pub fn resolve(sources: &mut Sources, mut packages: Vec<PackageInput>, target: &
         not_implemented,
         decl_at: BTreeMap::new(),
         self_defs: BTreeMap::new(),
+        allowed_imports: std::collections::BTreeSet::new(),
         target,
     };
     let mut hirs = Vec::new();
@@ -172,15 +176,16 @@ fn scrub_builtin(diags: Vec<Diagnostic>, internal: &mut Vec<String>) -> Vec<Diag
 /// ([`check_bodies`]) does it, so the driver drops this entry once phase 7 has run.
 pub const UNCHECKED_BODIES: &str = "type checking of function bodies (pipeline phases 7 to 10)";
 
-/// Run phase 6 for every package of `resolved`. `checked` is the index of the package
-/// the command is about (the last one): the parts of the language that are not
-/// implemented are reported for it only, since an unimplemented part of the standard
-/// library's constants does not make a program that does not use it unchecked.
+/// Run phase 6 for every package of `resolved`. `checked` lists the packages the
+/// command checks (every package but `std`): the parts of the language that are not
+/// implemented are reported for them only, since an unimplemented part of the standard
+/// library's constants does not make a program that does not use it unchecked. The last
+/// index is the package the command is about (the root of the build).
 pub fn check_declarations(
     sources: &Sources,
     resolved: &Output,
     target: &Target,
-    checked: usize,
+    checked: &[usize],
     interpreter: Option<&dyn interp::InterpreterFactory>,
 ) -> Declarations {
     let mut cx = lowering::Cx::new(
@@ -225,7 +230,7 @@ pub fn check_instances(
     declarations: Declarations,
     bodies: &typed::Bodies,
     target: &Target,
-    checked: usize,
+    checked: &[usize],
     interpreter: Option<&dyn interp::InterpreterFactory>,
     instances: &[InstanceArgs],
 ) -> InstanceOutput {
@@ -263,15 +268,16 @@ pub struct BodyOutput {
     pub not_implemented: Vec<String>,
 }
 
-/// Run phase 7 for the package `checked` (the last one): type-check every function,
-/// test, constant and static body against the signatures of `declarations` (pipeline
-/// section 1: phase 6 has finished for every item before any body is looked at).
+/// Run phase 7 for the packages `checked`: type-check every function, test, constant
+/// and static body against the signatures of `declarations` (pipeline section 1:
+/// phase 6 has finished for every item before any body is looked at). The last index
+/// is the root package.
 pub fn check_bodies(
     sources: &Sources,
     resolved: &Output,
     mut declarations: Declarations,
     target: &Target,
-    checked: usize,
+    checked: &[usize],
     interpreter: Option<&dyn interp::InterpreterFactory>,
 ) -> BodyOutput {
     let phase6_diagnostics = std::mem::take(&mut declarations.diagnostics);

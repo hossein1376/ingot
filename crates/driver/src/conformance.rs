@@ -207,14 +207,22 @@ fn test_sources(path: &Path, text: &str) -> Result<Vec<(String, String)>, String
             Some(dir) if !dir.as_os_str().is_empty() => dir,
             _ => Path::new("."),
         };
-        let package = loader::load_with(dir, harness_load())
+        let graph = loader::load_graph(dir, harness_load(test_cache(dir)))
             .map_err(|e| format!("could not load {}: {e}", dir.display()))?;
-        return Ok(package
-            .sources
-            .files
-            .into_iter()
-            .map(|s| (s.path, s.text))
-            .collect());
+        let mut files: Vec<(String, String)> = Vec::new();
+        for package in &graph.packages {
+            for source in &package.sources.files {
+                if !files.iter().any(|(path, _)| path == &source.path) {
+                    files.push((source.path.clone(), source.text.clone()));
+                }
+            }
+        }
+        for source in &graph.extra_sources.files {
+            if !files.iter().any(|(path, _)| path == &source.path) {
+                files.push((source.path.clone(), source.text.clone()));
+            }
+        }
+        return Ok(files);
     }
     let name = path
         .file_name()
@@ -363,17 +371,39 @@ pub fn run(root: &Path) -> Report {
 }
 
 /// The loader conventions of the harness (see `loader.rs`).
-fn harness_load() -> LoadOptions {
+fn harness_load(cache: Option<PathBuf>) -> LoadOptions {
     LoadOptions {
         harness: true,
+        cache,
         ..LoadOptions::default()
     }
+}
+
+/// The test's own `cache` directory when it has one (the conformance convention),
+/// otherwise no cache: every git dependency is then E1712, never fetched.
+fn test_cache(dir: &Path) -> Option<PathBuf> {
+    let cache = dir.join("cache");
+    cache.is_dir().then_some(cache)
 }
 
 /// The analysis options of a case: the harness's loader and the default target.
 pub fn case_options() -> Options {
     Options {
-        load: harness_load(),
+        load: harness_load(None),
+        ..Options::default()
+    }
+}
+
+/// The analysis options of `case`, with its own cache when it has one.
+pub fn case_options_for(case: &Case) -> Options {
+    let root = case_root(&case.path);
+    let cache = if root.is_dir() {
+        test_cache(&root)
+    } else {
+        None
+    };
+    Options {
+        load: harness_load(cache),
         ..Options::default()
     }
 }
@@ -603,7 +633,7 @@ fn check_related(case: &Case, analysis: &Analysis) -> Result<(), String> {
 }
 
 fn run_fix(case: &Case) -> Result<(), String> {
-    let outcome = fix::fix_path_with(&case_root(&case.path), &case_options())
+    let outcome = fix::fix_path_with(&case_root(&case.path), &case_options_for(case))
         .map_err(|e| format!("fix engine failed: {e}"))?;
     let expected_path = fixed_path(&case.path);
     let expected = std::fs::read_to_string(&expected_path)
@@ -697,14 +727,11 @@ pub fn supported(case: &Case) -> bool {
 }
 
 pub fn analyze_case(case: &Case) -> Option<Analysis> {
-    pipeline::analyze_path_with(&case_root(&case.path), &case_options()).ok()
+    pipeline::analyze_path_with(&case_root(&case.path), &case_options_for(case)).ok()
 }
 
 fn analyze_case_with_roots(case: &Case, roots: ingot_cfg::instances::Roots) -> Option<Analysis> {
-    let options = Options {
-        load: harness_load(),
-        roots,
-        ..Options::default()
-    };
+    let mut options = case_options_for(case);
+    options.roots = roots;
     pipeline::analyze_path_with(&case_root(&case.path), &options).ok()
 }

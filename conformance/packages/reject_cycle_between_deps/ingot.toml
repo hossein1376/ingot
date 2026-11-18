@@ -1,0 +1,5 @@
+name = "reject_cycle_between_deps"
+
+[deps]
+b = { path = "b" }
+c = { path = "c" }

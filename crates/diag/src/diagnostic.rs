@@ -110,6 +110,15 @@ impl Diagnostic {
 
     /// The JSON line of this diagnostic, which occurs on `target`.
     pub fn to_json_for(&self, sources: &crate::source::Sources, target: &str) -> String {
+        self.to_json_for_targets(sources, &[target])
+    }
+
+    /// The JSON line of this diagnostic on several targets (`--all-targets`).
+    pub fn to_json_for_targets(
+        &self,
+        sources: &crate::source::Sources,
+        targets: &[&str],
+    ) -> String {
         let mut out = String::new();
         out.push_str("{\"type\":\"diagnostic\",\"code\":");
         json_string(&mut out, self.code);
@@ -151,7 +160,12 @@ impl Diagnostic {
             out.push_str("]}");
         }
         out.push_str("],\"targets\":[");
-        json_string(&mut out, target);
+        for (i, target) in targets.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            json_string(&mut out, target);
+        }
         out.push_str("]}");
         out
     }
@@ -434,6 +448,11 @@ pub fn name_of(code: &str) -> &'static str {
         "E1705" => "bad_module_name",
         "E1706" => "test_only",
         "E1707" => "duplicate_test_name",
+        "E1708" => "conflicting_package",
+        "E1709" => "dependency_lacks_target",
+        "E1710" => "compiler_too_old",
+        "E1711" => "duplicate_export",
+        "E1712" => "dependency_not_fetched",
         _ => "unknown_code",
     }
 }

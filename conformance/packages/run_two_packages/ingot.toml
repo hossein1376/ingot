@@ -1,0 +1,4 @@
+name = "run_two_packages"
+
+[deps]
+lib = { path = "lib" }

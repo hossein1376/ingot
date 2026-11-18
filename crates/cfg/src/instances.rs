@@ -83,7 +83,8 @@ pub struct Instances {
     pub not_implemented: Vec<String>,
 }
 
-/// Discover the instances of the checked package.
+/// Discover the instances of the checked packages.
+#[allow(clippy::too_many_arguments)]
 pub fn discover(
     sources: &Sources,
     sema: &Sema,
@@ -92,6 +93,7 @@ pub fn discover(
     packages: &[ingot_sema::hir::Package],
     cfgs: &Cfgs,
     roots: Roots,
+    root: Option<usize>,
 ) -> Instances {
     let mut d = Discovery {
         sources,
@@ -100,6 +102,7 @@ pub fn discover(
         bodies,
         packages,
         cfgs,
+        root,
         index: cfgs.iter().map(|(id, cfg)| (cfg.key, id)).collect(),
         depth: BTreeMap::new(),
         parent: BTreeMap::new(),
@@ -127,6 +130,8 @@ struct Discovery<'a> {
     bodies: &'a Bodies,
     cfgs: &'a Cfgs,
     packages: &'a [ingot_sema::hir::Package],
+    /// The root package of the build (`Roots::Build`).
+    root: Option<usize>,
     index: BTreeMap<crate::model::CfgKey, CfgId>,
     depth: BTreeMap<InstanceKey, usize>,
     /// The use that gave an instance its depth: (parent, span in the parent).
@@ -202,9 +207,10 @@ impl<'a> Discovery<'a> {
             let yes = match roots {
                 Roots::Check => matches!(kind, DefKind::Fn | DefKind::Test { .. }),
                 Roots::Build => {
+                    let package = self.sema.module(self.sema.def(owner).module).package.0 as usize;
                     matches!(kind, DefKind::Fn)
                         && (sig.is_some_and(|s| s.mods.export)
-                            || self.sema.def(owner).name == "main")
+                            || (self.sema.def(owner).name == "main" && self.root == Some(package)))
                 }
                 Roots::Test => matches!(kind, DefKind::Test { .. }),
             };

@@ -1,0 +1,4 @@
+name = "reject_missing_dependency"
+
+[deps]
+lib = { git = "https://example.com/lib", rev = "abc", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" } #~ E1712

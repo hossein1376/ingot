@@ -54,6 +54,7 @@ pub fn build_analysis(
             extra_cfgs: &analysis.extra_cfgs,
             instances: &analysis.instances,
             checked: front.checked,
+            checked_packages: &front.checked_packages,
             target: &analysis.target,
         };
         ingot_codegen::build(program, &options)?

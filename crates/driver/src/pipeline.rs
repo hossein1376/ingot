@@ -1,24 +1,27 @@
 //! The front-end pipeline (`docs/impl/pipeline.md`), as far as it is implemented.
 //!
-//! Phase 1 (load, with the manifest and package rules of E17xx), 2 and 3 (lex and parse
-//! every file), 4 (`when`), 5 (name resolution), 6 (signatures, type properties,
-//! layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phase 9 runs
-//! Analysis A (moves and linear values), Analysis B (origin sets) and Analysis C
+//! Phase 1 (load, with the package graph, manifest and package rules of E17xx), 2 and
+//! 3 (lex and parse every file), 4 (`when`), 5 (name resolution), 6 (signatures, type
+//! properties, layouts), 7 (type-checking bodies) and 8 (lowering to a CFG) run. Phase 9
+//! runs Analysis A (moves and linear values), Analysis B (origin sets) and Analysis C
 //! (loans, E1101–E1105 and E1403) and the task rules (E1401, E1402, E1407) on the
-//! checked package's CFGs. A `from` clause computed for E1201 is attached to that
+//! checked packages' CFGs. A `from` clause computed for E1201 is attached to that
 //! diagnostic. Phase 10 removes the guaranteed checks, reports E0806 for a folded
-//! operation that traps, and records the surviving checks for `ingot cost`. A
-//! constant that phase 6 cannot evaluate is not accepted either. The command line exits
-//! with status 2 instead of 0 when
-//! `not_implemented` is non-empty.
+//! operation that traps, and records the surviving checks for `ingot cost`. A constant
+//! that phase 6 cannot evaluate is not accepted either. The command line exits with
+//! status 2 instead of 0 when `not_implemented` is non-empty.
+//!
+//! "Checked" means every package of the graph but `std` (05 §33.2). The packages are
+//! fed to phase 5 in dependency order, `std` first and the root last.
 
 use crate::files::{self, Files};
-use crate::loader::{self, LoadOptions, LoadedPackage};
+use crate::loader::{self, LoadOptions, LoadedGraph, LoadedPackage};
 use ingot_diag::diagnostic::{DEFAULT_TARGET, Diagnostic, sort_diagnostics};
 use ingot_diag::source::{Source, Sources};
 use ingot_sema::{ModuleInput, PackageInput, Target};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::{check_operator_mixing, parse};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
@@ -52,10 +55,13 @@ pub struct FrontEnd {
     pub resolved: ingot_sema::Output,
     /// Phase 6's signatures, types and properties.
     pub declarations: ingot_sema::Declarations,
-    /// Phase 7's typed bodies of the checked package.
+    /// Phase 7's typed bodies of the checked packages.
     pub bodies: ingot_sema::typed::Bodies,
-    /// Index of the checked package among `resolved.packages`.
+    /// Index of the root package among `resolved.packages`: the package the command is
+    /// about (a query runs against it).
     pub checked: usize,
+    /// The checked packages among `resolved.packages` (every package but `std`).
+    pub checked_packages: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -66,10 +72,10 @@ pub struct Analysis {
     /// diagnostic was found: parts of the language the compiler does not check yet.
     pub not_implemented: Vec<String>,
     pub target: String,
-    /// The number of `.ingot` files of the checked package (not the standard
-    /// library's).
+    /// The number of `.ingot` files of the build's packages (not the standard
+    /// library's), each counted once.
     pub files: usize,
-    /// Phase 8's CFGs for the checked package, one per function and test body and one
+    /// Phase 8's CFGs for the checked packages, one per function and test body and one
     /// per closure and `par for` body. Phase 10 does not change these: the dump and
     /// its goldens are phase 8's output.
     pub cfgs: ingot_cfg::Cfgs,
@@ -77,18 +83,22 @@ pub struct Analysis {
     pub removed_cfgs: ingot_cfg::Cfgs,
     /// The checks that survived phase 10, in `ingot cost` order.
     pub cost: Vec<ingot_cfg::removal::CostItem>,
-    /// When `PATH` was one file of a package, that file relative to the package root.
-    /// `check` and `cost` print only what belongs to it.
+    /// When `PATH` was one file of a package, that file's display path. `check` and
+    /// `cost` print only what belongs to it.
     pub only_file: Option<String>,
     /// The front end, kept when phases 5 to 7 ran.
     pub front_end: Option<FrontEnd>,
-    /// Phase 11a: the instances of the checked package, sorted by mangled name.
+    /// Phase 11a: the instances of the checked packages, sorted by mangled name.
     pub instances: Vec<ingot_cfg::instances::Instance>,
-    /// Bodies of `std` the back end links but the checked package does not own.
+    /// Bodies of `std` the back end links but the checked packages do not own.
     /// They are lowered by `lower_for_eval` and are not part of `cfgs`, so phase 9,
-    /// phase 10 and instance discovery do not see them unless the checked package
-    /// is `std` itself.
+    /// phase 10 and instance discovery do not see them.
     pub extra_cfgs: Vec<ingot_cfg::Cfg>,
+    /// The `[link]` tables of the build's packages, unioned in package order.
+    pub link: BTreeMap<String, crate::manifest::Link>,
+    /// A workspace root that is not a package: `check` runs over its members, but
+    /// `build` is a named failure (05 §33.2).
+    pub workspace_root_without_package: bool,
 }
 
 impl Analysis {
@@ -141,59 +151,148 @@ fn parse_package(
 /// stack is virtual memory: only the pages reached are resident.
 pub const PIPELINE_STACK: usize = 256 * 1024 * 1024;
 
-/// Lex, parse, apply `when` and resolve every file of a loaded package. Runs on its own
+/// Lex, parse, apply `when` and resolve every file of a loaded build. Runs on its own
 /// thread with [`PIPELINE_STACK`], so every caller (the binary, the conformance runner,
 /// the language server) gets the stack the evaluation limits assume.
-pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
+pub fn analyze_graph_with(graph: LoadedGraph, options: &Options) -> io::Result<Analysis> {
     std::thread::scope(|s| {
         let worker = std::thread::Builder::new()
             .name("ingot-pipeline".to_string())
             .stack_size(PIPELINE_STACK)
-            .spawn_scoped(s, || analyze_here(package, options))?;
+            .spawn_scoped(s, || analyze_here(graph, options))?;
         worker
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
 }
 
-fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
+/// `analyze_graph_with` for one package with no dependencies: the fix engine's entry.
+pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
+    let graph = LoadedGraph {
+        packages: vec![package],
+        root: Some(0),
+        checked: vec![0],
+        order: vec![0],
+        deps: vec![Vec::new()],
+        ..LoadedGraph::default()
+    };
+    analyze_graph_with(graph, options)
+}
+
+fn analyze_here(graph: LoadedGraph, options: &Options) -> io::Result<Analysis> {
     let target = Target::by_name(&options.target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown target"))?;
-    let mut diagnostics = package.diagnostics.clone();
-    let mut not_implemented = package.not_implemented.clone();
+    let mut diagnostics = graph.diagnostics.clone();
+    let mut not_implemented = Vec::new();
+    for package in &graph.packages {
+        diagnostics.extend(package.diagnostics.iter().cloned());
+        not_implemented.extend(package.not_implemented.iter().cloned());
+    }
+    // A graph error that stopped loading leaves names unresolved; reporting every one
+    // of them as E0301 would bury the error that stopped it.
+    let load_failed = graph.packages.iter().any(|package| package.manifest_failed)
+        || diagnostics
+            .iter()
+            .any(|d| d.code == "E0303" || d.code.starts_with("E17"));
 
-    // The standard library is implicitly available to every package but itself.
-    let is_std = package.manifest.as_ref().is_some_and(|m| m.name == "std");
-    let std = if is_std || package.manifest_failed {
+    let is_std_root = graph
+        .root
+        .is_some_and(|index| graph.packages[index].package_name == "std");
+    let std = if is_std_root {
         None
     } else {
         Some(loader::load_std(&options.load)?)
     };
+    let mut link: BTreeMap<String, crate::manifest::Link> = BTreeMap::new();
+    let merge = |link: &mut BTreeMap<String, crate::manifest::Link>,
+                 manifest: &crate::manifest::Manifest| {
+        for (target, table) in &manifest.link {
+            let entry = link.entry(target.clone()).or_default();
+            for framework in &table.frameworks {
+                if !entry.frameworks.contains(framework) {
+                    entry.frameworks.push(framework.clone());
+                }
+            }
+            for lib in &table.libs {
+                if !entry.libs.contains(lib) {
+                    entry.libs.push(lib.clone());
+                }
+            }
+            for asm in &table.asm {
+                if !entry.asm.contains(asm) {
+                    entry.asm.push(asm.clone());
+                }
+            }
+        }
+    };
+    if let Some(std) = &std
+        && let Some(manifest) = &std.manifest
+    {
+        merge(&mut link, manifest);
+    }
+    for package in &graph.packages {
+        if let Some(manifest) = &package.manifest {
+            merge(&mut link, manifest);
+        }
+    }
 
-    // One list of sources: the package's own, then the standard library's.
-    let mut all = package.sources.clone();
-    let std_base = all.files.len();
+    // One list of sources, std first, then the build's packages in dependency order.
+    let mut all = Sources::default();
+    let mut inputs = Vec::new();
+    let mut feed_of: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut std_base = None;
     if let Some(std) = &std {
+        std_base = Some(all.files.len());
         for source in &std.sources.files {
             all.add(source.clone());
         }
     }
+    for source in &graph.extra_sources.files {
+        all.add(source.clone());
+    }
+    let order = graph.dependency_order(graph.root);
+    let mut package_bases = Vec::new();
+    for &index in &order {
+        let base = all.files.len();
+        for source in &graph.packages[index].sources.files {
+            all.add(source.clone());
+        }
+        package_bases.push((index, base));
+    }
 
-    let user = parse_package(&package, &all, 0, &mut diagnostics);
-    let mut inputs = Vec::new();
-    if let Some(std) = &std {
+    // Parse std first, as the pipeline always feeds it first.
+    if let (Some(std), Some(base)) = (&std, std_base) {
         diagnostics.extend(std.diagnostics.iter().cloned());
-        let parsed = parse_package(std, &all, std_base, &mut diagnostics);
+        not_implemented.extend(std.not_implemented.iter().cloned());
+        let parsed = parse_package(std, &all, base, &mut diagnostics);
         inputs.push(PackageInput {
             name: parsed.name,
+            deps: Vec::new(),
             modules: parsed.modules,
         });
     }
-    let std_count = inputs.len();
-    inputs.push(PackageInput {
-        name: user.name,
-        modules: user.modules,
-    });
+    let std_feed = if std_base.is_some() { Some(0) } else { None };
+    let first = std_feed.map_or(0, |_| 1);
+    for (position, (index, base)) in package_bases.iter().enumerate() {
+        let parsed = parse_package(&graph.packages[*index], &all, *base, &mut diagnostics);
+        feed_of.insert(*index, first + position);
+        inputs.push(PackageInput {
+            name: parsed.name,
+            deps: graph.deps[*index]
+                .iter()
+                .map(|dep| graph.packages[*dep].package_name.clone())
+                .collect(),
+            modules: parsed.modules,
+        });
+    }
+    let offset = first;
+    // Every package of the graph but std is checked (05 §33.2).
+    let checked_feed: Vec<usize> = (offset..inputs.len()).collect();
+    let root_feed = graph
+        .root
+        .map(|index| feed_of[&index])
+        .or_else(|| checked_feed.last().copied())
+        .unwrap_or(offset);
 
     let mut cfgs = ingot_cfg::Cfgs::default();
     let mut extra_cfgs = Vec::new();
@@ -201,22 +300,21 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     let mut cost = Vec::new();
     let mut front_end = None;
     let mut instances = Vec::new();
-    // With dependencies the imports of their packages cannot be resolved, and
-    // reporting every one of them as unresolved would be wrong: stop at what is known.
-    if !package.manifest_failed && package.not_implemented.is_empty() {
+    if !load_failed && !inputs.is_empty() {
         let output = ingot_sema::resolve(&mut all, inputs, &target);
         // Phase 6 finishes for every item of every package (std included) before
         // anything later; nothing in a body is looked at.
         let evaluator = ingot_cfg::eval::EvaluatorFactory::default();
         let declarations =
-            ingot_sema::check_declarations(&all, &output, &target, std_count, Some(&evaluator));
-        // Phase 7 checks the bodies of the package against those signatures.
+            ingot_sema::check_declarations(&all, &output, &target, &checked_feed, Some(&evaluator));
+        // Phase 7 checks the bodies of every checked package against those
+        // signatures.
         let mut bodies = ingot_sema::check_bodies(
             &all,
             &output,
             declarations,
             &target,
-            std_count,
+            &checked_feed,
             Some(&evaluator),
         );
         // Phase 8 lowers every body phase 7 accepted.
@@ -229,17 +327,19 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         let lowered_not_implemented = lowered.not_implemented;
         cfgs = lowered.cfgs;
-        // A build links the runtime core, whose bodies are `std`'s and are not the
+        // A build links the runtime core, whose bodies are `std`'s and are not a
         // checked package's. Type them here and lower every body phase 7 accepted
         // for the back end; reachability picks what is emitted. `ingot check` does
         // not need them.
-        if options.roots == ingot_cfg::instances::Roots::Build && std_count > 0 {
+        if options.roots == ingot_cfg::instances::Roots::Build
+            && let Some(std_feed) = std_feed
+        {
             let std_checked = ingot_sema::check_bodies(
                 &all,
                 &output,
                 bodies.declarations,
                 &target,
-                std_count - 1,
+                &[std_feed],
                 Some(&evaluator),
             );
             bodies.declarations = std_checked.declarations;
@@ -340,6 +440,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             &output.packages,
             &cfgs,
             options.roots,
+            graph.root.map(|index| feed_of[&index]),
         );
         for d in &discovered.diagnostics {
             let duplicate = diagnostics.iter().any(|e| {
@@ -368,7 +469,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             bodies.declarations,
             &bodies.bodies,
             &target,
-            std_count,
+            &checked_feed,
             Some(&evaluator),
             &scopes,
         );
@@ -400,15 +501,19 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
             resolved: output,
             declarations: bodies.declarations,
             bodies: bodies.bodies,
-            checked: std_count,
+            checked: root_feed,
+            checked_packages: checked_feed.clone(),
         });
     }
     not_implemented.dedup();
     sort_diagnostics(&mut diagnostics);
-    let files = package
-        .sources
+    let mut seen = std::collections::BTreeSet::new();
+    let files = graph
+        .packages
         .iter()
-        .filter(|s| s.path.ends_with(".ingot"))
+        .flat_map(|package| package.sources.iter())
+        .filter(|source| source.path.ends_with(".ingot"))
+        .filter(|source| seen.insert(files::normalize(&source.absolute)))
         .count();
     Ok(Analysis {
         sources: all,
@@ -423,10 +528,12 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         front_end,
         instances,
         extra_cfgs,
+        link,
+        workspace_root_without_package: graph.workspace.is_some() && graph.root.is_none(),
     })
 }
 
-/// `analyze_with` for the default options.
+/// `analyze_graph_with` for the default options.
 pub fn analyze(package: LoadedPackage) -> Analysis {
     analyze_with(package, &Options::default()).unwrap_or_else(|e| internal_failure(&e))
 }
@@ -439,21 +546,22 @@ fn internal_failure(error: &io::Error) -> Analysis {
     }
 }
 
-/// Load the package at `path` (a directory, or a file inside a package) and analyze it.
+/// Load the package at `path` (a directory, a file inside a package, or a workspace
+/// root) and analyze it.
 pub fn analyze_path(path: &Path) -> io::Result<Analysis> {
     analyze_path_with(path, &Options::default())
 }
 
 pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis> {
-    let package = loader::load_with(path, options.load.clone())?;
-    let files = Files::new(options.load.overlays.clone());
-    let only = if files.is_file(path) {
-        let root = &package.root;
-        package_relative(path, root)
+    let mut load = options.load.clone();
+    load.target = Some(options.target.clone());
+    let graph = loader::load_graph(path, load)?;
+    let only = if Files::new(options.load.overlays.clone()).is_file(path) {
+        source_display_path(&graph, path)
     } else {
         None
     };
-    let mut analysis = analyze_with(package, options)?;
+    let mut analysis = analyze_graph_with(graph, options)?;
     analysis.only_file = only.clone();
     // Only that file's source diagnostics: a manifest or command-line diagnostic is
     // about the whole package and is always printed.
@@ -465,25 +573,22 @@ pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis>
     Ok(analysis)
 }
 
-/// The path of `path` relative to the package root, using `/`. A file that an overlay
-/// makes exist has no canonical path of its own, so its directory is canonicalised
-/// instead.
-fn package_relative(path: &Path, root: &Path) -> Option<String> {
-    if let Ok(rel) = path.strip_prefix(root) {
-        return Some(loader::relative_path(rel));
+/// The display path of the file `path` in the loaded build: `name/rel` for a
+/// dependency, the workspace-relative path for a member.
+fn source_display_path(graph: &LoadedGraph, path: &Path) -> Option<String> {
+    let key = files::normalize(path);
+    for package in &graph.packages {
+        for source in package.sources.iter() {
+            if files::normalize(&source.absolute) == key {
+                return Some(source.path.clone());
+            }
+        }
     }
-    let canonical = path
-        .canonicalize()
-        .ok()
-        .unwrap_or_else(|| files::normalize(path));
-    let root = root
-        .canonicalize()
-        .unwrap_or_else(|_| files::normalize(root));
-    if let Ok(rel) = canonical.strip_prefix(&root) {
-        return Some(loader::relative_path(rel));
-    }
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
+    graph
+        .extra_sources
+        .iter()
+        .find(|source| files::normalize(&source.absolute) == key)
+        .map(|source| source.path.clone())
 }
 
 /// A source for a diagnostic that has no file: the command line.

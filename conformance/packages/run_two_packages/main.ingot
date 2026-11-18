@@ -1,0 +1,16 @@
+//! expect: run
+//! section: 33.2
+
+import std.Env;
+import lib;
+
+pub fn main(env: &Env) -> void {
+    @assert(lib.twice(3) == 6);
+    @assert(lib.first(lib.Point.{ x: 7 }) == 7);
+    @assert(lib.id(5) == 5);
+    @assert(lib.id(true));
+    let p = lib.Pair[i64].{ first: 3, second: 4 };
+    @assert(p.second == 4);
+    let q = lib.Pair[bool].{ first: true, second: false };
+    @assert(q.first);
+}

@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 33.2
+
+import lib;
+
+fn f() -> i64 {
+    return lib.x();
+}

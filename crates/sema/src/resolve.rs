@@ -33,6 +33,9 @@ pub(crate) struct Resolver<'a> {
     pub decl_at: BTreeMap<(usize, usize), DefId>,
     /// The `Self` definition of each interface and impl.
     pub self_defs: BTreeMap<DefId, DefId>,
+    /// The packages the package being declared may import: its own, `std`, and its
+    /// direct `[deps]` (01 §2).
+    pub allowed_imports: BTreeSet<String>,
     pub target: &'a crate::Target,
 }
 
@@ -111,6 +114,10 @@ impl<'a> Resolver<'a> {
 
     /// Declare a package and resolve its imports. Returns the lowering inputs.
     pub fn declare_package(&mut self, input: PackageInput) -> DeclaredPackage {
+        self.allowed_imports = std::iter::once(input.name.clone())
+            .chain(std::iter::once("std".to_string()))
+            .chain(input.deps.iter().cloned())
+            .collect();
         let pkg_id = PackageId(self.sema.packages.len() as u32);
         let pkg_def = self.sema.add_def(Def {
             kind: DefKind::Package,
@@ -750,6 +757,22 @@ impl<'a> Resolver<'a> {
                 .collect::<Vec<_>>()
                 .join(".")
         };
+        // A package the build holds but this package does not name in `[deps]` is not
+        // importable (01 §2), even though its modules exist.
+        let first = &segs[0];
+        let known_package = self.sema.packages.iter().any(|p| p.name == first.0);
+        if known_package && !self.allowed_imports.contains(&first.0) {
+            self.diag(
+                "E0301",
+                format!(
+                    "`{}` is not a dependency of this package; add it to `[deps]` to import it",
+                    first.0
+                ),
+                file,
+                first.1,
+            );
+            return None;
+        }
         // The longest prefix that is a module.
         let mut longest = 0;
         for k in 1..=n {

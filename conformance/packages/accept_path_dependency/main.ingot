@@ -1,0 +1,8 @@
+//! expect: accept
+//! section: 2, 33.2
+
+import lib;
+
+fn f(p: lib.Point) -> i64 {
+    return lib.twice(p.x);
+}

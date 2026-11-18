@@ -1,0 +1,4 @@
+name = "dup_export"
+
+[deps]
+lib = { path = "lib" }

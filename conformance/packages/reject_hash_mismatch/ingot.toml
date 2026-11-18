@@ -1,0 +1,4 @@
+name = "reject_hash_mismatch"
+
+[deps]
+lib = { git = "https://example.com/lib", rev = "abc", hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222" } #~ E1703

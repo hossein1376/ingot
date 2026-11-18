@@ -238,11 +238,10 @@ fn an_unknown_target_is_e1702() {
 }
 
 #[test]
-fn all_targets_is_not_implemented() {
+fn all_targets_checks_every_target() {
     let dir = package("all", "name = \"app\"\n", "// nothing\n");
     let o = ingot(&["check", "--all-targets"], &dir);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(stderr(&o).contains("not implemented"));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
 }
 
 #[test]
@@ -267,19 +266,17 @@ fn a_missing_manifest_is_e1701_on_the_command_line_but_not_in_the_harness() {
 }
 
 #[test]
-fn dependencies_are_not_implemented_yet() {
+fn a_path_dependency_without_a_manifest_is_e1701_at_the_entry() {
     let dir = package(
         "deps",
         "name = \"app\"\n[deps]\ncsv = { path = \"../csv\" }\n",
         "// nothing\n",
     );
-    let o = ingot(&["check"], &dir);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("not implemented: dependencies"),
-        "{}",
-        stderr(&o)
-    );
+    let o = ingot(&["check", "--json"], &dir);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    let out = stdout(&o);
+    assert!(out.contains("\"code\":\"E1701\""), "{out}");
+    assert!(out.contains("\"line\":3"), "{out}");
 }
 
 #[test]
@@ -342,20 +339,16 @@ fn an_unknown_command_with_json_writes_an_error_line_and_a_summary() {
 }
 
 #[test]
-fn all_targets_with_json_writes_an_error_line_and_a_summary() {
+fn all_targets_with_json_writes_one_summary_over_every_target() {
     let dir = package("all-json", "name = \"app\"\n", "// nothing\n");
     let o = ingot(&["check", "--json", "--all-targets"], &dir);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(0), "{}", stdout(&o));
     let out = stdout(&o);
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines.len(), 1, "{out}");
     assert!(
-        lines[0].contains("not implemented: `check --all-targets`"),
-        "{out}"
-    );
-    assert!(
-        lines[1].starts_with(
-            "{\"type\":\"summary\",\"command\":\"check\",\"ok\":false,\"protocol\":1,"
+        lines[0].contains(
+            "\"targets\":[\"aarch64-macos-m4\",\"x86_64-linux-znver4\",\"x86_64-windows-znver4\"]"
         ),
         "{out}"
     );

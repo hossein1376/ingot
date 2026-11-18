@@ -3057,6 +3057,7 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         let inputs = vec![PackageInput {
             name: "app".to_string(),
+            deps: Vec::new(),
             modules: vec![ModuleInput {
                 path: "app".to_string(),
                 file,
@@ -3066,9 +3067,9 @@ mod tests {
         let target = Target::by_name("aarch64-macos-m4").expect("a target");
         let out = resolve(&mut sources, inputs, &target);
         let factory = EvaluatorFactory::default();
-        let decls = check_declarations(&sources, &out, &target, 0, Some(&factory));
+        let decls = check_declarations(&sources, &out, &target, &[0], Some(&factory));
         let phase6: Vec<_> = decls.diagnostics.clone();
-        let body_out = check_bodies(&sources, &out, decls, &target, 0, Some(&factory));
+        let body_out = check_bodies(&sources, &out, decls, &target, &[0], Some(&factory));
         Built {
             decls: body_out.declarations,
             out,

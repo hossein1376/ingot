@@ -13,30 +13,106 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DepSource {
-    Path(String),
-    Git { url: String, hash: String },
+    Path {
+        rel: String,
+        /// The `path` value, for E1701 when the dependency leaves its git tree.
+        span: Span,
+    },
+    Git {
+        url: String,
+        rev: String,
+        hash: String,
+        /// The `rev` value, for `deps update`.
+        rev_span: Span,
+        /// The `hash` value, for E1703 and `deps update`.
+        hash_span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dependency {
+    /// The key in `[deps]` or `[override]`.
     pub name: String,
     pub source: DepSource,
+    /// The key: the span of the entry diagnostics (E1701, E1709, E1712).
     pub span: Span,
+}
+
+impl Dependency {
+    /// The relative path of a path dependency, if it is one.
+    pub fn path(&self) -> Option<&str> {
+        match &self.source {
+            DepSource::Path { rel, .. } => Some(rel),
+            DepSource::Git { .. } => None,
+        }
+    }
+
+    /// The pinned hash of a git dependency, if it is one.
+    pub fn hash(&self) -> Option<&str> {
+        match &self.source {
+            DepSource::Git { hash, .. } => Some(hash),
+            DepSource::Path { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Link {
     pub frameworks: Vec<String>,
     pub libs: Vec<String>,
+    pub asm: Vec<String>,
+}
+
+/// One `[workspace] members` entry. `star` is the entry whose whole last segment is
+/// `*`; it stands for every subdirectory with an `ingot.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub pattern: String,
+    pub star: bool,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Workspace {
+    pub members: Vec<Member>,
+}
+
+/// The `ingot` key: the oldest compiler a package works with, as `MAJOR.MINOR`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IngotVersion {
+    pub major: u32,
+    pub minor: u32,
+    /// The key, where E1710 points.
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Manifest {
-    pub name: String,
+    /// `None` when the manifest has no `name`: allowed only with `[workspace]`.
+    pub name: Option<String>,
+    /// True when a `targets` key was written. Absent means all three.
+    pub targets_written: bool,
+    /// The `targets` key, for E1709 on the root package.
+    pub targets_span: Option<Span>,
     pub targets: Vec<String>,
+    pub ingot: Option<IngotVersion>,
+    pub version: Option<String>,
     pub deps: Vec<Dependency>,
+    pub overrides: Vec<Dependency>,
+    pub workspace: Option<Workspace>,
     pub task_stack: Option<String>,
     pub link: BTreeMap<String, Link>,
+}
+
+impl Manifest {
+    /// The targets this package lists. A manifest without the key lists all three.
+    pub fn target_list(&self) -> Vec<&str> {
+        if self.targets_written {
+            self.targets.iter().map(String::as_str).collect()
+        } else {
+            TARGETS.to_vec()
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -494,6 +570,168 @@ impl Checker<'_> {
             false
         }
     }
+
+    /// `MAJOR.MINOR`, compared as two numbers; the other forms are E1701.
+    fn ingot_version(&mut self, key_span: Span, value: &Spanned) -> Option<IngotVersion> {
+        let text = self.string("ingot", key_span, value)?;
+        let number = text
+            .split_once('.')
+            .and_then(|(major, minor)| {
+                if major.is_empty()
+                    || minor.is_empty()
+                    || major.contains('.')
+                    || minor.contains('.')
+                    || !major.bytes().all(|b| b.is_ascii_digit())
+                    || !minor.bytes().all(|b| b.is_ascii_digit())
+                {
+                    return None;
+                }
+                Some((major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?))
+            })
+            .filter(|_| text.matches('.').count() == 1);
+        let Some((major, minor)) = number else {
+            self.error(
+                "E1701",
+                format!("`ingot` must be `MAJOR.MINOR`, not `{text}`"),
+                key_span,
+            );
+            return None;
+        };
+        let (compiler_major, compiler_minor) = compiler_version();
+        if (major, minor) > (compiler_major, compiler_minor) {
+            self.error(
+                "E1710",
+                format!(
+                    "this package needs Ingot {major}.{minor}, but this compiler is {compiler_major}.{compiler_minor}"
+                ),
+                key_span,
+            );
+            return None;
+        }
+        Some(IngotVersion {
+            major,
+            minor,
+            span: key_span,
+        })
+    }
+
+    /// A `[deps]` or `[override]` table: entries shaped like the specification's.
+    fn dependencies(&mut self, table: &Table, scope: &str, out: &mut Vec<Dependency>) -> bool {
+        let mut ok = true;
+        for (dep_name, dep_span, dep) in &table.entries {
+            if dep_name == "std" {
+                self.error(
+                    "E1701",
+                    "`std` is tied to the compiler and cannot be named in `[deps]` or `[override]`"
+                        .to_string(),
+                    *dep_span,
+                );
+                ok = false;
+                continue;
+            }
+            if !is_package_name(dep_name) {
+                self.error(
+                    "E1701",
+                    format!("`{dep_name}` is not a package name"),
+                    *dep_span,
+                );
+                ok = false;
+                continue;
+            }
+            let Some(fields) = self.table(dep_name, *dep_span, dep) else {
+                ok = false;
+                continue;
+            };
+            let mut path = None;
+            let mut git = None;
+            let mut rev = None;
+            let mut hash = None;
+            for (fkey, fspan, fvalue) in &fields.entries {
+                match fkey.as_str() {
+                    "path" => path = self.string(fkey, *fspan, fvalue).map(|s| (s, fvalue.span)),
+                    "git" => git = self.string(fkey, *fspan, fvalue).map(|s| (s, fvalue.span)),
+                    "rev" => rev = self.string(fkey, *fspan, fvalue).map(|s| (s, fvalue.span)),
+                    "hash" => hash = self.string(fkey, *fspan, fvalue).map(|s| (s, fvalue.span)),
+                    other => {
+                        self.unknown(scope, other, *fspan);
+                        ok = false;
+                    }
+                }
+            }
+            let missing = if rev.is_none() {
+                "`rev` and `hash`"
+            } else {
+                "`hash`"
+            };
+            let source = match (path, git, rev, hash) {
+                (Some((rel, span)), None, None, None) => Some(DepSource::Path { rel, span }),
+                (None, Some((url, _)), Some((rev, rev_span)), Some((hash, hash_span))) => {
+                    let valid = hash.strip_prefix("sha256:").is_some_and(|hex| {
+                        hex.len() == 64
+                            && hex
+                                .bytes()
+                                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                    });
+                    if !valid {
+                        self.error(
+                            "E1701",
+                            format!(
+                                "the `hash` of `{dep_name}` must be `sha256:` and 64 lowercase hex digits"
+                            ),
+                            hash_span,
+                        );
+                        ok = false;
+                        None
+                    } else {
+                        Some(DepSource::Git {
+                            url,
+                            rev,
+                            hash,
+                            rev_span,
+                            hash_span,
+                        })
+                    }
+                }
+                (None, Some(_), _, _) => {
+                    self.error(
+                        "E1701",
+                        format!("the git dependency `{dep_name}` needs {missing}"),
+                        *dep_span,
+                    );
+                    ok = false;
+                    None
+                }
+                _ => {
+                    self.error(
+                        "E1701",
+                        format!(
+                            "the dependency `{dep_name}` needs either `path`, or `git` with `rev` and `hash`"
+                        ),
+                        *dep_span,
+                    );
+                    ok = false;
+                    None
+                }
+            };
+            if let Some(source) = source {
+                out.push(Dependency {
+                    name: dep_name.clone(),
+                    source,
+                    span: *dep_span,
+                });
+            }
+        }
+        ok
+    }
+}
+
+/// The compiler's `MAJOR.MINOR`, from `CARGO_PKG_VERSION` (05 §33.2).
+pub fn compiler_version() -> (u32, u32) {
+    let text = env!("CARGO_PKG_VERSION");
+    let mut parts = text.split('.');
+    let major = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    (major, minor)
 }
 
 fn describe(v: &Value) -> &'static str {
@@ -512,8 +750,13 @@ fn is_package_name(name: &str) -> bool {
 }
 
 /// Read and check a manifest. The diagnostics are E1701 and E1702; with any of them
-/// the returned manifest must not be used.
+/// the returned manifest must not be used. `is_std` is how the manifest was loaded
+/// (05 §33.2): `asm` sources are allowed only there.
 pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
+    parse_with(source, false)
+}
+
+pub fn parse_with(source: &Source, is_std: bool) -> (Manifest, Vec<Diagnostic>) {
     let mut c = Checker {
         source,
         diags: Vec::new(),
@@ -526,13 +769,12 @@ pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
             return (manifest, c.diags);
         }
     };
-    let mut name = None;
     for (key, key_span, value) in &root.entries {
         match key.as_str() {
             "name" => {
                 if let Some(n) = c.string(key, *key_span, value) {
                     if is_package_name(&n) {
-                        name = Some(n);
+                        manifest.name = Some(n);
                     } else {
                         c.error(
                             "E1701",
@@ -542,7 +784,13 @@ pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
                     }
                 }
             }
+            "ingot" => manifest.ingot = c.ingot_version(*key_span, value),
+            "version" => {
+                manifest.version = c.string(key, *key_span, value);
+            }
             "targets" => {
+                manifest.targets_written = true;
+                manifest.targets_span = Some(*key_span);
                 if let Some(list) = c.strings(key, *key_span, value) {
                     for (t, span) in list {
                         if c.target_name(&t, span) {
@@ -555,59 +803,56 @@ pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
                 let Some(table) = c.table(key, *key_span, value) else {
                     continue;
                 };
-                for (dep_name, dep_span, dep) in &table.entries {
-                    if !is_package_name(dep_name) {
-                        c.error(
-                            "E1701",
-                            format!("`{dep_name}` is not a package name"),
-                            *dep_span,
-                        );
-                        continue;
-                    }
-                    let Some(fields) = c.table(dep_name, *dep_span, dep) else {
-                        continue;
-                    };
-                    let mut path = None;
-                    let mut git = None;
-                    let mut hash = None;
-                    for (fkey, fspan, fvalue) in &fields.entries {
-                        match fkey.as_str() {
-                            "path" => path = c.string(fkey, *fspan, fvalue),
-                            "git" => git = c.string(fkey, *fspan, fvalue),
-                            "hash" => hash = c.string(fkey, *fspan, fvalue),
-                            other => c.unknown("deps", other, *fspan),
+                let mut deps = Vec::new();
+                c.dependencies(table, "deps", &mut deps);
+                manifest.deps = deps;
+            }
+            "override" => {
+                let Some(table) = c.table(key, *key_span, value) else {
+                    continue;
+                };
+                let mut overrides = Vec::new();
+                c.dependencies(table, "override", &mut overrides);
+                manifest.overrides = overrides;
+            }
+            "workspace" => {
+                let Some(table) = c.table(key, *key_span, value) else {
+                    continue;
+                };
+                let mut workspace = Workspace::default();
+                for (wkey, wspan, wvalue) in &table.entries {
+                    match wkey.as_str() {
+                        "members" => {
+                            if let Some(list) = c.strings(wkey, *wspan, wvalue) {
+                                for (pattern, span) in list {
+                                    let star = pattern == "*" || pattern.ends_with("/*");
+                                    let bad = star
+                                        && pattern
+                                            .split('/')
+                                            .any(|part| part.contains('*') && part != "*");
+                                    if pattern.is_empty() || (pattern.contains('*') && !star) || bad
+                                    {
+                                        c.error(
+                                            "E1701",
+                                            format!(
+                                                "`{pattern}` is not a member path; `*` may only be a whole last segment"
+                                            ),
+                                            span,
+                                        );
+                                        continue;
+                                    }
+                                    workspace.members.push(Member {
+                                        pattern,
+                                        star,
+                                        span,
+                                    });
+                                }
+                            }
                         }
-                    }
-                    let source = match (path, git, hash) {
-                        (Some(p), None, None) => Some(DepSource::Path(p)),
-                        (None, Some(url), Some(hash)) => Some(DepSource::Git { url, hash }),
-                        (None, Some(_), None) => {
-                            c.error(
-                                "E1701",
-                                format!("the git dependency `{dep_name}` needs a `hash`"),
-                                *dep_span,
-                            );
-                            None
-                        }
-                        _ => {
-                            c.error(
-                                "E1701",
-                                format!(
-                                    "the dependency `{dep_name}` needs either `path` or `git` with `hash`"
-                                ),
-                                *dep_span,
-                            );
-                            None
-                        }
-                    };
-                    if let Some(source) = source {
-                        manifest.deps.push(Dependency {
-                            name: dep_name.clone(),
-                            source,
-                            span: *dep_span,
-                        });
+                        other => c.unknown("workspace", other, *wspan),
                     }
                 }
+                manifest.workspace = Some(workspace);
             }
             "runtime" => {
                 let Some(table) = c.table(key, *key_span, value) else {
@@ -642,6 +887,19 @@ pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
                                     link.libs = v.into_iter().map(|(s, _)| s).collect();
                                 }
                             }
+                            "asm" => {
+                                if !is_std {
+                                    c.error(
+                                        "E1701",
+                                        "`asm` sources are allowed in the standard library's manifest only"
+                                            .to_string(),
+                                        *lspan,
+                                    );
+                                }
+                                if let Some(v) = c.strings(lkey, *lspan, lvalue) {
+                                    link.asm = v.into_iter().map(|(s, _)| s).collect();
+                                }
+                            }
                             other => c.unknown(&format!("link.{target}"), other, *lspan),
                         }
                     }
@@ -653,18 +911,15 @@ pub fn parse(source: &Source) -> (Manifest, Vec<Diagnostic>) {
             other => c.unknown("", other, *key_span),
         }
     }
-    match name {
-        Some(n) => manifest.name = n,
-        None => {
-            if root.get("name").is_none() {
-                c.error(
-                    "E1701",
-                    "`ingot.toml` has no `name`".to_string(),
-                    Span::new(0, 0),
-                );
-            }
-        }
+    if manifest.name.is_none() && manifest.workspace.is_none() {
+        c.error(
+            "E1701",
+            "`ingot.toml` has no `name` and no `[workspace]`".to_string(),
+            Span::new(0, 0),
+        );
     }
+    // A member's own `[workspace]` and `[override]` have no effect (05 §33.2). The
+    // loader ignores them; nothing here depends on which manifest it is.
     (manifest, c.diags)
 }
 
@@ -673,8 +928,12 @@ mod tests {
     use super::*;
 
     fn check(text: &str) -> (Manifest, Vec<(String, usize)>) {
+        check_with(text, false)
+    }
+
+    fn check_with(text: &str, is_std: bool) -> (Manifest, Vec<(String, usize)>) {
         let source = Source::new("ingot.toml", text);
-        let (m, d) = parse(&source);
+        let (m, d) = parse_with(&source, is_std);
         let codes = d
             .iter()
             .map(|d| {
@@ -692,11 +951,13 @@ mod tests {
         let (m, codes) = check(
             "# ingot.toml\n\
              name = \"linecount\"\n\
+             ingot = \"0.1\"\n\
+             version = \"1.2.3\"\n\
              targets = [\"aarch64-macos-m4\", \"x86_64-linux-znver4\", \"x86_64-windows-znver4\"]\n\
              \n\
              [deps]\n\
              csv = { path = \"../csv\" }\n\
-             zstd = { git = \"https://example.com/zstd-ingot\", hash = \"b3:9f2c...\" }\n\
+             zstd = { git = \"https://example.com/zstd-ingot\", rev = \"4f1c\", hash = \"sha256:9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c\" }\n\
              \n\
              [runtime]\n\
              task_stack = \"1MiB\"\n\
@@ -711,11 +972,20 @@ mod tests {
              libs = [\"vulkan-1\"]\n",
         );
         assert_eq!(codes, vec![]);
-        assert_eq!(m.name, "linecount");
+        let (m2, _) = check(
+            "name = \"app\"\n\
+             [deps]\n\
+             zstd = { git = \"https://example.com/zstd-ingot\", rev = \"4f1c\", hash = \"sha256:9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c\" }\n",
+        );
+        assert!(m2.deps[0].hash().is_some());
+        assert_eq!(m2.name.as_deref(), Some("app"));
+        assert_eq!(m.name.as_deref(), Some("linecount"));
         assert_eq!(m.targets.len(), 3);
         assert_eq!(m.deps.len(), 2);
-        assert_eq!(m.deps[0].source, DepSource::Path("../csv".to_string()));
+        assert_eq!(m.deps[0].path(), Some("../csv"));
         assert_eq!(m.task_stack.as_deref(), Some("1MiB"));
+        assert_eq!(m.ingot.map(|v| (v.major, v.minor)), Some((0, 1)));
+        assert_eq!(m.version.as_deref(), Some("1.2.3"));
         assert_eq!(m.link["aarch64-macos-m4"].frameworks, vec!["Metal"]);
         assert_eq!(m.link["x86_64-windows-znver4"].libs, vec!["vulkan-1"]);
     }
@@ -724,7 +994,27 @@ mod tests {
     fn a_minimal_manifest_has_a_name() {
         let (m, codes) = check("name = \"app\"\n");
         assert_eq!(codes, vec![]);
-        assert_eq!(m.name, "app");
+        assert_eq!(m.name.as_deref(), Some("app"));
+        assert!(!m.targets_written);
+        assert_eq!(m.target_list().len(), 3);
+    }
+
+    #[test]
+    fn version_is_any_string_and_ignored() {
+        let (_, codes) = check("name = \"app\"\nversion = \"not-a-number\"\n");
+        assert_eq!(codes, vec![]);
+    }
+
+    #[test]
+    fn ingot_is_major_minor() {
+        let (_, codes) = check("name = \"app\"\ningot = \"0.1\"\n");
+        assert_eq!(codes, vec![]);
+        let (_, codes) = check("name = \"app\"\ningot = \"0\"\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 2)]);
+        let (_, codes) = check("name = \"app\"\ningot = \"0.1.2\"\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 2)]);
+        let (_, codes) = check("name = \"app\"\ningot = \"999.0\"\n");
+        assert_eq!(codes, vec![("E1710".to_string(), 2)]);
     }
 
     #[test]
@@ -736,7 +1026,6 @@ mod tests {
             "[deps\n",
             "name = \"a\" extra\n",
             "name = \"a\"\nname = \"b\"\n",
-            "name = 1.5\n",
         ] {
             let (_, codes) = check(text);
             assert!(
@@ -748,12 +1037,15 @@ mod tests {
 
     #[test]
     fn unknown_and_ill_typed_keys_are_e1701_on_the_key() {
-        let (_, codes) = check("name = \"app\"\nversion = \"1\"\n");
+        let (_, codes) = check("name = \"app\"\nlicense = \"MIT\"\n");
         assert_eq!(codes, vec![("E1701".to_string(), 2)]);
         let (_, codes) = check("name = \"app\"\ntargets = \"aarch64-macos-m4\"\n");
         assert_eq!(codes, vec![("E1701".to_string(), 2)]);
         let (_, codes) = check("name = 3\n");
-        assert_eq!(codes, vec![("E1701".to_string(), 1)]);
+        assert_eq!(
+            codes,
+            vec![("E1701".to_string(), 1), ("E1701".to_string(), 1)]
+        );
         let (_, codes) = check("name = \"app\"\n[runtime]\nstack = \"1MiB\"\n");
         assert_eq!(codes, vec![("E1701".to_string(), 3)]);
         let (_, codes) = check("name = \"app\"\n[deps]\ncsv = { pth = \"../csv\" }\n");
@@ -761,9 +1053,54 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_name_is_e1701_at_the_start() {
+    fn a_missing_name_needs_a_workspace() {
         let (_, codes) = check("targets = [\"aarch64-macos-m4\"]\n");
         assert_eq!(codes, vec![("E1701".to_string(), 1)]);
+        let (m, codes) = check("[workspace]\nmembers = [\"tools/*\"]\n");
+        assert_eq!(codes, vec![]);
+        assert_eq!(m.name, None);
+    }
+
+    #[test]
+    fn dependencies_need_path_or_git_with_rev_and_hash() {
+        let (_, codes) = check("name = \"app\"\n[deps]\ncsv = { git = \"https://x\" }\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 3)]);
+        let (_, codes) =
+            check("name = \"app\"\n[deps]\ncsv = { git = \"https://x\", hash = \"sha256:00\" }\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 3)]);
+        let (_, codes) =
+            check("name = \"app\"\n[deps]\ncsv = { path = \"../csv\", rev = \"x\" }\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 3)]);
+    }
+
+    #[test]
+    fn override_entries_are_dependency_entries() {
+        let (m, codes) = check(
+            "name = \"app\"\n[override]\nzlib = { git = \"https://x\", rev = \"77ab\", hash = \"sha256:01de01de01de01de01de01de01de01de01de01de01de01de01de01de01de01de\" }\n",
+        );
+        assert_eq!(codes, vec![]);
+        assert_eq!(m.overrides.len(), 1);
+        assert_eq!(m.overrides[0].name, "zlib");
+    }
+
+    #[test]
+    fn asm_is_for_the_standard_library_only() {
+        let text = "name = \"std\"\n[link.aarch64-macos-m4]\nasm = [\"switch.s\"]\n";
+        let (_, codes) = check(text);
+        assert_eq!(codes, vec![("E1701".to_string(), 3)]);
+        let (m, codes) = check_with(text, true);
+        assert_eq!(codes, vec![]);
+        assert_eq!(m.link["aarch64-macos-m4"].asm, vec!["switch.s"]);
+    }
+
+    #[test]
+    fn a_workspace_member_star_is_only_a_whole_last_segment() {
+        let (_, codes) = check("[workspace]\nmembers = [\"tools/*\" ]\n");
+        assert_eq!(codes, vec![]);
+        let (_, codes) = check("[workspace]\nmembers = [\"tools/*/x\"]\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 2)]);
+        let (_, codes) = check("[workspace]\nmembers = [\"tools/x*\"]\n");
+        assert_eq!(codes, vec![("E1701".to_string(), 2)]);
     }
 
     #[test]

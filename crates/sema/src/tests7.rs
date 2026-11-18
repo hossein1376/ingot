@@ -57,17 +57,27 @@ fn build(text: &str) -> B {
         }
         PackageInput {
             name: name.to_string(),
+            deps: Vec::new(),
             modules: mods,
         }
     };
     let app_pkg = add("app", &[("", text)], &mut sources);
     let inputs = vec![add("std", &STD, &mut sources), app_pkg];
+    let mut inputs = inputs;
+    let names: Vec<String> = inputs.iter().map(|p| p.name.clone()).collect();
+    for input in inputs.iter_mut() {
+        input.deps = names
+            .iter()
+            .filter(|name| **name != input.name && name.as_str() != "std")
+            .cloned()
+            .collect();
+    }
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, 1, None);
+    let decls = check_declarations(&sources, &out, &target, &[1], None);
     // Keep a copy of the phase 6 result for its diagnostics.
     let phase6: Vec<_> = decls.diagnostics.clone();
-    let bodies = check_bodies(&sources, &out, decls, &target, 1, None);
+    let bodies = check_bodies(&sources, &out, decls, &target, &[1], None);
     let mut decls = Declarations::new();
     decls.diagnostics = phase6;
     B {
@@ -1465,6 +1475,7 @@ fn pub_pkg_fields_are_not_visible_from_another_package() {
         }
         PackageInput {
             name: name.to_string(),
+            deps: Vec::new(),
             modules: mods,
         }
     };
@@ -1487,10 +1498,19 @@ fn pub_pkg_fields_are_not_visible_from_another_package() {
             &mut sources,
         ),
     ];
+    let mut inputs = inputs;
+    let names: Vec<String> = inputs.iter().map(|p| p.name.clone()).collect();
+    for input in inputs.iter_mut() {
+        input.deps = names
+            .iter()
+            .filter(|name| **name != input.name && name.as_str() != "std")
+            .cloned()
+            .collect();
+    }
     let target = Target::by_name("aarch64-macos-m4").expect("a target");
     let out = resolve(&mut sources, inputs, &target);
-    let decls = check_declarations(&sources, &out, &target, 2, None);
-    let bodies = check_bodies(&sources, &out, decls, &target, 2, None);
+    let decls = check_declarations(&sources, &out, &target, &[2], None);
+    let bodies = check_bodies(&sources, &out, decls, &target, &[2], None);
     let mut codes: Vec<(String, u32)> = bodies
         .diagnostics
         .iter()

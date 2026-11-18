@@ -1,0 +1,8 @@
+//! expect: reject
+//! section: 2
+
+import lib.S;
+
+fn f(s: &S) -> i64 {
+    return s.secret; //~ E0307
+}

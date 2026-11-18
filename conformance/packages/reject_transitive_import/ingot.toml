@@ -1,0 +1,4 @@
+name = "reject_transitive_import"
+
+[deps]
+mid = { path = "mid" }

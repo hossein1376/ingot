@@ -100,6 +100,7 @@ fn query_position(kind: &str, at: &str, overlays: &Overlays, started: Instant) -
     let options = crate::pipeline::Options {
         load: crate::loader::LoadOptions {
             overlays: overlays.clone(),
+            cache: crate::cache::default_cache(),
             ..Default::default()
         },
         ..Default::default()
@@ -211,6 +212,7 @@ fn query_complete(at: &str, overlays: &Overlays, started: Instant) -> QueryOutco
     let options = crate::pipeline::Options {
         load: crate::loader::LoadOptions {
             overlays: overlays.clone(),
+            cache: crate::cache::default_cache(),
             ..Default::default()
         },
         ..Default::default()
@@ -385,6 +387,7 @@ fn analyze_text(file: &Path, overlays: &Overlays, text: String) -> std::io::Resu
     let options = crate::pipeline::Options {
         load: crate::loader::LoadOptions {
             overlays,
+            cache: crate::cache::default_cache(),
             ..Default::default()
         },
         ..Default::default()
@@ -434,6 +437,7 @@ fn query_symbols(
     let options = crate::pipeline::Options {
         load: crate::loader::LoadOptions {
             overlays: overlays.clone(),
+            cache: crate::cache::default_cache(),
             ..Default::default()
         },
         ..Default::default()

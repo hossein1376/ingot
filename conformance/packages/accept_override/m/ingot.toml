@@ -1,0 +1,4 @@
+name = "m"
+
+[deps]
+lib = { path = "../b" }

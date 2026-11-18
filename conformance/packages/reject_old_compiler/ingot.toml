@@ -1,0 +1,4 @@
+name = "reject_old_compiler"
+
+[deps]
+lib = { path = "lib" }

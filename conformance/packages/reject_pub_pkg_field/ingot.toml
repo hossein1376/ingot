@@ -1,0 +1,4 @@
+name = "reject_pub_pkg_field"
+
+[deps]
+lib = { path = "lib" }

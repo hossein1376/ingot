@@ -1,0 +1,8 @@
+name = "accept_override"
+
+[deps]
+lib = { path = "a" }
+m = { path = "m" }
+
+[override]
+lib = { path = "a" }

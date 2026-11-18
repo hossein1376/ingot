@@ -120,15 +120,20 @@ impl Server {
                 return error_response(id, "check", "`all_targets` is not a boolean", started);
             }
         };
-        if all_targets {
+        if all_targets && target.is_some() {
             return error_response(
                 id,
                 "check",
-                "not implemented: `check --all-targets`",
+                "use either `target` or `all_targets`, not both",
                 started,
             );
         }
-        let output = commands::check(Path::new(&path), target.as_deref(), &self.overlays);
+        let output = commands::check(
+            Path::new(&path),
+            target.as_deref(),
+            all_targets,
+            &self.overlays,
+        );
         respond(output.lines, id, output.exit)
     }
 

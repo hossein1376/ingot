@@ -1,0 +1,6 @@
+//! expect: accept
+//! section: 2
+
+fn f() -> i64 {
+    return 1;
+}

@@ -1,0 +1,2 @@
+name = "lib"
+targets = ["x86_64-linux-znver4"]

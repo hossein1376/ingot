@@ -7,7 +7,7 @@
 //! it; only `write_back` writes the result to disk, and only inside the root of
 //! the package that was fixed.
 
-use crate::loader::{self, LoadedPackage};
+use crate::loader::{self, LoadedGraph, LoadedPackage};
 use crate::pipeline::{self, Options};
 use ingot_diag::diagnostic::{Diagnostic, json_string};
 use ingot_diag::source::{Position, Sources, Span};
@@ -72,8 +72,14 @@ pub fn fix_path_with(path: &Path, options: &Options) -> std::io::Result<FixOutco
     // serve). Keep the harness convention, drop any overlays a library caller passes.
     let mut options = options.clone();
     options.load.overlays = Default::default();
-    let mut package = loader::load_with(path, options.load.clone())?;
-    fix_package_with(&mut package, &options)
+    let graph = loader::load_graph(path, options.load.clone())?;
+    let root = graph.root.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a package", path.display()),
+        )
+    })?;
+    fix_graph_with(graph, root, &options)
 }
 
 pub fn fix_package(package: &mut LoadedPackage) -> std::io::Result<FixOutcome> {
@@ -84,12 +90,37 @@ pub fn fix_package_with(
     package: &mut LoadedPackage,
     options: &Options,
 ) -> std::io::Result<FixOutcome> {
+    let graph = LoadedGraph {
+        packages: vec![package.clone()],
+        root: Some(0),
+        checked: vec![0],
+        order: vec![0],
+        deps: vec![Vec::new()],
+        ..LoadedGraph::default()
+    };
+    fix_graph_with(graph, 0, options)
+}
+
+/// Fix the root package of a loaded graph. Diagnostics of dependencies are reported but
+/// only the root package's files are edited (tools.md §2: `fix PATH` fixes PATH).
+fn fix_graph_with(
+    mut graph: LoadedGraph,
+    root: usize,
+    options: &Options,
+) -> std::io::Result<FixOutcome> {
+    let mut package = graph.packages[root].clone();
+    let root_files: std::collections::BTreeSet<String> =
+        package.sources.iter().map(|s| s.path.clone()).collect();
     let mut edits = Vec::new();
     let mut rounds = 0u32;
     loop {
-        let analysis = pipeline::analyze_with(package.clone(), options)?;
+        graph.packages[root] = package.clone();
+        let analysis = pipeline::analyze_graph_with(graph.clone(), options)?;
         let mut selected: Vec<AppliedEdit> = Vec::new();
         for diagnostic in &analysis.diagnostics {
+            if diagnostic.file.ends_with(".ingot") && !root_files.contains(&diagnostic.file) {
+                continue;
+            }
             let Some(fix) = diagnostic.fixes.first() else {
                 continue;
             };
@@ -102,6 +133,10 @@ pub fn fix_package_with(
                     conflict = true;
                     break;
                 };
+                if !root_files.contains(&edit.file) {
+                    conflict = true;
+                    break;
+                }
                 if selected
                     .iter()
                     .chain(accepted.iter())
@@ -138,7 +173,7 @@ pub fn fix_package_with(
                 "fix did not converge: a fix keeps reapplying",
             ));
         }
-        apply_edits(package, &selected);
+        apply_edits(&mut package, &selected);
         rounds += 1;
         edits.extend(selected);
     }

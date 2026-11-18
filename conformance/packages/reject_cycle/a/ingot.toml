@@ -1,0 +1,4 @@
+name = "a"
+
+[deps]
+reject_cycle = { path = ".." } #~ E0303

@@ -1,0 +1,5 @@
+name = "reject_conflicting_package"
+
+[deps]
+lib = { path = "a" } #~ related E1708 previous
+m = { path = "m" }

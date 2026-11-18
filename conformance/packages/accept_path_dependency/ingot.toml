@@ -1,0 +1,4 @@
+name = "accept_path_dependency"
+
+[deps]
+lib = { path = "lib" }

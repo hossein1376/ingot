@@ -26,8 +26,9 @@ pub struct Output {
     pub exit: u8,
 }
 
-/// `ingot check PATH [--target T]` as lines and a status, with overlays.
-pub fn check(path: &Path, target: Option<&str>, overlays: &Overlays) -> Output {
+/// `ingot check PATH [--target T | --all-targets]` as lines and a status, with
+/// overlays (tools.md §2).
+pub fn check(path: &Path, target: Option<&str>, all_targets: bool, overlays: &Overlays) -> Output {
     let started = Instant::now();
     let files = Files::new(overlays.clone());
     if !files.is_dir(path) && !files.exists(path) {
@@ -37,18 +38,126 @@ pub fn check(path: &Path, target: Option<&str>, overlays: &Overlays) -> Output {
             started,
         );
     }
-    let mut options = pipeline::Options::default();
-    options.load.overlays = overlays.clone();
-    if let Some(name) = target {
-        if Target::by_name(name).is_none() {
-            return unknown_target(name, started);
+    if !all_targets {
+        let mut options = pipeline::Options::default();
+        options.load.overlays = overlays.clone();
+        options.load.cache = crate::cache::default_cache();
+        if let Some(name) = target {
+            if Target::by_name(name).is_none() {
+                return unknown_target(name, started);
+            }
+            options.target = name.to_string();
         }
-        options.target = name.to_string();
+        let analysis = match pipeline::analyze_path_with(path, &options) {
+            Ok(analysis) => analysis,
+            Err(error) => return failure("check", error.to_string(), started),
+        };
+        return single_check_output(analysis, started);
     }
-    let analysis = match pipeline::analyze_path_with(path, &options) {
-        Ok(analysis) => analysis,
+    let targets = match root_targets(path, overlays) {
+        Ok(targets) => targets,
         Err(error) => return failure("check", error.to_string(), started),
     };
+    let mut merged: Vec<(Diagnostic, Vec<String>)> = Vec::new();
+    let mut all_sources = Sources::default();
+    let mut files_count = 0usize;
+    let mut not_implemented: Vec<String> = Vec::new();
+    let mut accepted = true;
+    for name in &targets {
+        let mut options = pipeline::Options::default();
+        options.load.overlays = overlays.clone();
+        options.load.cache = crate::cache::default_cache();
+        options.target = name.clone();
+        let analysis = match pipeline::analyze_path_with(path, &options) {
+            Ok(analysis) => analysis,
+            Err(error) => return failure("check", error.to_string(), started),
+        };
+        files_count = analysis.files;
+        accepted &= analysis.accepted();
+        for what in &analysis.not_implemented {
+            if !not_implemented.contains(what) {
+                not_implemented.push(what.clone());
+            }
+        }
+        if all_sources.files.is_empty() {
+            all_sources = analysis.sources.clone();
+        }
+        for diagnostic in &analysis.diagnostics {
+            let key = format!("{diagnostic:?}");
+            if let Some((_, names)) = merged.iter_mut().find(|(d, _)| format!("{d:?}") == key) {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            } else {
+                merged.push((diagnostic.clone(), vec![name.clone()]));
+            }
+        }
+    }
+    merged.sort_by(|(a, _), (b, _)| {
+        (a.file.as_str(), a.span.start, a.span.end, a.code).cmp(&(
+            b.file.as_str(),
+            b.span.start,
+            b.span.end,
+            b.code,
+        ))
+    });
+    let diagnostics: Vec<&Diagnostic> = merged.iter().map(|(d, _)| d).collect();
+    let mut lines = Vec::new();
+    for (diagnostic, names) in &merged {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        lines.push(diagnostic.to_json_for_targets(&all_sources, &names));
+    }
+    let target_list: Vec<&str> = targets.iter().map(String::as_str).collect();
+    let target_json = {
+        let mut out = String::new();
+        for (i, name) in target_list.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            json_string(&mut out, name);
+        }
+        out
+    };
+    let not_implemented_json = if not_implemented.is_empty() {
+        String::new()
+    } else {
+        let mut list = String::new();
+        for (i, what) in not_implemented.iter().enumerate() {
+            if i > 0 {
+                list.push(',');
+            }
+            json_string(&mut list, what);
+        }
+        format!(",\"not_implemented\":[{list}]")
+    };
+    let ok = accepted && diagnostics.is_empty();
+    lines.push(format!(
+        "{{\"type\":\"summary\",\"command\":\"check\",\"ok\":{ok},\"protocol\":1,\"errors\":{},\"files\":{files_count},\"targets\":[{target_json}],\"ms\":{}{}}}",
+        diagnostics.len(),
+        started.elapsed().as_millis(),
+        not_implemented_json
+    ));
+    let mut human = String::new();
+    for diagnostic in &diagnostics {
+        human.push_str(&diagnostic.to_human(&all_sources));
+    }
+    let exit = if !diagnostics.is_empty() {
+        1
+    } else if ok {
+        0
+    } else {
+        2
+    };
+    Output {
+        lines,
+        human,
+        error: None,
+        not_implemented,
+        exit,
+    }
+}
+
+fn single_check_output(analysis: Analysis, started: Instant) -> Output {
     let ok = analysis.accepted();
     let mut lines = Vec::new();
     for diagnostic in &analysis.diagnostics {
@@ -73,6 +182,29 @@ pub fn check(path: &Path, target: Option<&str>, overlays: &Overlays) -> Output {
         not_implemented: analysis.not_implemented.clone(),
         exit,
     }
+}
+
+/// The root's `targets` list (`--all-targets`): its manifest's, or all three.
+fn root_targets(path: &Path, overlays: &Overlays) -> std::io::Result<Vec<String>> {
+    let mut load = crate::loader::LoadOptions {
+        overlays: overlays.clone(),
+        ..Default::default()
+    };
+    load.target = None;
+    let graph = crate::loader::load_graph(path, load)?;
+    let manifest = graph
+        .root
+        .and_then(|index| graph.packages[index].manifest.as_ref())
+        .or(graph.root_manifest.as_ref());
+    if let Some(manifest) = manifest
+        && manifest.targets_written
+    {
+        return Ok(manifest.targets.clone());
+    }
+    Ok(ingot_sema::target::TARGETS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect())
 }
 
 fn check_summary(analysis: &Analysis, ok: bool, started: Instant) -> String {
@@ -176,6 +308,7 @@ pub fn cost(path: &Path, function: Option<&str>, overlays: &Overlays) -> Output 
     }
     let mut options = pipeline::Options::default();
     options.load.overlays = overlays.clone();
+    options.load.cache = crate::cache::default_cache();
     let analysis = match pipeline::analyze_path_with(path, &options) {
         Ok(analysis) => analysis,
         Err(error) => return failure("cost", error.to_string(), started),

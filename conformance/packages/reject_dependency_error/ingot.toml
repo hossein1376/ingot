@@ -1,0 +1,4 @@
+name = "reject_dependency_error"
+
+[deps]
+lib = { path = "lib" }

@@ -50,6 +50,7 @@ fn run_on(target: &str, packages: &[Pkg]) -> Run {
         }
         inputs.push(PackageInput {
             name: (*name).to_string(),
+            deps: Vec::new(),
             modules: mods,
         });
     }
@@ -61,9 +62,20 @@ fn run_on(target: &str, packages: &[Pkg]) -> Run {
             0,
             PackageInput {
                 name: "std".to_string(),
+                deps: Vec::new(),
                 modules: Vec::new(),
             },
         );
+    }
+    // These tests declare the packages one build holds; every other package is a
+    // direct dependency for them, unless one of the tests below says otherwise.
+    let names: Vec<String> = inputs.iter().map(|p| p.name.clone()).collect();
+    for input in inputs.iter_mut() {
+        input.deps = names
+            .iter()
+            .filter(|name| **name != input.name && name.as_str() != "std")
+            .cloned()
+            .collect();
     }
     for input in inputs.iter_mut().filter(|p| p.name == "std") {
         for (rel, text) in STD_STUBS {

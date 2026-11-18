@@ -37,8 +37,12 @@ pub struct Cx<'a, 'i> {
     pub target: &'a Target,
     pub d: Declarations,
     pub cur: Cur,
-    /// The package whose unimplemented parts are reported (the one being checked).
-    pub reported_pkg: usize,
+    /// The packages the command checks: every package but `std`, except when the
+    /// checked package is `std` itself (05 §33.2).
+    pub(crate) checked: Vec<bool>,
+    /// The package the command is about: the root of the build or the member a
+    /// command runs inside.
+    pub(crate) root_pkg: usize,
     /// Greater than zero: unimplemented parts are not recorded.
     pub(crate) quiet: u32,
     busy: BTreeSet<DefId>,
@@ -79,9 +83,16 @@ impl<'a, 'i> Cx<'a, 'i> {
         pkgs: &'a [hir::Package],
         sources: &'a Sources,
         target: &'a Target,
-        reported_pkg: usize,
+        checked: &[usize],
         interp: Option<&'i dyn crate::interp::InterpreterFactory>,
     ) -> Cx<'a, 'i> {
+        let mut set = vec![false; pkgs.len()];
+        for &index in checked {
+            if let Some(slot) = set.get_mut(index) {
+                *slot = true;
+            }
+        }
+        let root_pkg = checked.last().copied().unwrap_or(0);
         Cx {
             sema,
             pkgs,
@@ -93,7 +104,8 @@ impl<'a, 'i> Cx<'a, 'i> {
                 file: 0,
                 impl_def: None,
             },
-            reported_pkg,
+            checked: set,
+            root_pkg,
             quiet: 0,
             busy: BTreeSet::new(),
             generics_busy: BTreeSet::new(),
@@ -117,10 +129,10 @@ impl<'a, 'i> Cx<'a, 'i> {
         pkgs: &'a [hir::Package],
         sources: &'a Sources,
         target: &'a Target,
-        reported_pkg: usize,
+        checked: &[usize],
         interp: Option<&'i dyn crate::interp::InterpreterFactory>,
     ) -> Cx<'a, 'i> {
-        let mut cx = Cx::new(sema, pkgs, sources, target, reported_pkg, interp);
+        let mut cx = Cx::new(sema, pkgs, sources, target, checked, interp);
         cx.d = d;
         // Phase 6 built the impl tables; phase 7 must not build them again.
         cx.impl_tables_ready = true;
@@ -132,6 +144,11 @@ impl<'a, 'i> Cx<'a, 'i> {
     /// True while the signature of `def` is being built.
     pub(crate) fn is_busy(&self, def: DefId) -> bool {
         self.busy.contains(&def)
+    }
+
+    /// True for a package the command checks (every package but `std`).
+    pub(crate) fn is_checked(&self, pkg: usize) -> bool {
+        self.checked.get(pkg).copied().unwrap_or(false)
     }
 
     pub fn pkg_of(&self, def: DefId) -> usize {
