@@ -37,3 +37,15 @@ pub copy struct Heap {}
 /// An address-space reservation, passed by value (`Arena.init(vm, ...)`, section 14.2)
 /// out of `env.vm`, so it is `Copy`.
 pub copy struct Vm {}
+
+impl Heap {
+    pub(pkg) fn init() -> Heap {
+        return Heap.{};
+    }
+}
+
+impl Vm {
+    pub(pkg) fn init() -> Vm {
+        return Vm.{};
+    }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "ingot-codegen"
+version = "0.1.0"
+edition = "2024"
+description = "The Ingot back end: instance lowering to LLVM IR text and linking with clang"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ingot_codegen"
+path = "src/lib.rs"
+
+[dependencies]
+ingot-cfg = { path = "../cfg" }
+ingot-diag = { path = "../diag" }
+ingot-sema = { path = "../sema" }
+ingot-syntax = { path = "../syntax" }

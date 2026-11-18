@@ -1141,7 +1141,22 @@ impl Engine<'_> {
                     Decision::Keep(Some(CostKind::OverflowCheck))
                 }
             }
-            CheckKind::Division => Decision::Keep(Some(CostKind::DivCheck)),
+            CheckKind::Division => {
+                // Rule 7: a constant divisor other than 0 (and, for a signed type,
+                // other than -1) cannot trap. A user local is not a constant.
+                let signed = check.ty.and_then(|t| match self.decls.types.kind(t) {
+                    TyKind::Int(i) => Some(i.signed()),
+                    _ => None,
+                });
+                let divisor = check
+                    .operands
+                    .get(1)
+                    .and_then(|op| self.const_int(cfg, op, defs, 0));
+                match (signed, divisor) {
+                    (Some(signed), Some(c)) if c != 0 && !(signed && c == -1) => Decision::Remove,
+                    _ => Decision::Keep(Some(CostKind::DivCheck)),
+                }
+            }
             CheckKind::Shift => Decision::Keep(Some(CostKind::ShiftCheck)),
             CheckKind::Gather | CheckKind::DispatchCover => {
                 Decision::Keep(Some(CostKind::BoundsCheck))

@@ -715,7 +715,11 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     }
 
     fn variant_tag(&self, v: &VariantRef) -> i128 {
-        if let Some(d) = v.def
+        let def = match self.kind(v.enum_ty) {
+            TyKind::Adt(d, _) => Some(d),
+            _ => v.def,
+        };
+        if let Some(d) = def
             && let Some(sig) = self.cx.decls.enum_sig(d)
             && let Some(var) = sig.variants.get(v.index)
         {

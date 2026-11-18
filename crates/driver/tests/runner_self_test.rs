@@ -2,8 +2,7 @@
 //! the unmutated copy must pass.
 //!
 //! The fixtures are lex, syntax, reject and cost tests, which the front end decides
-//! on its own. Trap tests cannot pass yet, because evaluation is not implemented, so
-//! those tests assert the failure reason instead.
+//! on its own, and one trap test, which the back end now builds and runs.
 
 use ingot_driver::conformance::{self, read_case};
 use std::fs;
@@ -65,16 +64,6 @@ fn assert_fails(dir: &Path, why: &str) {
     assert!(report.failed > 0, "mutant must fail: {why}");
 }
 
-/// For a test that cannot pass yet: every case fails, and only for `reason`.
-fn assert_fails_because(dir: &Path, reason: &str) {
-    let report = conformance::run(dir);
-    assert!(report.failed > 0, "a trap or cost test must not pass");
-    assert_eq!(report.passed, 0, "nothing passes while {reason}");
-    for failure in &report.failures {
-        assert_eq!(failure.message, reason);
-    }
-}
-
 fn replace(path: &Path, from: &str, to: &str) {
     let text = fs::read_to_string(path).unwrap();
     assert!(text.contains(from), "fixture must contain {from:?}");
@@ -118,16 +107,16 @@ fn extra_marker_on_an_innocent_line_fails() {
 
 #[test]
 fn changed_trap_code_fails() {
-    // Trap tests cannot pass until evaluation exists, so the unmutated copy fails
-    // too, for the same reason. What can be checked is that the trap code is read
-    // from the marker: a changed code is parsed as a changed marker.
+    // The unmutated copy builds, runs and traps at the marked position. Changing
+    // the marker makes the runner compare the program's real trap code with a
+    // different expectation, so the mutant must fail.
     let dir = scratch("trap-code");
     let case = dir.join("case.ingot");
     copy_test(TRAP, &case);
-    assert_fails_because(&dir, "evaluation not implemented");
+    assert_passes(&dir);
     replace(&case, "//~ T01", "//~ T02");
     assert!(read_case(&case).markers.iter().any(|m| m.code == "T02"));
-    assert_fails_because(&dir, "evaluation not implemented");
+    assert_fails(&dir, "a changed trap code marker");
 }
 
 #[test]

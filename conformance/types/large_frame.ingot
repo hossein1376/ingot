@@ -1,0 +1,15 @@
+//! expect: run
+//! section: 24.3
+
+import std.Env;
+
+fn write_last(x: i64) -> i64 {
+    var big: [8192]i64 = @zero;
+    big[8191] = x;
+    return big[8191];
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(write_last(7) == 7);
+    return 0;
+}

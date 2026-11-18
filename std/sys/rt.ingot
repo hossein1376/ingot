@@ -1,0 +1,288 @@
+// std.sys.rt: the runtime boundary (docs/std/rt.md §1).
+//
+// B1 needs the core: the trap record, `trap`, the generated process entry, and
+// the decimal integer printing a trap line uses. The scheduler and the test
+// environment arrive in later steps.
+
+import std.Env;
+import std.Vars;
+import std.fs.Fs;
+import std.io.Reader;
+import std.io.Writer;
+import std.mem.Heap;
+import std.mem.Vm;
+import std.net.Net;
+import std.rand.Rand;
+import std.sys.macos.os_exit;
+import std.sys.macos.os_map;
+import std.sys.macos.os_write;
+import std.time.Clock;
+
+/// The traps of the catalog (diagnostics.md §18).
+pub copy enum TrapCode: u8 {
+    t01,
+    t02,
+    t03,
+    t04,
+    t05,
+    t06,
+    t07,
+    t08,
+    t09,
+    t10,
+    t11,
+    t12,
+    t13,
+    t14,
+    t15,
+    t16,
+    t17,
+}
+
+/// A static record per trap site, emitted by the compiler (pipeline §7).
+pub copy struct TrapSite {
+    pub code: TrapCode,
+    pub file: []u8,
+    pub line: i32,
+    pub col: i32,
+    /// The fixed text of the message. A byte 1, 2 or 3 is a placeholder for the
+    /// first, second or third run-time operand `a`, `b` or `c`.
+    pub text: []u8,
+}
+
+fn write_bytes(bytes: []u8) -> void {
+    if bytes.len == 0 {
+        return;
+    }
+    let p: *u8 = bytes.ptr;
+    _ = os_write(2, p, bytes.len);
+}
+
+fn putc(c: u8) -> void {
+    var one: [1]u8 = [1]u8.{ 0 };
+    one[0] = c;
+    write_bytes(&one[0..1]);
+}
+
+fn write_at(ptr: i64, len: i64) -> void {
+    let address: u64 = @wrap(u64, ptr);
+    let p: *mut u8 = address as *mut u8;
+    let q: *u8 = p as *u8;
+    _ = os_write(2, q, len);
+}
+
+fn print_u64(v: u64) -> void {
+    if v >= 10 {
+        print_u64(v / 10);
+    }
+    putc(@wrap(u8, v % 10) + 48);
+}
+
+fn print_i64(v: i64) -> void {
+    if v < 0 {
+        putc(45);
+        print_u64(@wrap(u64, 0 -% v));
+    } else {
+        print_u64(@wrap(u64, v));
+    }
+}
+
+fn code_text(code: TrapCode) -> []u8 from static {
+    let n: u8 = code as u8;
+    if n == 0 {
+        return "T01";
+    }
+    if n == 1 {
+        return "T02";
+    }
+    if n == 2 {
+        return "T03";
+    }
+    if n == 3 {
+        return "T04";
+    }
+    if n == 4 {
+        return "T05";
+    }
+    if n == 5 {
+        return "T06";
+    }
+    if n == 6 {
+        return "T07";
+    }
+    if n == 7 {
+        return "T08";
+    }
+    if n == 8 {
+        return "T09";
+    }
+    if n == 9 {
+        return "T10";
+    }
+    if n == 10 {
+        return "T11";
+    }
+    if n == 11 {
+        return "T12";
+    }
+    if n == 12 {
+        return "T13";
+    }
+    if n == 13 {
+        return "T14";
+    }
+    if n == 14 {
+        return "T15";
+    }
+    if n == 15 {
+        return "T16";
+    }
+    return "T17";
+}
+
+fn expand(text: []u8, a: i64, b: i64, c: i64) -> void {
+    var i: i64 = 0;
+    while i < text.len {
+        let byte = text[i];
+        if byte == 1 {
+            print_i64(a);
+        } else if byte == 2 {
+            print_i64(b);
+        } else if byte == 3 {
+            print_i64(c);
+        } else {
+            putc(byte);
+        }
+        i += 1;
+    }
+}
+
+/// The compiler's only trap entry (rt.md §1). `a`, `b` and `c` are the run-time
+/// operands the catalog's message prints, in order.
+pub fn trap(site: &TrapSite, a: i64, b: i64, c: i64) -> never {
+    write_bytes(site.file);
+    putc(58);
+    print_i64(site.line as i64);
+    putc(58);
+    print_i64(site.col as i64);
+    write_bytes(": trap ");
+    write_bytes(code_text(site.code));
+    write_bytes(": ");
+    expand(site.text, a, b, c);
+    let n: u8 = site.code as u8;
+    if n == 7 && c != 0 {
+        write_bytes(": ");
+        write_at(a, b);
+    }
+    if n == 8 && b > 0 {
+        write_at(a, b);
+    }
+    putc(10);
+    os_exit(101);
+}
+
+fn ptr_add(p: u64, n: u64) -> u64 {
+    return p +% n;
+}
+
+fn c_str_len(p: *u8) -> i64 {
+    var n: i64 = 0;
+    unsafe("argv is the C string vector of the process start code") {
+        while true {
+            let address: u64 = p as u64;
+            let offset: u64 = @wrap(u64, n);
+            let q: *u8 = ptr_add(address, offset) as *u8;
+            if q.* == 0 {
+                return n;
+            }
+            n += 1;
+        }
+    }
+    @unreachable();
+}
+
+/// T12 at `<runtime>:0:0` when the operating system refuses the `Env.args` table
+/// (rt.md §1). The site is an ordinary value: `start` allocates nothing.
+fn no_args_memory() -> never {
+    let site = TrapSite.{
+        code: .t12,
+        file: "<runtime>",
+        line: 0,
+        col: 0,
+        text: "no memory for a task",
+    };
+    trap(&site, 0, 0, 0);
+}
+
+/// One mapping shared by the whole process: one `[]u8` per argument, each pointing
+/// into `argv`'s storage. It is never freed (rt.md §1).
+fn args_table(argc: i32, argv: *mut *mut u8) -> [][]u8 from static {
+    let count: i64 = argc as i64;
+    let entry_size: i64 = @sizeof([]u8);
+    let size: i64 = count * entry_size;
+    let raw = os_map(if size == 0 { 1 } else { size });
+    if raw as u64 == 18446744073709551615 {
+        no_args_memory();
+    }
+    unsafe("the mapping is ours, sized for argc entries, and each argv string is live") {
+        let table: *mut []u8 = raw as *mut []u8;
+        var i: i64 = 0;
+        let argv_base: u64 = argv as u64;
+        let table_base: u64 = table as u64;
+        let argv_step: u64 = @wrap(u64, @sizeof(*mut u8));
+        let table_step: u64 = @wrap(u64, @sizeof([]u8));
+        while i < count {
+            let at: u64 = @wrap(u64, i);
+            let slot: *mut *mut u8 =
+                ptr_add(argv_base, at *% argv_step) as *mut *mut u8;
+            let c: *mut u8 = slot.*;
+            let text: *u8 = c as *u8;
+            let len = c_str_len(text);
+            let part: []u8 = @slice_from_raw(text, len);
+            let out: *mut []u8 =
+                ptr_add(table_base, at *% table_step) as *mut []u8;
+            out.* = part;
+            i += 1;
+        }
+        let shared: *[]u8 = table as *[]u8;
+        return @slice_from_raw(shared, count);
+    }
+    @unreachable();
+}
+
+/// The process entry when no scheduler entry is reachable. `entry` is the
+/// compiler-generated `fn(&Env) -> i32` for the root package.
+pub fn start(
+    argc: i32,
+    argv: *mut *mut u8,
+    envp: *mut *mut u8,
+    entry: fn(&Env) -> i32,
+) -> never {
+    let args = args_table(argc, argv);
+    let vars = Vars.init();
+    let heap = Heap.init();
+    let vm = Vm.init();
+    let fs = Fs.init();
+    let net = Net.init();
+    let clock = Clock.init();
+    let rand = Rand.init();
+    let stdin = Reader.init();
+    let stdout = Writer.init();
+    let stderr = Writer.init();
+    let env = Env.{
+        args: args,
+        vars: &vars,
+        heap: heap,
+        vm: vm,
+        fs: &fs,
+        net: &net,
+        clock: &clock,
+        rand: &rand,
+        stdin: &stdin,
+        stdout: &stdout,
+        stderr: &stderr,
+        gpu: .none,
+    };
+    let status = entry(&env);
+    os_exit(status);
+}

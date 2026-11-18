@@ -1,0 +1,47 @@
+import std.Env;
+
+copy struct Pair {
+    a: i64,
+    b: i64,
+}
+
+impl Pair {
+    fn sum(self: &Pair) -> i64 {
+        return self.a + self.b;
+    }
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn pick(xs: []i64, i: i64) -> i64 {
+    return xs[i];
+}
+
+fn maybe(x: i64) -> ?i64 {
+    if x > 0 {
+        return .some(x);
+    }
+    return .none;
+}
+
+pub fn main(env: &Env) -> u8 {
+    let p = Pair.{ a: 1, b: 2 };
+    @assert(p.a + p.b == 3);
+    @assert(p.sum() == 3);
+    let a: [2]i64 = [2]i64.{ 3, 4 };
+    @assert(pick(&a[0..2], 1) == 4);
+    let z: [2]i64 = @zero;
+    @assert(z[0] == 0);
+    let m = maybe(3);
+    match m {
+        .some(v) => {
+            @assert(v == 3);
+        }
+        .none => {
+            @assert(false);
+        }
+    }
+    return 0;
+}

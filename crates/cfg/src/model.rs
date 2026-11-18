@@ -749,6 +749,14 @@ impl Cfgs {
         self.entries[id.0 as usize] = Some(cfg);
     }
 
+    /// Add a CFG that was lowered on its own (the runtime bodies the back end
+    /// links), keeping the ids inside its own little set.
+    pub fn push(&mut self, cfg: Cfg) -> CfgId {
+        let id = CfgId(self.entries.len() as u32);
+        self.entries.push(Some(cfg));
+        id
+    }
+
     /// Drop a body the lowering could not finish.
     pub fn drop_at(&mut self, id: CfgId) {
         self.entries[id.0 as usize] = None;

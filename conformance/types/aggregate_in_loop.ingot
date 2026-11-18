@@ -1,0 +1,22 @@
+//! expect: run
+//! section: 25
+
+import std.Env;
+
+struct Pair { a: i64, b: i64 }
+
+fn sum(limit: i64) -> i64 {
+    var total: i64 = 0;
+    var i: i64 = 0;
+    while i < limit {
+        let p = Pair.{ a: i, b: 2 };
+        total += p.a;
+        i += 1;
+    }
+    return total;
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(sum(600000) == 179999700000);
+    return 0;
+}

@@ -84,6 +84,11 @@ pub struct Analysis {
     pub front_end: Option<FrontEnd>,
     /// Phase 11a: the instances of the checked package, sorted by mangled name.
     pub instances: Vec<ingot_cfg::instances::Instance>,
+    /// Bodies of `std` the back end links but the checked package does not own.
+    /// They are lowered by `lower_for_eval` and are not part of `cfgs`, so phase 9,
+    /// phase 10 and instance discovery do not see them unless the checked package
+    /// is `std` itself.
+    pub extra_cfgs: Vec<ingot_cfg::Cfg>,
 }
 
 impl Analysis {
@@ -191,6 +196,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
     });
 
     let mut cfgs = ingot_cfg::Cfgs::default();
+    let mut extra_cfgs = Vec::new();
     let mut removed_cfgs = ingot_cfg::Cfgs::default();
     let mut cost = Vec::new();
     let mut front_end = None;
@@ -223,6 +229,50 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         );
         let lowered_not_implemented = lowered.not_implemented;
         cfgs = lowered.cfgs;
+        // A build links the runtime core, whose bodies are `std`'s and are not the
+        // checked package's. Type them here and lower every body phase 7 accepted
+        // for the back end; reachability picks what is emitted. `ingot check` does
+        // not need them.
+        if options.roots == ingot_cfg::instances::Roots::Build && std_count > 0 {
+            let std_checked = ingot_sema::check_bodies(
+                &all,
+                &output,
+                bodies.declarations,
+                &target,
+                std_count - 1,
+                Some(&evaluator),
+            );
+            bodies.declarations = std_checked.declarations;
+            diagnostics.extend(std_checked.diagnostics);
+            not_implemented.extend(std_checked.not_implemented);
+            let mut extra_set = ingot_cfg::Cfgs::default();
+            for typed in std_checked.bodies.bodies.values() {
+                if typed.failed {
+                    continue;
+                }
+                match ingot_cfg::lower_for_eval(
+                    &all,
+                    &output.sema,
+                    &output.packages,
+                    &mut bodies.declarations,
+                    typed,
+                ) {
+                    Ok(found) => {
+                        for cfg in found.into_vec() {
+                            extra_set.push(cfg);
+                        }
+                    }
+                    Err(what) => not_implemented.push(format!("lowering: {what}")),
+                }
+            }
+            if !extra_set.is_empty() {
+                let removal =
+                    ingot_cfg::removal::remove_checks(&bodies.declarations, &all, &extra_set);
+                diagnostics.extend(removal.diagnostics);
+                not_implemented.extend(removal.not_implemented);
+                extra_cfgs.extend(removal.cfgs.into_vec());
+            }
+        }
         diagnostics.extend(output.diagnostics.iter().cloned());
         diagnostics.extend(bodies.declarations.diagnostics.iter().cloned());
         diagnostics.extend(bodies.diagnostics.iter().cloned());
@@ -372,6 +422,7 @@ fn analyze_here(package: LoadedPackage, options: &Options) -> io::Result<Analysi
         only_file: None,
         front_end,
         instances,
+        extra_cfgs,
     })
 }
 

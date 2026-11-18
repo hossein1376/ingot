@@ -5,6 +5,13 @@ arith/body_constant_shift_out_of_range.ingot
 arith/constant_division_by_zero.ingot
 arith/constant_overflow.ingot
 arith/constant_shift_out_of_range.ingot
+arith/division_by_zero.ingot
+arith/index_out_of_bounds.ingot
+arith/narrow_out_of_range.ingot
+arith/overflow_traps.ingot
+arith/saturating_mixed_signs.ingot
+arith/shift_out_of_range.ingot
+arith/wrapping_and_saturating.ingot
 borrows/array_elements_one_place.ingot
 borrows/assign_field_while_struct_borrowed.ingot
 borrows/assign_other_field.ingot
@@ -175,6 +182,7 @@ cost/copy_struct_literal.ingot
 cost/counted_loop_constant_hi_has_no_checks.ingot
 cost/counted_loop_has_no_checks.ingot
 cost/dead_branch_has_no_checks.ingot
+cost/division_constant_divisor.ingot
 cost/for_each_has_no_bounds_check.ingot
 cost/for_index_has_no_bounds_check.ingot
 cost/generic_constant_length_has_no_check.ingot
@@ -282,6 +290,7 @@ decls/wrong_type_argument_count.ingot
 errors/catch_not_result.ingot
 errors/defer_break.ingot
 errors/defer_fail.ingot
+errors/defer_order.ingot
 errors/defer_return.ingot
 errors/defer_try.ingot
 errors/errdefer_not_fallible.fixed.ingot
@@ -530,6 +539,8 @@ syntax/struct_literal.ingot
 syntax/unknown_target_feature.ingot
 syntax/unknown_target_field.ingot
 syntax/when_not_constant.ingot
+types/aggregate_arguments.ingot
+types/aggregate_in_loop.ingot
 types/array_len.ingot
 types/array_slice_needs_borrow.fixed.ingot
 types/array_slice_needs_borrow.ingot
@@ -544,11 +555,13 @@ types/closure_fn_once.ingot
 types/closure_not_fn.ingot
 types/condition_not_bool.fixed.ingot
 types/condition_not_bool.ingot
+types/conversions.ingot
 types/duplicate_member_namespace.ingot
 types/dyn_from_borrow.ingot
 types/dyn_hash_and_format.ingot
 types/dyn_missing_impl.ingot
 types/dyn_not_capable.ingot
+types/enum_explicit_tags.ingot
 types/float_remainder.ingot
 types/index_not_i64.fixed.ingot
 types/index_not_i64.ingot
@@ -557,8 +570,10 @@ types/int_literal_not_exact.ingot
 types/int_vector_plain_arith.ingot
 types/interface_call_cannot_infer.ingot
 types/interface_call_without_self.ingot
+types/interface_method_direct_call.ingot
 types/invalid_operand.fixed.ingot
 types/invalid_operand.ingot
+types/large_frame.ingot
 types/literal_float_beside_int.ingot
 types/literal_out_of_range.ingot
 types/literal_under_numeric_bound.ingot
@@ -568,10 +583,13 @@ types/method_values.ingot
 types/missing_return.ingot
 types/needs_shared_reborrow.fixed.ingot
 types/needs_shared_reborrow.ingot
+types/never_missing_return.ingot
 types/no_implicit_conversion.fixed.ingot
 types/no_implicit_conversion.ingot
 types/not_callable.ingot
 types/not_indexable.ingot
+types/option_zero_is_none.ingot
+types/optional_niche.ingot
 types/raw_pointer_member.fixed.ingot
 types/raw_pointer_member.ingot
 types/static_assert_failed.ingot
@@ -583,6 +601,7 @@ types/unused_result.ingot
 types/value_in_void_return.ingot
 types/variant_payload_value.ingot
 types/wrong_argument_count.ingot
+types/zero_enum_tag_value.ingot
 types/zero_enum_tag_zero.ingot
 types/zero_enum_without_tag_zero.ingot
 unsafe/atomic_bad_type.ingot
@@ -608,6 +627,7 @@ unsafe/offset_is_safe.ingot
 unsafe/offset_needs_pointer.ingot
 unsafe/raw_pointer_cast_rejects.ingot
 unsafe/raw_pointer_casts.ingot
+unsafe/raw_round_trip.ingot
 unsafe/slice_ptr_alone_needs_no_unsafe.ingot
 unsafe/slice_ptr_is_safe.ingot
 unsafe/unchecked_builtins.ingot

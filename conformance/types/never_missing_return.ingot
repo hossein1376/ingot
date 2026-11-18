@@ -1,0 +1,5 @@
+//! expect: reject
+//! section: 4.1
+
+fn stop() -> never {
+} //~ E0412

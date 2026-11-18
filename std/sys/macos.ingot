@@ -1,0 +1,36 @@
+// std.sys.macos: the libSystem declarations of the runtime core (rt.md §5).
+//
+// An `extern` block is private to its module, so the small wrappers are the
+// module's package-visible surface. They are the only place the runtime calls the OS.
+
+extern "c" {
+    fn write(fd: i32, buf: *u8, len: i64) -> i64;
+    fn exit(status: i32) -> never;
+    fn mmap(
+        addr: *mut u8,
+        len: i64,
+        prot: i32,
+        flags: i32,
+        fd: i32,
+        offset: i64,
+    ) -> *mut u8;
+}
+
+pub(pkg) fn os_write(fd: i32, buf: *u8, len: i64) -> i64 {
+    unsafe("the runtime writes its own diagnostic to the system's stderr") {
+        return write(fd, buf, len);
+    }
+}
+
+pub(pkg) fn os_exit(status: i32) -> never {
+    unsafe("the runtime leaves the process with the trap status") {
+        exit(status);
+    }
+}
+
+/// One anonymous private mapping, the memory `Env.args` points into.
+pub(pkg) fn os_map(len: i64) -> *mut u8 {
+    unsafe("the runtime reserves its one argument table from the operating system") {
+        return mmap(@wrap(u64, 0) as *mut u8, len, 3, 0x1002, -1, 0);
+    }
+}

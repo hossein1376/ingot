@@ -1,3 +1,9 @@
 // std.rand (spec section 35). A capability type: no public field.
 
 pub struct Rand {}
+
+impl Rand {
+    pub(pkg) fn init() -> Rand {
+        return Rand.{};
+    }
+}

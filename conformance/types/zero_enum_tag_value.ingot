@@ -1,0 +1,12 @@
+//! expect: run
+//! section: 7
+
+import std.Env;
+
+copy enum M: u8 { a = 5, b = 0 }
+
+pub fn main(env: &Env) -> u8 {
+    let n: u8 = @zero(M) as u8;
+    @assert(n == 0);
+    return 0;
+}

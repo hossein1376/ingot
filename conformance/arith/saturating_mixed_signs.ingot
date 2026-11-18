@@ -1,0 +1,25 @@
+//! expect: run
+//! section: 5.2
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+    let max: i32 = 2147483647;
+    let min: i32 = -2147483648;
+    let near_min: i32 = -2147483647;
+    let neg: i32 = -2;
+    @assert(max *| 2 == max);
+    @assert(min *| -1 == max);
+    @assert(near_min *| 2 == min);
+    @assert(max *| neg == min);
+    @assert(neg *| near_min == max);
+    @assert(max +| 1 == max);
+    @assert(min +| -1 == min);
+    @assert(max +| neg == 2147483645);
+    @assert(min +| 2 == -2147483646);
+    @assert(max -| neg == max);
+    @assert(min -| 1 == min);
+    @assert(max -| 1 == 2147483646);
+    @assert(min -| -1 == -2147483647);
+    return 0;
+}

@@ -1930,7 +1930,7 @@ impl Checker<'_, '_, '_> {
         let completes = self.block(c.body);
         self.fns.pop();
         self.par_depth = saved_par;
-        if completes && ret != self.void() && !self.is_never(ret) && !self.is_poison(ret) {
+        if completes && ret != self.void() && !self.is_poison(ret) {
             let b = self.hir.block(c.body).span;
             let at = Span::new(b.end.saturating_sub(1), b.end);
             self.err(

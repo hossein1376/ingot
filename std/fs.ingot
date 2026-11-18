@@ -1,3 +1,9 @@
 // std.fs (spec section 35). A capability type: no public field.
 
 pub struct Fs {}
+
+impl Fs {
+    pub(pkg) fn init() -> Fs {
+        return Fs.{};
+    }
+}

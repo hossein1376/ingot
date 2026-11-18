@@ -466,8 +466,8 @@ platform's.
 | Unknown | Settle in |
 |---|---|
 | ~~The pinned LLVM version~~ Settled: upstream LLVM 22 (Homebrew `llvm@22` on macOS). Apple clang does not read its IR, and the reverse; B1 checks the version at start-up | done |
-| `alwaysinline` honored at `-O0` | B1 |
-| Inline stack probes on aarch64 and on Windows | B1 (aarch64), T3 (Windows) |
+| `alwaysinline` honored at `-O0` | Confirmed in B1: LLVM 22.1.8 keeps `alwaysinline` at `-O0` (the call disappears) and keeps `noinline` (the symbol and call remain). |
+| Inline stack probes on aarch64 and on Windows | B1 (aarch64): **confirmed**. LLVM 22 emits inline probes on `arm64-apple-macosx` when a function carries the attribute group `{ "probe-stack"="inline-asm" "stack-probe-size"="16384" }`: at `-O0` a 64 KiB `alloca` gets an inline probe loop, and at `-O2` four `sub sp, #16384; str xzr, [sp]` pairs. Every function the back end defines carries that group, so `rt.stack_probe` is not needed on aarch64. The `-mstack-arg-probe` and `-mstack-probe-size` driver flags are x86/Windows and do nothing here. T3 must settle Windows. |
 | LLVM no longer requiring a compare-exchange failure order no stronger than success | R2 |
 | `minimumNumber`/`maximumNumber` intrinsics in the pinned version; the x86 cost of the float `@min`/`@max` rule | B4 |
 | Which linker flags make a Mach-O byte-identical | B3 |

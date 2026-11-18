@@ -3,3 +3,15 @@
 pub struct Reader {}
 
 pub struct Writer {}
+
+impl Reader {
+    pub(pkg) fn init() -> Reader {
+        return Reader.{};
+    }
+}
+
+impl Writer {
+    pub(pkg) fn init() -> Writer {
+        return Writer.{};
+    }
+}

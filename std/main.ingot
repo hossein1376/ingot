@@ -33,3 +33,9 @@ pub struct Env {
 /// The environment variables of the process (`env.vars`). The specification gives the
 /// type a name in section 33.1 but no module; it is declared next to `Env`.
 pub struct Vars {}
+
+impl Vars {
+    pub(pkg) fn init() -> Vars {
+        return Vars.{};
+    }
+}

@@ -1,11 +1,15 @@
 //! Runner for the hand-written conformance suite.
 //!
 //! The suite's contract is in `conformance/README.md`. This runner implements
-//! `accept`, `reject` and `cost`, and checks every `.fixed.ingot` against the fix
-//! engine. A `cost` test compares the surviving check markers from phase 10. `run`
-//! and `trap` tests are recognised but fail, because evaluation is not implemented.
-//! A malformed test is a failure rather than a skip.
+//! `accept`, `reject`, `cost`, `run` and `trap`, and checks every `.fixed.ingot`
+//! against the fix engine. A `cost` test compares the surviving check markers from
+//! phase 10. A `run` test builds and runs the program without a `--fast` and with
+//! `--fast`, compares its exit status; a `trap` test compares the one trap line's
+//! file, line and code with its markers. A malformed test is a failure rather than
+//! a skip; a test for another target, or one that needs an unavailable pinned
+//! toolchain, is skipped with the reason recorded.
 
+use crate::build;
 use crate::fix;
 use crate::loader::{self, LoadOptions};
 use crate::pipeline::{self, Analysis, Options};
@@ -61,6 +65,8 @@ pub struct Report {
     /// Paths of the cases that passed, in discovery order.
     pub passes: Vec<PathBuf>,
     pub failures: Vec<Failure>,
+    /// Cases skipped with the reason the target or toolchain does not fit.
+    pub skips: Vec<(PathBuf, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -325,15 +331,19 @@ pub fn run(root: &Path) -> Report {
     for case in discover(root) {
         let outcome = if !case.errors.is_empty() {
             Err(case.errors.join("; "))
-        } else if case
+        } else if let Some(target) = case
             .target
             .as_ref()
-            .is_some_and(|target| target != DEFAULT_TARGET)
+            .filter(|target| *target != DEFAULT_TARGET)
         {
+            report.skips.push((
+                case.path.clone(),
+                format!("target is {target}, not {DEFAULT_TARGET}"),
+            ));
             report.skipped += 1;
             continue;
         } else {
-            run_case(&case)
+            run_case(&case, &mut report)
         };
         match outcome {
             Ok(()) => {
@@ -380,12 +390,131 @@ fn case_root(path: &Path) -> PathBuf {
     }
 }
 
-fn run_case(case: &Case) -> Result<(), String> {
+fn run_case(case: &Case, report: &mut Report) -> Result<(), String> {
     match case.expect {
         Expect::Accept | Expect::Reject | Expect::Cost => {}
-        Expect::Run | Expect::Trap => return Err("evaluation not implemented".to_string()),
+        Expect::Run | Expect::Trap => return run_program_case(case, report),
     }
     run_expectation(case).and_then(|()| if case.has_fix { run_fix(case) } else { Ok(()) })
+}
+
+fn run_program_case(case: &Case, report: &mut Report) -> Result<(), String> {
+    let mut analysis = analyze_case_with_roots(case, ingot_cfg::instances::Roots::Build)
+        .ok_or_else(|| "could not read source".to_string())?;
+    if !analysis.diagnostics.is_empty() {
+        return Err(format!(
+            "build reported [{}]",
+            format_markers(&diagnostics_markers(&analysis))
+        ));
+    }
+    if !analysis.not_implemented.is_empty() {
+        return Err(format!(
+            "not implemented: {}",
+            analysis.not_implemented.join("; ")
+        ));
+    }
+    let root = case_root(&case.path);
+    let stem = case
+        .path
+        .strip_prefix(Path::new("conformance"))
+        .unwrap_or(&case.path)
+        .to_string_lossy()
+        .replace(['/', '.'], "_");
+    static NEXT_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = format!(
+        "ingot-conformance-{}-{}",
+        std::process::id(),
+        NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let dir = std::env::temp_dir().join(unique);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let outcome = (|| {
+        for fast in [false, true] {
+            let out = dir.join(format!("{stem}-{}", if fast { "fast" } else { "opt" }));
+            let built = match build::build_analysis(&mut analysis, &root, Some(&out), fast) {
+                Ok(built) => built,
+                Err(ingot_codegen::BuildError::Toolchain(message)) => {
+                    report.skips.push((case.path.clone(), message.clone()));
+                    report.skipped += 1;
+                    return Ok(());
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "{} ({})",
+                        e,
+                        if fast { "--fast" } else { "optimized" }
+                    ));
+                }
+            };
+            let output = std::process::Command::new(&built.artifact)
+                .output()
+                .map_err(|e| format!("could not run {}: {e}", built.artifact.display()))?;
+            if case.expect == Expect::Run {
+                let status = output.status.code().unwrap_or(-1);
+                if status != case.exit {
+                    return Err(format!(
+                        "expected exit {}, got {} ({})",
+                        case.exit,
+                        status,
+                        if fast { "--fast" } else { "optimized" }
+                    ));
+                }
+            } else {
+                let status = output.status.code().unwrap_or(-1);
+                if status != 101 {
+                    return Err(format!(
+                        "expected trap exit 101, got {} ({})",
+                        status,
+                        if fast { "--fast" } else { "optimized" }
+                    ));
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let lines: Vec<&str> = stderr.lines().filter(|l| l.contains(": trap T")).collect();
+                if lines.len() != 1 {
+                    return Err(format!(
+                        "expected one trap line, got {} ({})",
+                        lines.len(),
+                        if fast { "--fast" } else { "optimized" }
+                    ));
+                }
+                let (file, line, code) = parse_trap_line(lines[0])
+                    .ok_or_else(|| format!("malformed trap line: {}", lines[0]))?;
+                let found = case
+                    .markers
+                    .iter()
+                    .any(|m| m.file == file && m.line == line && m.code == code);
+                if !found {
+                    return Err(format!(
+                        "trap line does not match a marker: {}:{} {} ({})",
+                        file,
+                        line,
+                        code,
+                        if fast { "--fast" } else { "optimized" }
+                    ));
+                }
+                if case.markers.is_empty() {
+                    return Err("a trap test has no trap marker".to_string());
+                }
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    outcome
+}
+
+fn parse_trap_line(line: &str) -> Option<(String, u32, String)> {
+    let at = line.find(": trap ")?;
+    let before = &line[..at];
+    let after = &line[at + ": trap ".len()..];
+    let code = after.split(':').next()?.trim().to_string();
+    let mut parts = before.rsplitn(3, ':');
+    let col = parts.next()?;
+    let line_no = parts.next()?.parse().ok()?;
+    let _col = col.parse::<u32>().ok()?;
+    let file = parts.next()?.to_string();
+    Some((file, line_no, code))
 }
 
 fn run_expectation(case: &Case) -> Result<(), String> {
@@ -569,4 +698,13 @@ pub fn supported(case: &Case) -> bool {
 
 pub fn analyze_case(case: &Case) -> Option<Analysis> {
     pipeline::analyze_path_with(&case_root(&case.path), &case_options()).ok()
+}
+
+fn analyze_case_with_roots(case: &Case, roots: ingot_cfg::instances::Roots) -> Option<Analysis> {
+    let options = Options {
+        load: harness_load(),
+        roots,
+        ..Options::default()
+    };
+    pipeline::analyze_path_with(&case_root(&case.path), &options).ok()
 }

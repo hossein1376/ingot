@@ -1551,7 +1551,7 @@ impl Cx<'_, '_> {
         }
         match self.d.types.kind(ty).clone() {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::RawPtr(..) => true,
-            TyKind::Void => result,
+            TyKind::Void | TyKind::Never => result,
             TyKind::FnPtr(sig) => sig.ext,
             // 04 §25/§29: a nullable C function pointer crosses the C ABI.
             TyKind::Optional(inner) => match self.d.types.kind(inner) {

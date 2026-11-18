@@ -1,3 +1,9 @@
 // std.time (spec section 35). A capability type: no public field.
 
 pub struct Clock {}
+
+impl Clock {
+    pub(pkg) fn init() -> Clock {
+        return Clock.{};
+    }
+}

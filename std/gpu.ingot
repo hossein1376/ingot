@@ -1,3 +1,9 @@
 // std.gpu (spec sections 28 and 35). A capability type: no public field.
 
 pub struct Device {}
+
+impl Device {
+    pub(pkg) fn init() -> Device {
+        return Device.{};
+    }
+}

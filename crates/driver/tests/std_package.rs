@@ -52,7 +52,7 @@ fn std_resolves_without_a_diagnostic() {
         analysis.not_implemented
     );
     assert!(!analysis.not_implemented.contains(&UNCHECKED.to_string()));
-    assert_eq!(analysis.files, 15);
+    assert_eq!(analysis.files, 17);
 }
 
 #[test]
@@ -161,9 +161,10 @@ fn std_declares_the_types_the_conformance_tests_import() {
 }
 
 #[test]
-fn std_has_no_functions_yet_outside_sync() {
-    // Methods and bodies come with type checking. `sync.ingot` is the first module
-    // with real bodies (`Cell` and `Atomic`, part 2 of P1b).
+fn std_has_only_capability_constructors_outside_sync() {
+    // `sync.ingot` has the first real bodies (`Cell` and `Atomic`, P1b). The
+    // capability modules add one `pub(pkg) fn init` each, which `rt.start` uses to
+    // build `Env` (docs/std/env.md); they must not grow another body.
     for file in [
         "main.ingot",
         "mem.ingot",
@@ -178,14 +179,24 @@ fn std_has_no_functions_yet_outside_sync() {
         "exec.ingot",
     ] {
         let (_, ast) = module(file);
+        let mut bodies = Vec::new();
+        for item in &ast.items {
+            if let Item::Fn(f) = item {
+                bodies.push(f);
+            }
+            if let Item::Impl(imp) = item {
+                for member in &imp.members {
+                    if let Item::Fn(f) = member {
+                        bodies.push(f);
+                    }
+                }
+            }
+        }
         assert!(
-            !ast.items.iter().any(|i| match i {
-                Item::Fn(_) => true,
-                // `unsafe impl Send/Sync` states a property and has no member.
-                Item::Impl(imp) => !imp.members.is_empty(),
-                _ => false,
-            }),
-            "{file}"
+            bodies
+                .iter()
+                .all(|f| f.name == "init" && f.mods.pkg && !f.mods.public && f.params.is_empty()),
+            "{file}: only the pub(pkg) capability constructor may have a body"
         );
     }
 }

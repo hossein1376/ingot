@@ -83,8 +83,8 @@ trailing white space from both. The fixed file is also a test of its own and exp
 
 ## What is covered
 
-643 test files: 157 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
-all), 411 `reject`, 13 `run`, 6 `trap`, 56 `cost`.
+653 test files: 157 `accept` (43 of them `.fixed.ingot` tests; 44 fix results in
+all), 412 `reject`, 21 `run`, 6 `trap`, 57 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|

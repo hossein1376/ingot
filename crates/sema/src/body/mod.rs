@@ -687,8 +687,7 @@ impl Cx<'_, '_> {
                 "a path through this `waitable fn` reaches the end of its body without returning its `Wait` operation",
                 at,
             );
-        } else if completes && sig.ret != c.void() && !c.is_never(sig.ret) && !c.is_poison(sig.ret)
-        {
+        } else if completes && sig.ret != c.void() && !c.is_poison(sig.ret) {
             let b = c.hir.block(body).span;
             let at = Span::new(b.end.saturating_sub(1), b.end);
             c.err(

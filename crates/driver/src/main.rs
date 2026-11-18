@@ -1,7 +1,9 @@
+use ingot_driver::build;
 use ingot_driver::commands;
 use ingot_driver::conformance;
 use ingot_driver::files::Overlays;
 use ingot_driver::fix;
+use ingot_driver::pipeline;
 use ingot_driver::query;
 use ingot_driver::serve;
 use std::io::{BufRead, Write};
@@ -174,7 +176,64 @@ fn run(args: &[String]) -> Result<u8, String> {
             }
             Ok(output.exit)
         }
-        "run" | "test" => Err(format!("`{command}` is not implemented yet")),
+        "build" => {
+            let target = flag_value(args, "--target")?;
+            let output = flag_value(args, "-o")?;
+            let fast = has_flag(args, "--fast");
+            let path = path_arg(args, &["--target", "-o"])?;
+            build_command(
+                &path,
+                target.as_deref(),
+                output.map(PathBuf::from),
+                fast,
+                json,
+            )
+        }
+        "run" => {
+            if has_flag(args, "--target") {
+                return Err("`run` has no `--target`; it builds for the host target".to_string());
+            }
+            let fast = has_flag(args, "--fast");
+            let options = pipeline::Options {
+                roots: ingot_cfg::instances::Roots::Build,
+                ..pipeline::Options::default()
+            };
+            let path = PathBuf::from(".");
+            let mut analysis =
+                pipeline::analyze_path_with(&path, &options).map_err(|e| e.to_string())?;
+            print_analysis(&analysis, false);
+            if !analysis.diagnostics.is_empty() {
+                return Ok(1);
+            }
+            if !analysis.not_implemented.is_empty() {
+                for what in &analysis.not_implemented {
+                    eprintln!("ingot: not implemented: {what}");
+                }
+                return Ok(2);
+            }
+            let root = package_root(&path);
+            let built = match build::build_analysis(&mut analysis, &root, None, fast) {
+                Ok(built) => built,
+                Err(ingot_codegen::BuildError::NoEntryPoint) => {
+                    print_no_entry(&analysis, false);
+                    return Ok(1);
+                }
+                Err(e) => {
+                    eprintln!("ingot: {e}");
+                    return Ok(2);
+                }
+            };
+            let mut rest = Vec::new();
+            if let Some(i) = args.iter().position(|a| a == "--") {
+                rest.extend_from_slice(&args[i + 1..]);
+            }
+            let status = std::process::Command::new(&built.artifact)
+                .args(&rest)
+                .status()
+                .map_err(|e| format!("could not run {}: {e}", built.artifact.display()))?;
+            Ok(process_status(status))
+        }
+        "test" => Err(format!("`{command}` is not implemented yet")),
         "conformance" => {
             let root = args
                 .iter()
@@ -183,6 +242,9 @@ fn run(args: &[String]) -> Result<u8, String> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("conformance"));
             let report = conformance::run(&root);
+            for (path, reason) in &report.skips {
+                eprintln!("SKIP {}: {reason}", path.display());
+            }
             for f in &report.failures {
                 eprintln!("FAIL {}: {}", f.path.display(), f.message);
             }
@@ -194,6 +256,175 @@ fn run(args: &[String]) -> Result<u8, String> {
         }
         other => Err(format!("unknown command `{other}`")),
     }
+}
+
+/// The child's exit status, or 128 + the signal that killed it. A signal is not a
+/// compiler failure, so it must not collapse to status 2.
+fn process_status(status: std::process::ExitStatus) -> u8 {
+    if let Some(code) = status.code() {
+        return (code & 0xff) as u8;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return (128 + signal) as u8;
+        }
+    }
+    2
+}
+
+fn package_root(path: &std::path::Path) -> PathBuf {
+    if path.is_dir() {
+        return path.to_path_buf();
+    }
+    let files = ingot_driver::files::Files::default();
+    ingot_driver::loader::manifest_dir(path, &files).unwrap_or_else(|| {
+        path.parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf()
+    })
+}
+
+fn print_no_entry(analysis: &pipeline::Analysis, json: bool) {
+    let file = analysis
+        .front_end
+        .as_ref()
+        .and_then(|front| {
+            let package = front.resolved.sema.packages.get(front.checked)?;
+            let module = package.root?;
+            front.resolved.sema.module(module).file
+        })
+        .and_then(|id| analysis.sources.files.get(id))
+        .or_else(|| analysis.sources.files.first());
+    let fallback = ingot_diag::source::Source::new("ingot.toml", "");
+    let source = file.unwrap_or(&fallback);
+    let diagnostic = ingot_diag::diagnostic::Diagnostic::new(
+        "E1704",
+        "`main` is missing: a build needs `pub fn main` in `main.ingot`",
+        source,
+        ingot_diag::source::Span::new(0, 0),
+    );
+    if json {
+        println!(
+            "{}",
+            diagnostic.to_json_for(&analysis.sources, &analysis.target)
+        );
+        println!(
+            "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":false,\"protocol\":1,\"errors\":1,\"files\":{},\"target\":\"{}\",\"ms\":0}}",
+            analysis.files, analysis.target
+        );
+    } else {
+        print!("{}", diagnostic.to_human(&analysis.sources));
+    }
+}
+
+fn print_analysis(analysis: &pipeline::Analysis, json: bool) {
+    if json {
+        for line in analysis
+            .diagnostics
+            .iter()
+            .map(|d| d.to_json_for(&analysis.sources, &analysis.target))
+        {
+            println!("{line}");
+        }
+    } else {
+        for d in &analysis.diagnostics {
+            print!("{}", d.to_human(&analysis.sources));
+        }
+    }
+}
+
+fn build_command(
+    path: &std::path::Path,
+    target: Option<&str>,
+    output: Option<PathBuf>,
+    fast: bool,
+    json: bool,
+) -> Result<u8, String> {
+    let started = Instant::now();
+    let mut options = pipeline::Options {
+        roots: ingot_cfg::instances::Roots::Build,
+        ..pipeline::Options::default()
+    };
+    if let Some(name) = target {
+        if ingot_sema::Target::by_name(name).is_none() {
+            return Err(format!("`{name}` is not a target"));
+        }
+        options.target = name.to_string();
+    }
+    let mut analysis = match pipeline::analyze_path_with(path, &options) {
+        Ok(a) => a,
+        Err(e) => {
+            if json {
+                for line in commands::failure_lines("build", &e.to_string(), started) {
+                    println!("{line}");
+                }
+            }
+            return Err(e.to_string());
+        }
+    };
+    print_analysis(&analysis, json);
+    if !analysis.diagnostics.is_empty() {
+        if json {
+            println!(
+                "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":false,\"protocol\":1,\"errors\":{},\"files\":{},\"target\":\"{}\",\"ms\":{}}}",
+                analysis.diagnostics.len(),
+                analysis.files,
+                analysis.target,
+                started.elapsed().as_millis()
+            );
+        }
+        return Ok(1);
+    }
+    if !analysis.not_implemented.is_empty() {
+        for what in &analysis.not_implemented {
+            eprintln!("ingot: not implemented: {what}");
+        }
+        if json {
+            println!(
+                "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":false,\"protocol\":1,\"errors\":0,\"files\":{},\"target\":\"{}\",\"ms\":{}}}",
+                analysis.files,
+                analysis.target,
+                started.elapsed().as_millis()
+            );
+        }
+        return Ok(2);
+    }
+    let root = package_root(path);
+    let built = match build::build_analysis(&mut analysis, &root, output.as_deref(), fast) {
+        Ok(built) => built,
+        Err(ingot_codegen::BuildError::NoEntryPoint) => {
+            print_no_entry(&analysis, json);
+            return Ok(1);
+        }
+        Err(e) => {
+            if json {
+                for line in commands::failure_lines("build", &e.to_string(), started) {
+                    println!("{line}");
+                }
+            } else {
+                eprintln!("ingot: {e}");
+            }
+            return Ok(2);
+        }
+    };
+    if json {
+        println!(
+            "{{\"type\":\"summary\",\"command\":\"build\",\"ok\":true,\"protocol\":1,\"errors\":0,\"files\":{},\"target\":\"{}\",\"artifact\":{},\"ms\":{}}}",
+            analysis.files,
+            analysis.target,
+            {
+                let mut s = String::new();
+                ingot_diag::diagnostic::json_string(&mut s, &built.artifact.display().to_string());
+                s
+            },
+            started.elapsed().as_millis()
+        );
+    } else {
+        println!("built {}", built.artifact.display());
+    }
+    Ok(0)
 }
 
 /// The command word as the user gave it: the first argument when it is not a flag.

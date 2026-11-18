@@ -1,0 +1,42 @@
+//! expect: run
+//! section: 7, 25
+
+import std.Env;
+
+struct Rgb { r: u8, g: u8, b: u8 }
+struct Fp { x: f64, y: f64 }
+struct Big { a: i64, b: i64, c: i64, d: [5]i32 }
+struct Inner { k: [2]u16 }
+struct Outer { i: Inner, t: (i8, i64) }
+
+fn sum(c: Rgb) -> i64 {
+    return c.r as i64 + c.g as i64 + c.b as i64;
+}
+
+fn mk(r: u8) -> Rgb {
+    return Rgb.{ r: r, g: 2, b: 3 };
+}
+
+fn fp(p: Fp) -> Fp {
+    return Fp.{ x: p.y, y: p.x };
+}
+
+fn big(b: Big, i: i64) -> Big {
+    var c = b;
+    c.d[i] = 99;
+    return c;
+}
+
+fn outer(o: Outer) -> i64 {
+    return o.i.k[1] as i64 + o.t.1;
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(sum(mk(1)) == 6);
+    let q = fp(Fp.{ x: 1.5, y: 2.5 });
+    @assert(q.x == 2.5 && q.y == 1.5);
+    let b = big(Big.{ a: 1, b: 2, c: 3, d: [5]i32.{ 0, 0, 0, 0, 0 } }, 4);
+    @assert(b.d[4] == 99 && b.c == 3);
+    @assert(outer(Outer.{ i: Inner.{ k: [2]u16.{ 5, 6 } }, t: (1, 40) }) == 46);
+    return 0;
+}

@@ -1,3 +1,9 @@
 // std.net (spec section 35). A capability type: no public field.
 
 pub struct Net {}
+
+impl Net {
+    pub(pkg) fn init() -> Net {
+        return Net.{};
+    }
+}

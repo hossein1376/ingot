@@ -1,0 +1,18 @@
+//! expect: cost
+//! section: 31
+
+fn quotient(v: i64) -> i64 {
+    return v / 10;
+}
+
+fn remainder(v: i64) -> i64 {
+    return v % 10;
+}
+
+fn by_negative_one(v: i64) -> i64 {
+    return v / -1; //~ div_check
+}
+
+fn by_local(v: i64, c: i64) -> i64 {
+    return v / c; //~ div_check
+}

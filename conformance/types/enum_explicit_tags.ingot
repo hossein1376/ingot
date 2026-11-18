@@ -1,0 +1,28 @@
+//! expect: run
+//! section: 7, 25
+
+import std.Env;
+
+enum E: u16 { a = 3, b = 9, c }
+
+fn tag(e: E) -> u16 {
+    return e as u16;
+}
+
+fn arm(e: E) -> i64 {
+    match e {
+        .a => { return 1; }
+        .b => { return 2; }
+        .c => { return 3; }
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(tag(.a) == 3);
+    @assert(tag(.b) == 9);
+    @assert(tag(.c) == 10);
+    @assert(arm(.a) == 1);
+    @assert(arm(.b) == 2);
+    @assert(arm(.c) == 3);
+    return 0;
+}

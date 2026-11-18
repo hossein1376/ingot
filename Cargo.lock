@@ -12,6 +12,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-codegen"
+version = "0.1.0"
+dependencies = [
+ "ingot-cfg",
+ "ingot-diag",
+ "ingot-sema",
+ "ingot-syntax",
+]
+
+[[package]]
 name = "ingot-diag"
 version = "0.1.0"
 
@@ -20,6 +30,7 @@ name = "ingot-driver"
 version = "0.1.0"
 dependencies = [
  "ingot-cfg",
+ "ingot-codegen",
  "ingot-diag",
  "ingot-sema",
  "ingot-syntax",

@@ -447,3 +447,39 @@ fn cost_prints_diagnostics_and_filters_to_one_file() {
         "{out}"
     );
 }
+
+#[test]
+fn building_for_another_target_is_not_implemented() {
+    let dir = package(
+        "build-target",
+        "name = \"app\"\n",
+        "import std.Env;\n\npub fn main(env: &Env) -> u8 {\n    return 0;\n}\n",
+    );
+    let o = ingot(&["build", "--target", "x86_64-linux-znver4"], &dir);
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stderr(&o).contains("not implemented: building for x86_64-linux-znver4 (T-steps)"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(
+        !dir.join("target").exists(),
+        "a refused target wrote an artifact"
+    );
+}
+
+#[test]
+fn an_exported_aggregate_is_not_implemented() {
+    let dir = package(
+        "export-aggregate",
+        "name = \"app\"\n",
+        "import std.Env;\n\ncopy struct Fp { x: f64, y: f64 }\n\nexport fn swap_fp(p: Fp) -> f64 {\n    return p.y;\n}\n\npub fn main(env: &Env) -> u8 {\n    return 0;\n}\n",
+    );
+    let o = ingot(&["build"], &dir);
+    assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stderr(&o).contains("not implemented: the C ABI for aggregates (B6)"),
+        "{}",
+        stderr(&o)
+    );
+}

@@ -1,0 +1,31 @@
+//! expect: run
+//! section: 4.4
+
+import std.Env;
+
+interface Area {
+    fn area(self: &Self) -> i64;
+}
+
+struct Sq { s: i64 }
+struct Rect { w: i64, h: i64 }
+
+impl Area for Sq {
+    fn area(self: &Self) -> i64 {
+        return self.s * self.s;
+    }
+}
+
+impl Area for Rect {
+    fn area(self: &Self) -> i64 {
+        return self.w * self.h;
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    let q = Sq.{ s: 3 };
+    @assert(q.area() == 9);
+    let r = Rect.{ w: 4, h: 5 };
+    @assert(r.area() == 20);
+    return 0;
+}

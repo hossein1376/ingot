@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 ingot-cfg = { path = "../cfg" }
+ingot-codegen = { path = "../codegen" }
 ingot-diag = { path = "../diag" }
 ingot-sema = { path = "../sema" }
 ingot-syntax = { path = "../syntax" }
