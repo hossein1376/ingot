@@ -250,7 +250,8 @@ dependency has `rev` and `hash` and no `path`. A package taken from the root's
 `[override]` has `"override":true`. The summary holds `packages`, the number of lines.
 
 `ingot deps update NAME [--rev R]` fetches `NAME` at `R` (default: the manifest's
-`rev`), computes its hash, and rewrites `rev` and `hash` in the entry for `NAME` in the
+`rev`), computes its hash, and rewrites `rev` (as the commit fetched) and `hash` in the
+entry for `NAME` in the
 root's `[override]` if it has one; otherwise in every git entry for `NAME` in the
 manifests reached from the root through path dependencies alone (the root's included).
 Only those two values change; the rest of each file is kept byte for byte. It prints the

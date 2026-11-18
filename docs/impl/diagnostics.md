@@ -22,8 +22,8 @@ One JSON object per line on standard output, for `check`, `build`, `test` and `f
 * **Positions.** Lines and columns are 1-based. Columns count bytes. Spans are half-open.
   `file` is the path relative to the package root, with `/` separators on every system.
   A file of a dependency or of `std` is the package's name, `/`, and its path in that
-  package; a run over a workspace shows its members' files relative to the workspace
-  root (05 §33.2).
+  package; a run at a workspace root shows its members' files relative to the
+  workspace root (05 §33.2).
 * **Order.** Diagnostics are sorted by file path (byte order), then by the start of the
   primary span, then by code. The order never depends on how the compiler was scheduled.
 * **Completeness.** All independent errors of a run are reported. An error whose only

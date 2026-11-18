@@ -217,7 +217,8 @@ zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256
 
 * **A git dependency** is pinned in the manifest that names it: `rev` says where to fetch
   and `hash` is what is checked (E1703), so a mirror or a moved tag cannot change a
-  build. All three keys are required. The hash is SHA-256 over the files a build can
+  build. All three keys are required. `rev` is anything `git` can fetch: a commit, a
+  tag or a branch. The hash is SHA-256 over the files a build can
   read: every `ingot.toml` and every `.ingot` file in the dependency's directory tree
   (nested packages included, a `.git` directory excluded), and every file a manifest
   names (`asm` sources, a profile). For each, in byte order of the relative path with `/`
@@ -237,7 +238,9 @@ zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256
 * **There is no lock file.** A dependency's own manifest is inside its hash, so the root
   manifest determines the whole graph.
 * **Updating** is a command that edits the manifest: `ingot deps update NAME [--rev R]`
-  fetches, computes and writes `rev` and `hash`. `ingot deps` prints the graph and
+  fetches, computes and writes `rev` and `hash`; the `rev` it writes is the commit it
+  fetched, even when given a branch or tag, so the two always name the same content.
+  `ingot deps` prints the graph and
   `ingot deps fetch` fills the cache. `build`, `check` and `test` never use the network.
   E1703 has no fix edit: accepting changed content is a deliberate command.
 * **The graph** is walked breadth-first from the root, each manifest's `[deps]` in name
@@ -267,17 +270,21 @@ zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256
   directory relative to the root; `*` may only be a whole last segment, and stands for
   every subdirectory with an `ingot.toml`, in byte order. A member's own `[workspace]`
   and `[override]` have no effect. A command run inside a member uses the nearest
-  workspace above it that lists the member. When a command runs over a workspace, the
-  files of its members are shown relative to the workspace root, however they are
-  reached, and a diagnostic two members share is reported once.
+  workspace above it that lists the member (its `[override]`), and shows paths as for
+  any package: the member's own files relative to it, other packages as `name/...`.
+  When a command runs at the workspace root, the files of its members are shown
+  relative to the workspace root, however they are reached, and a diagnostic two
+  members share is reported once.
 * **`[link]` is the union** over every package in the build, without duplicates, in
   package order; the build summary lists the result. **`[runtime]` is the root's**: in a
   dependency it has no effect. `[link.<target>] asm`, a list of assembly sources, is
   allowed in `std`'s manifest only (E1701 elsewhere); `ingot audit` lists the files.
 * **Targets.** Building or checking for a target needs every package in the graph to
-  list it (E1709 at the `[deps]` entry otherwise). `--all-targets` uses the root's list.
+  list it (E1709 at the `[deps]` entry otherwise; for the root itself, at its `targets`
+  key). `--all-targets` uses the root's list.
 * **`std` is tied to the compiler.** It ships with it, is not in `[deps]`, cannot be
-  overridden, and is not hashed per package. `ingot = "0.4"` states the oldest compiler
+  overridden (a `[deps]` or `[override]` entry named `std` is E1701), and is not hashed
+  per package. `ingot = "0.4"` states the oldest compiler
   a package works with, as `MAJOR.MINOR`, compared as two numbers (E1710 when the
   compiler is older, E1701 when the value has another form).
 * **Output.** `ingot build` produces an executable. A C-callable library is deferred

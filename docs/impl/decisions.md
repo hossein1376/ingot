@@ -320,6 +320,13 @@ code alone.
   compiler. *Rejected:* BLAKE3, whose speed does not matter for source trees and whose
   tool is not installed by default. The `sha256:` prefix leaves room for another
   algorithm later.
+* **`deps update` writes the commit it fetched** (*user*, 2026-11-18, P4a review), even
+  for `--rev main`. *Why:* `rev` and `hash` then always name the same content; a branch
+  in a manifest turns into E1703 for everyone once it moves. *Rejected:* writing the
+  branch name back.
+* **Inside a workspace member, paths are the member's** (*user*, 2026-11-18, P4a
+  review): the member is the package, as tools.md §1 says; workspace-relative paths only
+  at the workspace root. *Rejected:* workspace-relative everywhere.
 * **Smaller package rules** (*reviewer*, 2026-11-18, for P4a; 01 §2, 05 §33, §33.2):
   a nested `ingot.toml` ends a package (workspaces and in-tree path dependencies need
   it); a module imports only its own package, `std` and its own `[deps]` (a transitive
