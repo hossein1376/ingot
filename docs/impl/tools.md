@@ -210,6 +210,13 @@ inside the package, with `"pub(pkg)"` in `modifiers`:
   `I.name`, with the module path in front. An `impl I for T` has its own line with
   path `T`'s path; an `impl T` has none, only its methods.
 * `size`, `align` and offsets are for the target of `--target`, the host by default.
+* `span` is the declared name, as in `query symbols` (§5).
+* Every type in a line (`params[].type`, `result.type`, `result.error`, a field's
+  `type`, `value_type`, `aliases`, a variant's `payload`) is the type as written in the
+  declaration, spaced as `signature` is. A generic alias's parameters are in
+  `generics`.
+* A dotted `PATH` that names nothing in the build is a failure (§1), as a path on disk
+  that does not exist is.
 * `size`, `align` and offsets are absent for a generic type, whose layout depends on its
   arguments.
 * An `unsafe fn` has its safety preconditions in `doc`, and `"unsafe"` in `modifiers`.
@@ -256,6 +263,8 @@ and `for`), `static_interior` (with `value_type`).
   `unsafe impl`, and each `static` whose type has interior mutability (glossary). An
   occurrence inside a `when` branch the target does not take is not listed.
 * `fn` is the full path of the function or test that contains it; absent for an item.
+* An `extern` line's `abi` is the block's string and its `symbol` the function's name;
+  an `export` line's `symbol` is the function's name.
 * Lines are sorted by file path and then by the start of the span, as diagnostics are.
 
 ### `ingot layout TYPE [--target T]`
