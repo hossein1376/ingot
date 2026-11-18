@@ -1,0 +1,33 @@
+//! expect: run
+//! section: 4.5
+
+import std.Env;
+
+struct F32s { x: f32, y: f32 }
+struct F64s { x: f64, y: f64 }
+
+const one32: f32 = 0.1;
+const one64: f64 = 0.1;
+const arr32: [3]f32 = [3]f32.{ 0.1, 0.2, 0.3 };
+const arr64: [3]f64 = [3]f64.{ 0.1, 0.2, 0.3 };
+const s32: F32s = F32s.{ x: 0.1, y: 0.2 };
+const s64: F64s = F64s.{ x: 0.1, y: 0.2 };
+
+static st32: f32 = 0.1;
+static st64: f64 = 0.1;
+static st_arr32: [3]f32 = [3]f32.{ 0.1, 0.2, 0.3 };
+static st_s64: F64s = F64s.{ x: 0.1, y: 0.2 };
+
+pub fn main(env: &Env) -> u8 {
+    @assert(one32 == 0.1);
+    @assert(one64 == 0.1);
+    @assert(arr32[0] == 0.1);
+    @assert(arr64[2] == 0.3);
+    @assert(s32.x == 0.1 && s32.y == 0.2);
+    @assert(s64.x == 0.1 && s64.y == 0.2);
+    @assert(st32 == 0.1);
+    @assert(st64 == 0.1);
+    @assert(st_arr32[1] == 0.2);
+    @assert(st_s64.y == 0.2);
+    return 0;
+}

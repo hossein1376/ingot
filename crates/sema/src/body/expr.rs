@@ -61,16 +61,28 @@ impl Checker<'_, '_, '_> {
             if source_m != target_m {
                 return None;
             }
-            let TyKind::Closure(_, idx, _) = self.kind(inner) else {
-                return None;
+            let inner_kind = self.kind(inner).clone();
+            let meets = match inner_kind {
+                TyKind::Closure(_, idx, _) => {
+                    let c = self.out.closures.get(&ExprId(idx)).cloned()?;
+                    let meets = match kind {
+                        FnKind::Fn => c.kind == FnKind::Fn,
+                        FnKind::FnMut => c.kind != FnKind::FnOnce,
+                        FnKind::FnOnce => true,
+                    };
+                    if !meets || c.sig != sig {
+                        return None;
+                    }
+                    true
+                }
+                // 01 §5.6: a function or a `fn` pointer satisfies the `Fn` bound. An
+                // `extern fn` needs `unsafe` to call, so it is not a `Fn`.
+                TyKind::FnPtr(source) => {
+                    !source.ext && matches!(kind, FnKind::Fn | FnKind::FnMut) && source == sig
+                }
+                _ => return None,
             };
-            let c = self.out.closures.get(&ExprId(idx)).cloned()?;
-            let meets = match kind {
-                FnKind::Fn => c.kind == FnKind::Fn,
-                FnKind::FnMut => c.kind != FnKind::FnOnce,
-                FnKind::FnOnce => true,
-            };
-            if !meets || c.sig != sig {
+            if !meets {
                 return None;
             }
             let info = FnDynCoercion {

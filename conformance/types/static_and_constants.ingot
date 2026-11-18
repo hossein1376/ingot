@@ -1,0 +1,36 @@
+//! expect: run
+//! section: 4.5, 25
+
+import std.Env;
+
+struct Point { x: i64, y: i64 }
+
+const table: [4]u32 = [4]u32.{ 1, 2, 3, 4 };
+const origin: Point = Point.{ x: 3, y: 4 };
+
+static hello: [6]u8 = [6]u8.{ 104, 101, 108, 108, 111, 33 };
+static greeting: []u8 = "hi";
+static ticks: i64 align(16) = 5;
+static origin_copy: Point = Point.{ x: 10, y: 20 };
+
+fn add(p: Point) -> i64 {
+    return p.x + p.y;
+}
+
+fn read(p: &i64) -> i64 {
+    return p.*;
+}
+
+pub fn main(env: &Env) -> u8 {
+    let t = table;
+    @assert(t[2] == 3);
+    @assert(add(origin) == 7);
+    @assert(hello[5] == 33);
+    @assert(greeting.len == 2);
+    @assert(ticks == 5);
+    let addr = &ticks as *i64 as u64;
+    @assert(addr % 16 == 0);
+    @assert(read(&ticks) == 5);
+    @assert(origin_copy.x + origin_copy.y == 30);
+    return 0;
+}

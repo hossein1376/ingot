@@ -19,7 +19,10 @@ use ingot_cfg::model::{
 use ingot_diag::source::{Sources, Span};
 use ingot_sema::defs::{DefId, DefKind, Sema};
 use ingot_sema::sigs::{Declarations, FnSig, ItemSig, Layout, LayoutKind};
-use ingot_sema::ty::{ConstValue, FloatTy, IntTy, Mutability, Subst, TyKind, TypeId};
+use ingot_sema::ty::{
+    ConstArg, ConstValue, FloatTy, GenericArg, IntTy, Mutability, Subst, TyKind, TypeId,
+};
+use ingot_sema::value::{PackElems, Value as SemValue};
 use ingot_syntax::ast::BinOp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -150,6 +153,52 @@ struct Body {
     cfg: Cfg,
 }
 
+/// How a function returns a `T ! E` or a non-niche `?T`. `Reg` carries the tag and
+/// up to one payload register in an LLVM struct; `Ptr` takes a hidden result pointer
+/// and returns only the tag. A niche `?T` is `Plain`: its null-pointer form is the
+/// whole value.
+#[derive(Clone, Debug)]
+enum RetAbi {
+    Plain { ll: String },
+    Result(ResultAbi),
+}
+
+#[derive(Clone, Debug)]
+struct ResultAbi {
+    tag_ll: String,
+    payload_offset: u64,
+    payload_area: u64,
+    payload_align: u64,
+    payload_ty: TypeId,
+    error_ty: Option<TypeId>,
+    optional: bool,
+    ptr: bool,
+}
+
+impl RetAbi {
+    fn ret_ll(&self) -> String {
+        match self {
+            RetAbi::Plain { ll } => ll.clone(),
+            RetAbi::Result(r) if r.ptr => r.tag_ll.clone(),
+            RetAbi::Result(r) => format!("{{ {}, i64 }}", r.tag_ll),
+        }
+    }
+
+    fn result(&self) -> Option<&ResultAbi> {
+        match self {
+            RetAbi::Result(r) => Some(r),
+            RetAbi::Plain { .. } => None,
+        }
+    }
+}
+
+/// The evaluated form of a `ConstExpr` tree.
+#[derive(Clone, Debug)]
+enum CeVal {
+    Int(IntTy, i128),
+    Bool(bool),
+}
+
 fn find_cfg(cfgs: &Cfgs, extra: &[Cfg], key: &InstanceKey) -> Option<Cfg> {
     if key.body != InstanceBody::Item {
         return None;
@@ -187,8 +236,12 @@ struct Codegen<'p> {
     next_type: usize,
     globals: Vec<String>,
     global_strings: BTreeMap<Vec<u8>, String>,
+    /// The private global emitted for a `const` or `static` item.
+    item_globals: BTreeMap<DefId, String>,
     sites: Vec<String>,
     next_site: usize,
+    /// The `!prof` branch-weight nodes for cold error arms.
+    profile_meta: Vec<String>,
     next_global: usize,
     externs: BTreeMap<String, String>,
     functions: Vec<String>,
@@ -210,8 +263,10 @@ impl<'p> Codegen<'p> {
             next_type: 0,
             globals: Vec::new(),
             global_strings: BTreeMap::new(),
+            item_globals: BTreeMap::new(),
             sites: Vec::new(),
             next_site: 0,
+            profile_meta: Vec::new(),
             next_global: 0,
             externs: BTreeMap::new(),
             functions: Vec::new(),
@@ -506,6 +561,13 @@ impl<'p> Codegen<'p> {
         out.push_str(
             "attributes #0 = { \"probe-stack\"=\"inline-asm\" \"stack-probe-size\"=\"16384\" }\n",
         );
+        if !self.profile_meta.is_empty() {
+            out.push('\n');
+            for meta in &self.profile_meta {
+                out.push_str(meta);
+                out.push('\n');
+            }
+        }
         Ok(out)
     }
 }
@@ -1090,6 +1152,8 @@ struct FnGen<'a, 'p> {
     next_tmp: usize,
     next_label: usize,
     ret_ll: String,
+    /// The B2 return convention; `Plain` for every other result.
+    ret_abi: RetAbi,
     /// The LLVM parameter types of the definition (slices are two parameters).
     abi_params: Vec<String>,
     /// Allocations made while lowering. They are emitted in the entry block so an
@@ -1103,7 +1167,8 @@ impl<'p> Codegen<'p> {
             self.check_c_abi(&body.sig)?;
         }
         self.subst = body.subst.clone();
-        let ret_ll = self.fn_ret_ll(body)?;
+        let ret_abi = self.ret_abi(&body.sig)?;
+        let ret_ll = ret_abi.ret_ll();
         let abi_params = self.abi_params(&body.sig)?;
         let mut generator = FnGen {
             cg: self,
@@ -1114,6 +1179,7 @@ impl<'p> Codegen<'p> {
             next_tmp: 0,
             next_label: 0,
             ret_ll,
+            ret_abi,
             abi_params,
             entry_allocas: Vec::new(),
         };
@@ -1126,12 +1192,228 @@ impl<'p> Codegen<'p> {
     }
 
     fn fn_ret_ll(&mut self, body: &Body) -> Result<String, BuildError> {
-        if body.sig.ret == self.program.decls.types.void
-            || body.sig.ret == self.program.decls.types.never
-        {
+        self.plain_ret_ll(&body.sig)
+    }
+
+    fn plain_ret_ll(&mut self, sig: &FnSig) -> Result<String, BuildError> {
+        self.plain_ret_ll_for(sig.ret)
+    }
+
+    fn plain_ret_ll_for(&mut self, ret: TypeId) -> Result<String, BuildError> {
+        if ret == self.program.decls.types.void || ret == self.program.decls.types.never {
             return Ok("void".to_string());
         }
-        self.llvm_ty(body.sig.ret)
+        self.llvm_ty(ret)
+    }
+
+    /// The return convention of a signature (B2). A fallible `T ! E`, and a `?T` with
+    /// the tag-and-payload layout, return `{ tag, i64 }` when the payload area fits one
+    /// register; otherwise the caller passes a hidden result pointer and only the tag
+    /// is returned. A niche `?T` keeps its null-pointer representation.
+    fn ret_abi(&mut self, sig: &FnSig) -> Result<RetAbi, BuildError> {
+        self.ret_abi_for(sig.ret, sig.error)
+    }
+
+    /// `ret_abi` for a signature shape that has no `FnSig`, such as a `fn` pointer.
+    fn ret_abi_for(&mut self, ret: TypeId, error: Option<TypeId>) -> Result<RetAbi, BuildError> {
+        if let Some(err) = error {
+            let result_ty = self.program.decls.types.intern(TyKind::Result(ret, err));
+            let layout = self.layout(result_ty)?;
+            return Ok(RetAbi::Result(self.result_abi(
+                &layout,
+                ret,
+                Some(err),
+                false,
+            )?));
+        }
+        if let TyKind::Optional(inner) = self.program.decls.types.kind(ret).clone() {
+            let layout = self.layout(ret)?;
+            if matches!(layout.kind, LayoutKind::Niche) {
+                return Ok(RetAbi::Plain {
+                    ll: self.llvm_ty(ret)?,
+                });
+            }
+            return Ok(RetAbi::Result(self.result_abi(&layout, inner, None, true)?));
+        }
+        Ok(RetAbi::Plain {
+            ll: self.plain_ret_ll_for(ret)?,
+        })
+    }
+
+    fn result_abi(
+        &self,
+        layout: &Layout,
+        payload_ty: TypeId,
+        error_ty: Option<TypeId>,
+        optional: bool,
+    ) -> Result<ResultAbi, BuildError> {
+        let (tag_size, payload_offset) = match layout.kind.clone() {
+            LayoutKind::Enum {
+                tag_size,
+                payload_offset,
+            } => (tag_size, payload_offset),
+            other => {
+                return Err(BuildError::Internal(format!(
+                    "a result has layout {other:?}, not an enum"
+                )));
+            }
+        };
+        let payload_area = layout.size.saturating_sub(payload_offset);
+        Ok(ResultAbi {
+            tag_ll: int_for_size(tag_size).to_string(),
+            payload_offset,
+            payload_area,
+            payload_align: layout.align,
+            payload_ty,
+            error_ty,
+            optional,
+            ptr: payload_area > 8,
+        })
+    }
+
+    fn const_expr_ty(&mut self, id: ingot_sema::ty::ConstExprId) -> Result<TypeId, BuildError> {
+        use ingot_sema::ty::ConstExpr;
+        let ty = match self.program.decls.types.const_expr(id).clone() {
+            ConstExpr::Int { ty, .. } => self.program.decls.types.int(ty),
+            ConstExpr::Bool(_) => self.program.decls.types.bool_,
+            ConstExpr::Param(p) => self
+                .program
+                .decls
+                .param_const_ty
+                .get(&p)
+                .copied()
+                .ok_or_else(|| {
+                    BuildError::Internal("a constant parameter with no type".to_string())
+                })?,
+            ConstExpr::Unary { expr, .. } => self.const_expr_ty(expr)?,
+            ConstExpr::Binary { op, lhs, .. } => {
+                if matches!(
+                    op,
+                    BinOp::Eq
+                        | BinOp::Ne
+                        | BinOp::Lt
+                        | BinOp::Le
+                        | BinOp::Gt
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or
+                ) {
+                    self.program.decls.types.bool_
+                } else {
+                    self.const_expr_ty(lhs)?
+                }
+            }
+            ConstExpr::Cast { to, .. } => self.program.decls.types.int(to),
+            ConstExpr::Layout { .. } => self.program.decls.types.i64_,
+        };
+        Ok(ty)
+    }
+
+    fn const_expr_value(
+        &mut self,
+        id: ingot_sema::ty::ConstExprId,
+    ) -> Result<Option<CeVal>, BuildError> {
+        use ingot_sema::ty::ConstExpr;
+        let value = match self.program.decls.types.const_expr(id).clone() {
+            ConstExpr::Int { ty, value } => Some(CeVal::Int(ty, value)),
+            ConstExpr::Bool(b) => Some(CeVal::Bool(b)),
+            ConstExpr::Param(p) => match self.subst.get(p).cloned() {
+                Some(GenericArg::Const(ConstArg::Value(ConstValue::Int { ty, value }))) => {
+                    Some(CeVal::Int(ty, value))
+                }
+                Some(GenericArg::Const(ConstArg::Value(ConstValue::Bool(b)))) => {
+                    Some(CeVal::Bool(b))
+                }
+                Some(GenericArg::Const(ConstArg::Expr(inner))) => self.const_expr_value(inner)?,
+                _ => None,
+            },
+            ConstExpr::Unary { op, expr } => match (op, self.const_expr_value(expr)?) {
+                (ingot_syntax::ast::UnOp::Not, Some(CeVal::Bool(b))) => Some(CeVal::Bool(!b)),
+                (op, Some(CeVal::Int(ty, a))) => ingot_sema::consteval::int_unary(op, ty, a)
+                    .ok()
+                    .map(|v| CeVal::Int(ty, v)),
+                _ => None,
+            },
+            ConstExpr::Binary { op, lhs, rhs } => {
+                let a = self.const_expr_value(lhs)?;
+                let b = self.const_expr_value(rhs)?;
+                match (a, b) {
+                    (Some(CeVal::Int(ty, a)), Some(CeVal::Int(_, b))) => {
+                        let value = match op {
+                            BinOp::Eq => Some(i128::from(a == b)),
+                            BinOp::Ne => Some(i128::from(a != b)),
+                            BinOp::Lt => Some(i128::from(if ty.signed() {
+                                a < b
+                            } else {
+                                (a as u128) < (b as u128)
+                            })),
+                            BinOp::Le => Some(i128::from(if ty.signed() {
+                                a <= b
+                            } else {
+                                (a as u128) <= (b as u128)
+                            })),
+                            BinOp::Gt => Some(i128::from(if ty.signed() {
+                                a > b
+                            } else {
+                                (a as u128) > (b as u128)
+                            })),
+                            BinOp::Ge => Some(i128::from(if ty.signed() {
+                                a >= b
+                            } else {
+                                (a as u128) >= (b as u128)
+                            })),
+                            _ => ingot_sema::consteval::int_binary(op, ty, a, b).ok(),
+                        };
+                        match value {
+                            Some(v)
+                                if matches!(
+                                    op,
+                                    BinOp::Eq
+                                        | BinOp::Ne
+                                        | BinOp::Lt
+                                        | BinOp::Le
+                                        | BinOp::Gt
+                                        | BinOp::Ge
+                                ) =>
+                            {
+                                Some(CeVal::Bool(v != 0))
+                            }
+                            Some(v) => Some(CeVal::Int(ty, v)),
+                            None => None,
+                        }
+                    }
+                    (Some(CeVal::Bool(a)), Some(CeVal::Bool(b))) => match op {
+                        BinOp::And => Some(CeVal::Bool(a && b)),
+                        BinOp::Or => Some(CeVal::Bool(a || b)),
+                        BinOp::Eq => Some(CeVal::Bool(a == b)),
+                        BinOp::Ne => Some(CeVal::Bool(a != b)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            ConstExpr::Cast { to, expr } => match self.const_expr_value(expr)? {
+                Some(CeVal::Int(from, value)) if ingot_sema::consteval::lossless(from, to) => {
+                    Some(CeVal::Int(to, value))
+                }
+                _ => None,
+            },
+            ConstExpr::Layout { size, ty } => {
+                let layout = self.layout(ty)?;
+                Some(CeVal::Int(
+                    IntTy::I64,
+                    i128::from(if size { layout.size } else { layout.align }),
+                ))
+            }
+        };
+        Ok(value)
+    }
+
+    fn const_expr_ll(&mut self, value: &CeVal) -> Result<String, BuildError> {
+        Ok(match value {
+            CeVal::Int(ty, _) => format!("i{}", ty.bits()),
+            CeVal::Bool(_) => "i1".to_string(),
+        })
     }
 
     /// The platform C ABI of an `extern` declaration or an `export fn` is B6 work
@@ -1417,6 +1699,164 @@ impl<'a, 'p> FnGen<'a, 'p> {
         Ok(())
     }
 
+    fn emit_return(&mut self, value: Option<&Operand>, is_error: bool) -> Result<(), BuildError> {
+        let abi = self.ret_abi.clone();
+        match abi {
+            RetAbi::Plain { ll } => {
+                if ll == "void" {
+                    if self.body.sig.ret == self.cg.program.decls.types.never {
+                        self.emit("unreachable");
+                    } else {
+                        self.emit("ret void");
+                    }
+                } else {
+                    let op = value.ok_or_else(|| {
+                        BuildError::Internal("a return without a value".to_string())
+                    })?;
+                    let (v, vll) = self.value(op)?;
+                    if vll != ll {
+                        return Err(BuildError::Internal(format!(
+                            "return type {vll} is not {ll}"
+                        )));
+                    }
+                    self.emit(format!("ret {vll} {v}"));
+                }
+                Ok(())
+            }
+            RetAbi::Result(r) => {
+                if r.optional {
+                    let op = value.ok_or_else(|| {
+                        BuildError::Internal("an optional return without a value".to_string())
+                    })?;
+                    let (v, vll) = self.value(op)?;
+                    let align = self.cg.layout(self.body.sig.ret)?.align;
+                    let tmp = self.alloca(&vll, align);
+                    self.emit(format!("store {vll} {v}, ptr {tmp}"));
+                    let tag = self.fresh_tmp();
+                    self.emit(format!("{tag} = load {}, ptr {tmp}", r.tag_ll));
+                    if r.ptr {
+                        self.copy_region(&tmp, r.payload_offset, "%res", 0, r.payload_area);
+                        self.emit(format!("ret {} {tag}", r.tag_ll));
+                    } else {
+                        let slot = self.zeroed_bytes(8, 8);
+                        self.copy_region(&tmp, r.payload_offset, &slot, 0, r.payload_area);
+                        let payload = self.fresh_tmp();
+                        self.emit(format!("{payload} = load i64, ptr {slot}"));
+                        self.return_pair(&r, &tag, &payload);
+                    }
+                    return Ok(());
+                }
+                let tag_text = int_literal(&r.tag_ll, i128::from(is_error));
+                let payload_ty = if is_error {
+                    r.error_ty.ok_or_else(|| {
+                        BuildError::Internal(
+                            "an error return in a function with no error".to_string(),
+                        )
+                    })?
+                } else {
+                    r.payload_ty
+                };
+                let payload_ll = if payload_ty == self.cg.program.decls.types.void
+                    || payload_ty == self.cg.program.decls.types.never
+                {
+                    None
+                } else {
+                    Some(self.cg.llvm_ty(payload_ty)?)
+                };
+                let payload_size = self.cg.layout(payload_ty)?.size;
+                if r.ptr {
+                    if payload_size > 0 {
+                        let op = value.ok_or_else(|| {
+                            BuildError::Internal("a return without a payload".to_string())
+                        })?;
+                        let (v, vll) = self.value(op)?;
+                        if Some(vll.as_str()) != payload_ll.as_deref() {
+                            return Err(BuildError::Internal(format!(
+                                "return payload type {vll} is not {payload_ll:?}"
+                            )));
+                        }
+                        self.emit(format!("store {vll} {v}, ptr %res"));
+                    }
+                    self.emit(format!("ret {} {tag_text}", r.tag_ll));
+                } else {
+                    let slot = self.zeroed_bytes(8, 8);
+                    if payload_size > 0 {
+                        let op = value.ok_or_else(|| {
+                            BuildError::Internal("a return without a payload".to_string())
+                        })?;
+                        let (v, vll) = self.value(op)?;
+                        if Some(vll.as_str()) != payload_ll.as_deref() {
+                            return Err(BuildError::Internal(format!(
+                                "return payload type {vll} is not {payload_ll:?}"
+                            )));
+                        }
+                        self.emit(format!("store {vll} {v}, ptr {slot}"));
+                    }
+                    let payload = self.fresh_tmp();
+                    self.emit(format!("{payload} = load i64, ptr {slot}"));
+                    self.return_pair(&r, &tag_text, &payload);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn return_pair(&mut self, r: &ResultAbi, tag: &str, payload: &str) {
+        let pair = self.fresh_tmp();
+        self.emit(format!(
+            "{pair} = insertvalue {{ {}, i64 }} zeroinitializer, {} {tag}, 0",
+            r.tag_ll, r.tag_ll
+        ));
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = insertvalue {{ {}, i64 }} {pair}, i64 {payload}, 1",
+            r.tag_ll
+        ));
+        self.emit(format!("ret {{ {}, i64 }} {out}", r.tag_ll));
+    }
+
+    /// A zeroed byte slot of `size` bytes. Used for the one-register result payload.
+    fn zeroed_bytes(&mut self, size: u64, align: u64) -> String {
+        let slot = self.alloca(&format!("[{size} x i8]"), align.max(1));
+        self.emit(format!("store [{size} x i8] zeroinitializer, ptr {slot}"));
+        slot
+    }
+
+    /// Copy `len` bytes from `src + src_off` to `dst + dst_off`, with align 1 so no
+    /// alignment claim is made. `len` is a compile-time size.
+    fn copy_region(&mut self, src: &str, src_off: u64, dst: &str, dst_off: u64, len: u64) {
+        let mut done = 0u64;
+        while done < len {
+            let left = len - done;
+            let (width, ll) = if left >= 8 {
+                (8u64, "i64")
+            } else if left >= 4 {
+                (4, "i32")
+            } else if left >= 2 {
+                (2, "i16")
+            } else {
+                (1, "i8")
+            };
+            let p = self.ptr_at(src, src_off + done);
+            let q = self.ptr_at(dst, dst_off + done);
+            let v = self.fresh_tmp();
+            self.emit(format!("{v} = load {ll}, ptr {p}, align 1"));
+            self.emit(format!("store {ll} {v}, ptr {q}, align 1"));
+            done += width;
+        }
+    }
+
+    fn ptr_at(&mut self, base: &str, offset: u64) -> String {
+        if offset == 0 {
+            return base.to_string();
+        }
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = getelementptr i8, ptr {base}, i64 {offset}"
+        ));
+        out
+    }
+
     fn emit_block(&mut self, block: &BlockData) -> Result<(), BuildError> {
         for stmt in &block.stmts {
             match &stmt.kind {
@@ -1432,6 +1872,22 @@ impl<'a, 'p> FnGen<'a, 'p> {
             }
         }
         self.terminator(&block.term, block.term_span)
+    }
+
+    /// A switch target that starts with a successful variant test and ends in a
+    /// `Return`: the error arm of `try`, a `catch`/`orelse` handler that leaves the
+    /// function, or the `none` arm of a `for` over an `Iter`. Phase 8 emits `Switch`
+    /// only for those three constructs, never for `match`, so this does not mark an
+    /// ordinary `match` arm cold.
+    fn leaving_variant_arm(&self, block: Block) -> bool {
+        let Some(data) = self.body.cfg.blocks.get(block as usize) else {
+            return false;
+        };
+        let variant = matches!(
+            data.stmts.first().map(|s| &s.kind),
+            Some(StmtKind::Variant { holds: true, .. })
+        );
+        variant && matches!(data.term, Terminator::Return { .. })
     }
 
     fn terminator(&mut self, term: &Terminator, span: Span) -> Result<(), BuildError> {
@@ -1458,6 +1914,11 @@ impl<'a, 'p> FnGen<'a, 'p> {
             } => {
                 let (v, ll) = self.value(value)?;
                 let mut arms = String::new();
+                let cold: Vec<bool> = cases
+                    .iter()
+                    .map(|(_, block)| self.leaving_variant_arm(*block))
+                    .collect();
+                let default_cold = self.leaving_variant_arm(*default);
                 for (tag, block) in cases {
                     arms.push_str(&format!(
                         "{} {}, label %{} ",
@@ -1466,36 +1927,24 @@ impl<'a, 'p> FnGen<'a, 'p> {
                         self.label_of(*block)
                     ));
                 }
+                let prof = if cold.iter().any(|c| *c) || default_cold {
+                    let mut weights: Vec<u32> =
+                        cold.iter().map(|c| if *c { 1 } else { 1000 }).collect();
+                    weights.push(if default_cold { 1 } else { 1000 });
+                    let id = self.cg.add_branch_weights(&weights);
+                    format!(", !prof !{id}")
+                } else {
+                    String::new()
+                };
                 self.emit(format!(
-                    "switch {ll} {v}, label %{} [ {arms}]",
+                    "switch {ll} {v}, label %{} [ {arms}]{prof}",
                     self.label_of(*default)
                 ));
             }
             Terminator::Return {
                 value, is_error, ..
             } => {
-                if *is_error {
-                    return self.cg.ni("error returns (B2)");
-                }
-                if self.ret_ll == "void" {
-                    if self.body.sig.ret == self.cg.program.decls.types.never {
-                        self.emit("unreachable");
-                    } else {
-                        self.emit("ret void");
-                    }
-                } else {
-                    let op = value.as_ref().ok_or_else(|| {
-                        BuildError::Internal("a return without a value".to_string())
-                    })?;
-                    let (v, ll) = self.value(op)?;
-                    if ll != self.ret_ll {
-                        return Err(BuildError::Internal(format!(
-                            "return type {ll} is not {ll_v}",
-                            ll_v = self.ret_ll
-                        )));
-                    }
-                    self.emit(format!("ret {ll} {v}"));
-                }
+                self.emit_return(value.as_ref(), *is_error)?;
             }
             Terminator::Call {
                 target,
@@ -1613,6 +2062,15 @@ fn global_ref(name: &str) -> String {
     }
 }
 
+/// Write the low `size` bytes of `value` little-endian into `out` (which starts at the
+/// destination offset).
+fn write_low(out: &mut [u8], value: i128, size: u64) {
+    let bits = value as u128;
+    for i in 0..size.min(16) {
+        out[i as usize] = (bits >> (i * 8)) as u8;
+    }
+}
+
 fn int_literal(ll: &str, value: i128) -> String {
     if !ll.starts_with('i') {
         return value.to_string();
@@ -1712,12 +2170,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
     fn place_addr(&mut self, place: &Place) -> Result<String, BuildError> {
         let mut addr = match &place.base {
             PlaceBase::Local(l) => format!("%l{l}"),
-            PlaceBase::Static(def) => {
-                return self.cg.ni(format!(
-                    "a static (`{}`) (B2)",
-                    self.cg.program.sema.def(*def).name
-                ));
-            }
+            PlaceBase::Static(def) => self.cg.static_ref(*def)?,
         };
         let mut ty = match &place.base {
             PlaceBase::Local(l) => self.cg.resolve_ty(self.body.cfg.local(*l).ty),
@@ -1819,7 +2272,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
             Const::CStr(_) => self.cg.cstr_ty(),
             Const::Zero { ty, .. } | Const::Uninit { ty, .. } => *ty,
             Const::Param { .. } => return self.cg.ni("constant generic parameters (B2)"),
-            Const::Expr { .. } => return self.cg.ni("constant expressions (B2)"),
+            Const::Expr { id, .. } => self.cg.const_expr_ty(*id)?,
             Const::Named { def, .. } => match self.cg.program.decls.item(*def) {
                 Some(ItemSig::Const(s)) => s.ty,
                 _ => {
@@ -1859,6 +2312,77 @@ impl<'a, 'p> FnGen<'a, 'p> {
         let out = self.fresh_tmp();
         self.emit(format!("{out} = load {ll}, ptr {tmp}"));
         Ok(out)
+    }
+
+    fn named_constant(&mut self, def: DefId, name: &str) -> Result<(String, String), BuildError> {
+        let value = self.cg.item_value(def).ok_or_else(|| {
+            BuildError::Internal(format!("the constant `{name}` has no evaluated value"))
+        })?;
+        match &value {
+            SemValue::Int { ty, value } => {
+                let ll = self.cg.llvm_ty(*ty)?;
+                Ok((int_literal(&ll, *value), ll))
+            }
+            SemValue::Bool(b) => Ok((
+                if *b { "true" } else { "false" }.to_string(),
+                "i1".to_string(),
+            )),
+            SemValue::Float { ty, bits } => {
+                let ll = self.cg.llvm_ty(*ty)?;
+                let value = match self.cg.program.decls.types.kind(*ty) {
+                    TyKind::Float(FloatTy::F32) => {
+                        f64::from(ingot_sema::consteval::f32_from_bits(*bits))
+                    }
+                    _ => f64::from_bits(*bits),
+                };
+                let text = match self.cg.program.decls.types.kind(*ty) {
+                    TyKind::Float(FloatTy::F32) => format_float_f32(value),
+                    _ => format_float_f64(value),
+                };
+                Ok((text, ll))
+            }
+            SemValue::Unit => Ok(("zeroinitializer".to_string(), "{}".to_string())),
+            SemValue::Str(bytes) => {
+                let sym = self.cg.add_string(bytes);
+                let ty = self.cg.string_slice_ty();
+                let ll = self.cg.llvm_ty(ty)?;
+                let a = self.fresh_tmp();
+                let b = self.fresh_tmp();
+                self.emit(format!(
+                    "{a} = insertvalue {ll} zeroinitializer, ptr @{sym}, 0"
+                ));
+                self.emit(format!(
+                    "{b} = insertvalue {ll} {a}, i64 {}, 1",
+                    bytes.len()
+                ));
+                Ok((b, ll))
+            }
+            SemValue::CStr(bytes) => {
+                let mut b = bytes.clone();
+                b.push(0);
+                let sym = self.cg.add_string(&b);
+                Ok((format!("@{sym}"), "ptr".to_string()))
+            }
+            SemValue::Fn { fn_ref, .. } => {
+                let (symbol, _, _, _) = self.cg.resolve_fn(fn_ref)?;
+                Ok((global_ref(&symbol), "ptr".to_string()))
+            }
+            _ => {
+                let ty = match self.cg.program.decls.item(def) {
+                    Some(ItemSig::Const(c)) => c.ty,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a named constant without a signature".to_string(),
+                        ));
+                    }
+                };
+                let sym = self.cg.item_global(def, ty, "const", None)?;
+                let ll = self.cg.llvm_ty(ty)?;
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = load {ll}, ptr {}", global_ref(&sym)));
+                Ok((out, ll))
+            }
+        }
     }
 
     fn constant(&mut self, c: &Const) -> Result<(String, String), BuildError> {
@@ -1909,9 +2433,20 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 let ll = self.cg.llvm_ty(*ty)?;
                 Ok(("undef".to_string(), ll))
             }
-            Const::Named { name, .. } => self.cg.ni(format!("the constant `{name}` (B2)")),
-            Const::Param { name, .. } | Const::Expr { name, .. } => {
+            Const::Named { def, name } => self.named_constant(*def, name),
+            Const::Param { name, .. } => {
                 self.cg.ni(format!("the constant expression `{name}` (B2)"))
+            }
+            Const::Expr { id, name } => {
+                let value = self.cg.const_expr_value(*id)?;
+                let Some(value) = value else {
+                    return self.cg.ni(format!("the constant expression `{name}` (B2)"));
+                };
+                let ll = self.cg.const_expr_ll(&value)?;
+                Ok(match value {
+                    CeVal::Int(_, v) => (int_literal(&ll, v), ll),
+                    CeVal::Bool(b) => (if b { "true" } else { "false" }.to_string(), ll),
+                })
             }
             Const::Fn { fn_ref, .. } => {
                 let (symbol, _, _, _) = self.cg.resolve_fn(fn_ref)?;
@@ -3416,6 +3951,63 @@ fn int_min_i128(ll: &str) -> i128 {
 impl<'a, 'p> FnGen<'a, 'p> {
     // ----------------------------------------------------------------- calls
 
+    /// Store a call's result into `dest`. A plain result is one aggregate store; a
+    /// tag-and-payload result stores the tag and copies the payload bytes from the
+    /// register spill slot or the caller's result slot.
+    fn store_call_result(
+        &mut self,
+        abi: &RetAbi,
+        ret_ll: &str,
+        call: &str,
+        result_slot: Option<&str>,
+        dest: Option<&Place>,
+    ) -> Result<(), BuildError> {
+        if ret_ll == "void" {
+            return Ok(());
+        }
+        let Some(dest) = dest else {
+            return Ok(());
+        };
+        let dty = self.place_type(dest)?;
+        if dty == self.cg.program.decls.types.never {
+            return Ok(());
+        }
+        let addr = self.place_addr(dest)?;
+        if let Some(r) = abi.result() {
+            let tag = if r.ptr {
+                call.to_string()
+            } else {
+                let t = self.fresh_tmp();
+                self.emit(format!(
+                    "{t} = extractvalue {{ {}, i64 }} {call}, 0",
+                    r.tag_ll
+                ));
+                t
+            };
+            self.emit(format!("store {} {tag}, ptr {addr}", r.tag_ll));
+            if r.payload_area > 0 {
+                if r.ptr {
+                    let slot = result_slot.ok_or_else(|| {
+                        BuildError::Internal("a result pointer call without a slot".to_string())
+                    })?;
+                    self.copy_region(slot, 0, &addr, r.payload_offset, r.payload_area);
+                } else {
+                    let payload = self.fresh_tmp();
+                    self.emit(format!(
+                        "{payload} = extractvalue {{ {}, i64 }} {call}, 1",
+                        r.tag_ll
+                    ));
+                    let slot = self.zeroed_bytes(8, 8);
+                    self.emit(format!("store i64 {payload}, ptr {slot}"));
+                    self.copy_region(&slot, 0, &addr, r.payload_offset, r.payload_area);
+                }
+            }
+        } else {
+            self.emit(format!("store {ret_ll} {call}, ptr {addr}"));
+        }
+        Ok(())
+    }
+
     fn call_value(
         &mut self,
         callee: &Operand,
@@ -3429,13 +4021,15 @@ impl<'a, 'p> FnGen<'a, 'p> {
             _ => return self.cg.ni("a call of a value that is not `fn` (B2)"),
         };
         let (cv, _) = self.value(callee)?;
-        let ret_ll = if sig.ret == self.cg.program.decls.types.void
-            || sig.ret == self.cg.program.decls.types.never
-        {
-            "void".to_string()
+        let ret_abi = if sig.ext {
+            RetAbi::Plain {
+                ll: self.cg.plain_ret_ll_for(sig.ret)?,
+            }
         } else {
-            self.cg.llvm_ty(sig.ret)?
+            self.cg.ret_abi_for(sig.ret, sig.error)?
         };
+        let ret_ll = ret_abi.ret_ll();
+        let result_abi = ret_abi.result().cloned();
         let mut tys = Vec::new();
         for (i, p) in sig.params.iter().enumerate() {
             let op = args.get(i).ok_or_else(|| {
@@ -3487,6 +4081,14 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 }
             }
         }
+        let result_slot = match &result_abi {
+            Some(r) if r.ptr => {
+                let slot = self.zeroed_bytes(r.payload_area, r.payload_align.max(1));
+                tys.push(format!("ptr {slot}"));
+                Some(slot)
+            }
+            _ => None,
+        };
         let call = if ret_ll == "void" {
             self.emit(format!("call void {cv}({})", tys.join(", ")));
             String::new()
@@ -3495,15 +4097,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
             self.emit(format!("{out} = call {ret_ll} {cv}({})", tys.join(", ")));
             out
         };
-        if ret_ll != "void"
-            && let Some(dest) = dest
-        {
-            let dty = self.place_type(dest)?;
-            if dty != self.cg.program.decls.types.never {
-                let addr = self.place_addr(dest)?;
-                self.emit(format!("store {ret_ll} {call}, ptr {addr}"));
-            }
-        }
+        self.store_call_result(&ret_abi, &ret_ll, &call, result_slot.as_deref(), dest)?;
         self.emit(format!("br label %{}", self.label_of(next)));
         Ok(())
     }
@@ -3527,23 +4121,29 @@ impl<'a, 'p> FnGen<'a, 'p> {
         let CallTarget::Fn { fn_ref, .. } = target else {
             return self.cg.ni("calls through closures and dynamic values (B2)");
         };
-        let (symbol, external, ret, params) = self.cg.resolve_fn(fn_ref)?;
-        let variadic = self
+        let (symbol, external, _ret, params) = self.cg.resolve_fn(fn_ref)?;
+        let sig = self
             .cg
             .program
             .decls
             .fn_sig(fn_ref.def)
-            .is_some_and(|s| s.variadic);
+            .cloned()
+            .ok_or_else(|| {
+                BuildError::Internal("a call of a function with no signature".to_string())
+            })?;
+        let variadic = sig.variadic;
         if variadic && args.len() > params.len() {
             return self.cg.ni("variadic extern calls (B2)");
         }
-        let ret_ll = if ret == self.cg.program.decls.types.void
-            || ret == self.cg.program.decls.types.never
-        {
-            "void".to_string()
+        let ret_abi = if external {
+            RetAbi::Plain {
+                ll: self.cg.plain_ret_ll(&sig)?,
+            }
         } else {
-            self.cg.llvm_ty(ret)?
+            self.cg.ret_abi(&sig)?
         };
+        let ret_ll = ret_abi.ret_ll();
+        let result_abi = ret_abi.result().cloned();
         let mut abi_types = Vec::new();
         let mut values = Vec::new();
         if external {
@@ -3620,6 +4220,15 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 }
             }
         }
+        let result_slot = match &result_abi {
+            Some(r) if r.ptr => {
+                let slot = self.zeroed_bytes(r.payload_area, r.payload_align.max(1));
+                abi_types.push("ptr".to_string());
+                values.push(slot.clone());
+                Some(slot)
+            }
+            _ => None,
+        };
         let tys: Vec<String> = values
             .iter()
             .enumerate()
@@ -3641,15 +4250,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
             ));
             out
         };
-        if ret_ll != "void"
-            && let Some(dest) = dest
-        {
-            let dty = self.place_type(dest)?;
-            if dty != self.cg.program.decls.types.never {
-                let addr = self.place_addr(dest)?;
-                self.emit(format!("store {ret_ll} {call}, ptr {addr}"));
-            }
-        }
+        self.store_call_result(&ret_abi, &ret_ll, &call, result_slot.as_deref(), dest)?;
         self.emit(format!("br label %{}", self.label_of(next)));
         Ok(())
     }
@@ -3813,6 +4414,436 @@ impl<'p> Codegen<'p> {
         sym
     }
 
+    fn item_value(&self, def: DefId) -> Option<SemValue> {
+        match self.program.decls.values.get(&def) {
+            Some(ingot_sema::consteval::ValueState::Done(Ok(value))) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    /// The bytes of a compile-time value in the §25 layout of `ty`.
+    fn value_bytes(&mut self, value: &SemValue, ty: TypeId) -> Result<Vec<u8>, BuildError> {
+        let ty = self.resolve_ty(ty);
+        let size = self.layout(ty)?.size;
+        let mut bytes = vec![0u8; size as usize];
+        self.write_value(value, ty, &mut bytes, 0)?;
+        Ok(bytes)
+    }
+
+    fn write_value(
+        &mut self,
+        value: &SemValue,
+        ty: TypeId,
+        bytes: &mut [u8],
+        base: usize,
+    ) -> Result<(), BuildError> {
+        let ty = self.resolve_ty(ty);
+        let layout = self.layout(ty)?;
+        let size = layout.size;
+        let at = |off: u64| base + off as usize;
+        match value {
+            SemValue::Int { ty: vty, value } => {
+                let n = self.layout(*vty)?.size;
+                if at(0) + n as usize > bytes.len() {
+                    return Err(BuildError::Internal(
+                        "a constant integer does not fit its place".to_string(),
+                    ));
+                }
+                write_low(&mut bytes[at(0)..], *value, n);
+            }
+            SemValue::Float { ty: vty, bits } => {
+                let n = self.layout(*vty)?.size;
+                if at(0) + n as usize > bytes.len() {
+                    return Err(BuildError::Internal(
+                        "a constant float does not fit its place".to_string(),
+                    ));
+                }
+                write_low(&mut bytes[at(0)..], i128::from(*bits), n);
+            }
+            SemValue::Bool(b) => {
+                if at(0) >= bytes.len() {
+                    return Err(BuildError::Internal(
+                        "a constant bool does not fit its place".to_string(),
+                    ));
+                }
+                bytes[at(0)] = u8::from(*b);
+            }
+            SemValue::Unit => {}
+            SemValue::Aggregate {
+                kind,
+                ty: vty,
+                fields,
+            } => {
+                let ty = self.resolve_ty(*vty);
+                let layout = self.layout(ty)?;
+                match (kind, self.program.decls.types.kind(ty).clone()) {
+                    (ingot_sema::value::AggKind::Struct(_), TyKind::Adt(def, _)) => {
+                        let sig = self.program.decls.struct_sig(def).cloned().ok_or_else(|| {
+                            BuildError::Internal("a constant of a non-struct".to_string())
+                        })?;
+                        for (i, field) in fields.iter().enumerate() {
+                            let fl = layout.fields.get(i).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant struct has no field layout".to_string(),
+                                )
+                            })?;
+                            let fty = sig.fields.get(i).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant struct has a field with no type".to_string(),
+                                )
+                            })?;
+                            self.write_value(field, fty.ty, bytes, at(fl.offset))?;
+                        }
+                    }
+                    (ingot_sema::value::AggKind::Tuple, TyKind::Tuple(ts)) => {
+                        for (i, field) in fields.iter().enumerate() {
+                            let fl = layout.fields.get(i).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant tuple has no field layout".to_string(),
+                                )
+                            })?;
+                            let fty = ts.get(i).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant tuple has a field with no type".to_string(),
+                                )
+                            })?;
+                            self.write_value(field, *fty, bytes, at(fl.offset))?;
+                        }
+                    }
+                    (ingot_sema::value::AggKind::Array, TyKind::Array(elem, _)) => {
+                        let stride = self.layout(elem)?.size;
+                        for (i, field) in fields.iter().enumerate() {
+                            self.write_value(field, elem, bytes, at(stride * i as u64))?;
+                        }
+                    }
+                    _ => {
+                        return self.ni(format!(
+                            "a constant aggregate of type {} (B2)",
+                            self.type_display(ty)
+                        ));
+                    }
+                }
+            }
+            SemValue::Pack {
+                ty: vty,
+                len,
+                elems,
+                moved,
+            } => {
+                let elem = self.resolve_ty(*vty);
+                let stride = self.layout(elem)?.size;
+                let vals = elems.as_deref().map(|PackElems::Ints(vals)| vals);
+                for i in 0..*len {
+                    if moved.contains(&(i as u32)) {
+                        continue;
+                    }
+                    let value = vals.and_then(|v| v.get(i as usize)).copied().unwrap_or(0);
+                    write_low(&mut bytes[at(stride * i)..], value, stride);
+                }
+            }
+            SemValue::Variant {
+                ty: vty,
+                index,
+                payload,
+            } => {
+                let ty = self.resolve_ty(*vty);
+                let layout = self.layout(ty)?;
+                let (tag, payload_ty): (i128, Option<TypeId>) =
+                    match self.program.decls.types.kind(ty).clone() {
+                        TyKind::Result(ok, err) => (
+                            i128::from(*index as u8),
+                            Some(if *index == 0 { ok } else { err }),
+                        ),
+                        TyKind::Optional(inner) => (i128::from(*index as u8), Some(inner)),
+                        TyKind::Adt(def, _) => {
+                            let sig =
+                                self.program.decls.enum_sig(def).cloned().ok_or_else(|| {
+                                    BuildError::Internal("a constant of a non-enum".to_string())
+                                })?;
+                            let v = sig.variants.get(*index).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant variant index out of range".to_string(),
+                                )
+                            })?;
+                            (v.tag, v.payload)
+                        }
+                        _ => {
+                            return Err(BuildError::Internal(
+                                "a constant variant of a non-enum".to_string(),
+                            ));
+                        }
+                    };
+                match layout.kind {
+                    LayoutKind::Niche => {
+                        if let Some(p) = payload {
+                            self.write_value(
+                                p,
+                                payload_ty.ok_or_else(|| {
+                                    BuildError::Internal(
+                                        "a niche variant without a payload type".to_string(),
+                                    )
+                                })?,
+                                bytes,
+                                at(0),
+                            )?;
+                        }
+                    }
+                    LayoutKind::Enum {
+                        tag_size,
+                        payload_offset,
+                    } => {
+                        if at(0) + tag_size as usize > bytes.len() {
+                            return Err(BuildError::Internal(
+                                "a constant tag does not fit its place".to_string(),
+                            ));
+                        }
+                        write_low(&mut bytes[at(0)..], tag, tag_size);
+                        if let Some(p) = payload {
+                            self.write_value(
+                                p,
+                                payload_ty.ok_or_else(|| {
+                                    BuildError::Internal(
+                                        "a variant without a payload type".to_string(),
+                                    )
+                                })?,
+                                bytes,
+                                at(payload_offset),
+                            )?;
+                        }
+                    }
+                    other => {
+                        return Err(BuildError::Internal(format!(
+                            "a constant variant has layout {other:?}"
+                        )));
+                    }
+                }
+            }
+            SemValue::Str(_)
+            | SemValue::CStr(_)
+            | SemValue::Fn { .. }
+            | SemValue::Borrow { .. }
+            | SemValue::Slice { .. }
+            | SemValue::StrPtr { .. }
+            | SemValue::Uninit => {
+                return self.ni("a constant pointer value (B2)");
+            }
+        }
+        let _ = size;
+        Ok(())
+    }
+
+    fn value_has_pointer(value: &SemValue) -> bool {
+        match value {
+            SemValue::Str(_)
+            | SemValue::CStr(_)
+            | SemValue::StrPtr { .. }
+            | SemValue::Fn { .. }
+            | SemValue::Borrow { .. }
+            | SemValue::Slice { .. } => true,
+            SemValue::Aggregate { fields, .. } => fields.iter().any(Self::value_has_pointer),
+            SemValue::Variant { payload, .. } => {
+                payload.as_deref().is_some_and(Self::value_has_pointer)
+            }
+            _ => false,
+        }
+    }
+
+    /// The initializer of a value that contains a pointer, where a byte-array global
+    /// cannot carry the relocation. Only the forms a `static` may hold are handled;
+    /// the rest report a B2 gap.
+    fn pointer_initializer(
+        &mut self,
+        value: &SemValue,
+        ty: TypeId,
+    ) -> Result<Option<String>, BuildError> {
+        let ty = self.resolve_ty(ty);
+        let kind = self.program.decls.types.kind(ty).clone();
+        Ok(match (value, kind) {
+            (SemValue::Str(bytes), TyKind::Slice(..)) => {
+                let sym = self.add_string(bytes);
+                Some(format!("{{ ptr @{sym}, i64 {} }}", bytes.len()))
+            }
+            (SemValue::CStr(bytes), TyKind::RawPtr(..)) => {
+                let mut b = bytes.clone();
+                b.push(0);
+                let sym = self.add_string(&b);
+                Some(format!("@{sym}"))
+            }
+            (SemValue::StrPtr { bytes, at }, TyKind::RawPtr(..)) => {
+                let sym = self.add_string(bytes);
+                Some(format!("getelementptr i8, ptr @{sym}, i64 {at}"))
+            }
+            (SemValue::Fn { fn_ref, .. }, TyKind::FnPtr(_)) => {
+                let (symbol, _, _, _) = self.resolve_fn(fn_ref)?;
+                Some(global_ref(&symbol))
+            }
+            (
+                SemValue::Borrow {
+                    alloc: ingot_sema::value::AllocRef::Static(def),
+                    path,
+                },
+                TyKind::Ref(..) | TyKind::RawPtr(..),
+            ) if path.is_empty() => Some(self.static_ref(*def)?),
+            (SemValue::Slice { source, lo, len }, TyKind::Slice(..)) => match source {
+                ingot_sema::value::SliceSource::Str(bytes) => {
+                    let at = (*lo as usize).min(bytes.len());
+                    let sym = self.add_string(&bytes[at..]);
+                    Some(format!("{{ ptr @{sym}, i64 {len} }}"))
+                }
+                ingot_sema::value::SliceSource::Alloc {
+                    alloc: ingot_sema::value::AllocRef::Static(def),
+                    path,
+                } if path.is_empty() && *lo == 0 => {
+                    let sym = self.static_ref(*def)?;
+                    Some(format!("{{ ptr {sym}, i64 {len} }}"))
+                }
+                _ => None,
+            },
+            (
+                SemValue::Variant {
+                    index: 0,
+                    payload: None,
+                    ..
+                },
+                TyKind::Optional(inner),
+            ) => match self.program.decls.types.kind(inner).clone() {
+                TyKind::Slice(..) => Some("{ ptr null, i64 0 }".to_string()),
+                _ => Some("null".to_string()),
+            },
+            (
+                SemValue::Variant {
+                    index: 1,
+                    payload: Some(p),
+                    ..
+                },
+                TyKind::Optional(inner),
+            ) => self.pointer_initializer(p, inner)?,
+            _ => None,
+        })
+    }
+
+    /// A private global for a `const` or `static` item, initialized from the
+    /// compile-time value. The global has the item's LLVM type, so a place rooted at
+    /// a static indexes with the ordinary typed GEPs.
+    fn item_global(
+        &mut self,
+        def: DefId,
+        ty: TypeId,
+        kind: &str,
+        align: Option<u64>,
+    ) -> Result<String, BuildError> {
+        if let Some(sym) = self.item_globals.get(&def) {
+            return Ok(sym.clone());
+        }
+        let value = self.item_value(def).ok_or_else(|| {
+            BuildError::Internal(format!(
+                "the {} `{}` has no evaluated value",
+                kind,
+                self.program.sema.def(def).name
+            ))
+        })?;
+        let ty = self.resolve_ty(ty);
+        let layout = self.layout(ty)?;
+        let sym = format!("{kind}.{}", self.next_global);
+        self.next_global += 1;
+        let align = align.unwrap_or(layout.align).max(1);
+        if Self::value_has_pointer(&value) {
+            let ll = self.llvm_ty(ty)?;
+            let init = self.pointer_initializer(&value, ty)?.ok_or_else(|| {
+                BuildError::NotImplemented(
+                    "a static of a pointer-containing aggregate (B2)".to_string(),
+                )
+            })?;
+            self.globals.push(format!(
+                "@{sym} = private constant {ll} {init}, align {align}"
+            ));
+            self.item_globals.insert(def, sym.clone());
+            return Ok(sym);
+        }
+        let bytes = self.value_bytes(&value, ty)?;
+        let init = if layout.size == 0 {
+            "zeroinitializer".to_string()
+        } else {
+            format!("c{}", llvm_string(&bytes))
+        };
+        self.globals.push(format!(
+            "@{sym} = private constant [{} x i8] {init}, align {align}",
+            layout.size
+        ));
+        self.item_globals.insert(def, sym.clone());
+        Ok(sym)
+    }
+
+    /// Whether a type contains `std.sync.Cell` by value (the one interior-mutable
+    /// language item). A static of such a type is R2 work.
+    fn interior_mutable(
+        &mut self,
+        ty: TypeId,
+        seen: &mut BTreeSet<TypeId>,
+    ) -> Result<bool, BuildError> {
+        let ty = self.resolve_ty(ty);
+        if !seen.insert(ty) {
+            return Ok(false);
+        }
+        let kind = self.program.decls.types.kind(ty).clone();
+        if let TyKind::Adt(def, _) = &kind
+            && Some(*def) == self.program.decls.builtins.cell
+        {
+            return Ok(true);
+        }
+        // A borrow or pointer to a `Cell` is not interior mutability by value.
+        if matches!(
+            kind,
+            TyKind::Ref(..)
+                | TyKind::RawPtr(..)
+                | TyKind::Slice(..)
+                | TyKind::Dyn(..)
+                | TyKind::DynFn(..)
+        ) {
+            return Ok(false);
+        }
+        let children = self.program.decls.types.children(ty);
+        for child in children {
+            if self.interior_mutable(child, seen)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn static_ref(&mut self, def: DefId) -> Result<String, BuildError> {
+        let (ty, align) = match self.program.decls.item(def) {
+            Some(ItemSig::Static(s)) => (
+                s.ty,
+                s.align
+                    .as_ref()
+                    .map(|a| a.value)
+                    .filter(|v| *v > 0)
+                    .map(|v| v as u64),
+            ),
+            _ => {
+                return Err(BuildError::Internal(
+                    "a place rooted at something that is not a static".to_string(),
+                ));
+            }
+        };
+        if self.interior_mutable(ty, &mut BTreeSet::new())? {
+            return self.ni("a static with interior mutability (R2)");
+        }
+        let sym = self.item_global(def, ty, "static", align)?;
+        Ok(global_ref(&sym))
+    }
+
+    fn add_branch_weights(&mut self, weights: &[u32]) -> usize {
+        let id = self.profile_meta.len();
+        let body: Vec<String> = weights.iter().map(|w| format!("i32 {w}")).collect();
+        self.profile_meta.push(format!(
+            "!{id} = !{{!\"branch_weights\", {}}}",
+            body.join(", ")
+        ));
+        id
+    }
+
     fn add_site(
         &mut self,
         file: usize,
@@ -3878,6 +4909,10 @@ impl<'a, 'p> FnGen<'a, 'p> {
             .enumerate()
             .map(|(i, ll)| format!("{ll} %arg{i}"))
             .collect();
+        let mut params = params;
+        if self.ret_abi.result().is_some_and(|r| r.ptr) {
+            params.push("ptr %res".to_string());
+        }
         let linkage = if self.body.sig.mods.export {
             ""
         } else {

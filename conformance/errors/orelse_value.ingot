@@ -1,0 +1,19 @@
+//! expect: run
+//! section: 6.3
+
+import std.Env;
+
+fn maybe(ok: bool) -> ?i64 {
+    if ok {
+        return .some(4);
+    }
+    return .none;
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert((maybe(true) orelse -1) == 4);
+    @assert((maybe(false) orelse -1) == -1);
+    let y = maybe(true) orelse { return 1; };
+    @assert(y == 4);
+    return 0;
+}

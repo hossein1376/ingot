@@ -1,0 +1,31 @@
+//! expect: run
+//! section: 6.4
+
+import std.Env;
+
+enum E { bad }
+
+fn low(ok: bool, runs: &mut i64) -> i64 ! E {
+    errdefer { runs.* += 1; }
+    if !ok {
+        fail .bad;
+    }
+    return 7;
+}
+
+fn high(ok: bool, runs: &mut i64) -> i64 ! E {
+    errdefer { runs.* += 10; }
+    let v = try low(ok, runs);
+    return v;
+}
+
+pub fn main(env: &Env) -> u8 {
+    var runs: i64 = 0;
+    let a = high(true, &mut runs) catch _ => -1;
+    @assert(a == 7);
+    @assert(runs == 0);
+    let b = high(false, &mut runs) catch _ => -1;
+    @assert(b == -1);
+    @assert(runs == 11);
+    return 0;
+}

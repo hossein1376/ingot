@@ -116,6 +116,7 @@ define internal i8 @"_I1:t1:t6:t.main"(ptr %arg0) nounwind #0 {
 bb0:
   %tmp0 = alloca %t0, align 8
   %tmp28 = alloca %t1, align 8
+  %tmp56 = alloca [8 x i8], align 8
   %l0 = alloca ptr, align 8
   %l1 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l1
@@ -253,45 +254,52 @@ bb8:
   call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.4, i64 0, i64 0, i64 0)
   unreachable
 bb9:
-  %tmp53 = call %t3 @"_I1:t1:t7:t.maybe"(i64 3)
-  store %t3 %tmp53, ptr %l25
+  %tmp53 = call { i8, i64 } @"_I1:t1:t7:t.maybe"(i64 3)
+  %tmp54 = extractvalue { i8, i64 } %tmp53, 0
+  store i8 %tmp54, ptr %l25
+  %tmp55 = extractvalue { i8, i64 } %tmp53, 1
+  store [8 x i8] zeroinitializer, ptr %tmp56
+  store i64 %tmp55, ptr %tmp56
+  %tmp57 = getelementptr i8, ptr %l25, i64 8
+  %tmp58 = load i64, ptr %tmp56, align 1
+  store i64 %tmp58, ptr %tmp57, align 1
   br label %bb11
 bb10:
   call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.5, i64 0, i64 0, i64 0)
   unreachable
 bb11:
-  %tmp54 = load %t3, ptr %l25
-  store %t3 %tmp54, ptr %l26
-  %tmp55 = load i8, ptr %l26
-  store i8 %tmp55, ptr %l27
-  %tmp56 = load i8, ptr %l27
-  %tmp57 = icmp eq i8 %tmp56, 1
-  store i1 %tmp57, ptr %l28
-  %tmp58 = load i1, ptr %l28
-  br i1 %tmp58, label %bb14, label %bb15
+  %tmp59 = load %t3, ptr %l25
+  store %t3 %tmp59, ptr %l26
+  %tmp60 = load i8, ptr %l26
+  store i8 %tmp60, ptr %l27
+  %tmp61 = load i8, ptr %l27
+  %tmp62 = icmp eq i8 %tmp61, 1
+  store i1 %tmp62, ptr %l28
+  %tmp63 = load i1, ptr %l28
+  br i1 %tmp63, label %bb14, label %bb15
 bb12:
   ret i8 0
 bb13:
-  %tmp59 = load i8, ptr %l26
-  store i8 %tmp59, ptr %l33
-  %tmp60 = load i8, ptr %l33
-  %tmp61 = icmp eq i8 %tmp60, 0
-  store i1 %tmp61, ptr %l34
-  %tmp62 = load i1, ptr %l34
-  br i1 %tmp62, label %bb19, label %bb20
+  %tmp64 = load i8, ptr %l26
+  store i8 %tmp64, ptr %l33
+  %tmp65 = load i8, ptr %l33
+  %tmp66 = icmp eq i8 %tmp65, 0
+  store i1 %tmp66, ptr %l34
+  %tmp67 = load i1, ptr %l34
+  br i1 %tmp67, label %bb19, label %bb20
 bb14:
-  %tmp63 = getelementptr i8, ptr %l26, i64 8
-  %tmp64 = load i64, ptr %tmp63
-  store i64 %tmp64, ptr %l29
-  %tmp65 = load i64, ptr %l29
-  store i64 %tmp65, ptr %l30
-  %tmp66 = load i64, ptr %l30
-  %tmp67 = icmp eq i64 %tmp66, 3
-  store i1 %tmp67, ptr %l31
-  %tmp68 = load i1, ptr %l31
-  store i1 %tmp68, ptr %l32
-  %tmp69 = load i1, ptr %l32
-  br i1 %tmp69, label %bb16, label %bb17
+  %tmp68 = getelementptr i8, ptr %l26, i64 8
+  %tmp69 = load i64, ptr %tmp68
+  store i64 %tmp69, ptr %l29
+  %tmp70 = load i64, ptr %l29
+  store i64 %tmp70, ptr %l30
+  %tmp71 = load i64, ptr %l30
+  %tmp72 = icmp eq i64 %tmp71, 3
+  store i1 %tmp72, ptr %l31
+  %tmp73 = load i1, ptr %l31
+  store i1 %tmp73, ptr %l32
+  %tmp74 = load i1, ptr %l32
+  br i1 %tmp74, label %bb16, label %bb17
 bb15:
   br label %bb13
 bb16:
@@ -357,10 +365,14 @@ trap0:
   unreachable
 }
 
-define internal %t3 @"_I1:t1:t7:t.maybe"(i64 %arg0) nounwind #0 {
+define internal { i8, i64 } @"_I1:t1:t7:t.maybe"(i64 %arg0) nounwind #0 {
 bb0:
   %tmp6 = alloca %t3, align 8
   %tmp12 = alloca %t3, align 8
+  %tmp14 = alloca [8 x i8], align 8
+  %tmp20 = alloca %t3, align 8
+  %tmp24 = alloca %t3, align 8
+  %tmp26 = alloca [8 x i8], align 8
   %l0 = alloca i64, align 8
   %l1 = alloca i64, align 8
   %l2 = alloca i1, align 1
@@ -397,18 +409,36 @@ bb1:
   %tmp10 = load %t3, ptr %l5
   store %t3 %tmp10, ptr %l6
   %tmp11 = load %t3, ptr %l6
-  ret %t3 %tmp11
+  store %t3 %tmp11, ptr %tmp12
+  %tmp13 = load i8, ptr %tmp12
+  store [8 x i8] zeroinitializer, ptr %tmp14
+  %tmp15 = getelementptr i8, ptr %tmp12, i64 8
+  %tmp16 = load i64, ptr %tmp15, align 1
+  store i64 %tmp16, ptr %tmp14, align 1
+  %tmp17 = load i64, ptr %tmp14
+  %tmp18 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp13, 0
+  %tmp19 = insertvalue { i8, i64 } %tmp18, i64 %tmp17, 1
+  ret { i8, i64 } %tmp19
 bb2:
   br label %bb3
 bb3:
-  store %t3 zeroinitializer, ptr %tmp12
-  store i8 0, ptr %tmp12
-  %tmp13 = load %t3, ptr %tmp12
-  store %t3 %tmp13, ptr %l7
-  %tmp14 = load %t3, ptr %l7
-  store %t3 %tmp14, ptr %l8
-  %tmp15 = load %t3, ptr %l8
-  ret %t3 %tmp15
+  store %t3 zeroinitializer, ptr %tmp20
+  store i8 0, ptr %tmp20
+  %tmp21 = load %t3, ptr %tmp20
+  store %t3 %tmp21, ptr %l7
+  %tmp22 = load %t3, ptr %l7
+  store %t3 %tmp22, ptr %l8
+  %tmp23 = load %t3, ptr %l8
+  store %t3 %tmp23, ptr %tmp24
+  %tmp25 = load i8, ptr %tmp24
+  store [8 x i8] zeroinitializer, ptr %tmp26
+  %tmp27 = getelementptr i8, ptr %tmp24, i64 8
+  %tmp28 = load i64, ptr %tmp27, align 1
+  store i64 %tmp28, ptr %tmp26, align 1
+  %tmp29 = load i64, ptr %tmp26
+  %tmp30 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp25, 0
+  %tmp31 = insertvalue { i8, i64 } %tmp30, i64 %tmp29, 1
+  ret { i8, i64 } %tmp31
 }
 
 define internal void @"_I3:std10:std.sys.rt15:std.sys.rt.putc"(i8 %arg0) nounwind #0 {

@@ -1,0 +1,91 @@
+//! expect: run
+//! section: 5.4, 6, 7
+
+import std.Env;
+
+enum E { bad }
+
+fn half(n: i64) -> i64 ! E {
+    if n % 2 != 0 {
+        fail .bad;
+    }
+    return n / 2;
+}
+
+fn via_half(f: fn(i64) -> i64 ! E, n: i64) -> i64 {
+    return f(n) catch _ => -1;
+}
+
+struct Big { a: i64, b: i64, c: i64 }
+
+enum BigErr { bad: Big }
+
+fn wide(n: i64) -> [4]i64 ! BigErr {
+    if n < 0 {
+        fail .bad(Big.{ a: 1, b: 2, c: 3 });
+    }
+    return [4]i64.{ 10, 20, 30, 40 };
+}
+
+fn via_wide(f: fn(i64) -> [4]i64 ! BigErr, n: i64) -> i64 {
+    match f(n) {
+        .ok(a) => {
+            return a[3];
+        }
+        .err(e) => {
+            match e {
+                .bad(b) => {
+                    return b.c;
+                }
+            }
+        }
+    }
+}
+
+fn small_opt(n: i64) -> ?i64 {
+    if n < 0 {
+        return .none;
+    }
+    return .some(n * 2);
+}
+
+fn via_small_opt(f: fn(i64) -> ?i64, n: i64) -> i64 {
+    match f(n) {
+        .some(v) => {
+            return v;
+        }
+        .none => {
+            return -1;
+        }
+    }
+}
+
+fn large_opt(n: i64) -> ?[4]i64 {
+    if n < 0 {
+        return .none;
+    }
+    return .some([4]i64.{ 5, 6, 7, 8 });
+}
+
+fn via_large_opt(f: fn(i64) -> ?[4]i64, n: i64) -> i64 {
+    match f(n) {
+        .some(a) => {
+            return a[2];
+        }
+        .none => {
+            return -1;
+        }
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(via_half(half, 8) == 4);
+    @assert(via_half(half, 7) == -1);
+    @assert(via_wide(wide, 1) == 40);
+    @assert(via_wide(wide, -1) == 3);
+    @assert(via_small_opt(small_opt, 5) == 10);
+    @assert(via_small_opt(small_opt, -1) == -1);
+    @assert(via_large_opt(large_opt, 1) == 7);
+    @assert(via_large_opt(large_opt, -1) == -1);
+    return 0;
+}
