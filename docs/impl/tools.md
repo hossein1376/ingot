@@ -90,8 +90,23 @@ Applies fixes until a round applies nothing, then reports what is left.
  "bad":"...source...","good":"...source...","fix":"inserts a defer when exactly one consuming function applies"}
 ```
 
-`bad` and `good` are the text of conformance tests for that code, when the suite has
-them.
+Everything comes from two sources the compiler embeds when it is built, so the answer
+cannot drift from them: the code's row in [diagnostics.md](diagnostics.md) and the
+conformance suite.
+
+* `name` and `condition` are the row's name and "Reported when" column (for a trap, its
+  "Raised by" column), as plain text: Markdown backticks and emphasis are removed.
+* `fix` is the row's "Fix" column, absent when the column is `—`. A trap has none.
+* `sections` is the union of the `//! section:` headers of every conformance test that
+  marks the code, sorted as section numbers (`2` before `10`, `33` before `33.2`).
+* `bad` is the text of the first `reject` test, in byte order of its path, that marks
+  this code and no other; for a trap, the first `trap` test that marks it. `good` is the
+  `.fixed.ingot` of that test, when it has one. Directive lines are removed from both.
+  Each is absent when there is no such test.
+* A retired code (its row says **retired**) has `"retired":true` and its row's text as
+  `condition`.
+* `--all` prints one line per code in catalog order. A code that is not in the
+  catalog is a failure (§1).
 
 ### `ingot fmt [PATH] [--check] [--stdin]`
 
@@ -147,11 +162,19 @@ the counters.
 
 ## 4. Reports
 
-### `ingot api [PATH]`
+The summaries of `api`, `audit`, `layout`, `targets` and `explain` have only the fields
+of §1. A report never needs the back end: it runs the front end as far as `check` does.
 
-`PATH` is a package, a module (`std.mem`) or an item (`std.mem.Arena`). One line per
-`pub` item, in source order; `--pkg` adds the `pub(pkg)` items, for work inside the
-package, with `"pub(pkg)"` in `modifiers`:
+### `ingot api [PATH] [--pkg] [--target T]`
+
+`PATH` is a package, a module (`std.mem`) or an item (`std.mem.Arena`). A `PATH` that
+exists on disk is a package directory or a file of one (§1); anything else is a dotted
+path resolved in the build of the current directory, that is its packages and `std`. A
+package or a module prints all its items; an item prints itself and everything under
+it: a type's fields, variants and methods and the `impl I for` lines whose type is it.
+The default is the current package. One line per `pub` item, modules in path order
+and items in source order within one; `--pkg` adds the `pub(pkg)` items, for work
+inside the package, with `"pub(pkg)"` in `modifiers`:
 
 ```json
 {"type":"api","path":"std.mem.Arena.alloc_slice","item":"fn",
@@ -177,7 +200,16 @@ package, with `"pub(pkg)"` in `modifiers`:
 | `const`, `static` | `value_type` |
 | `type` | `aliases` |
 
-* `signature` is the declaration exactly as written, without the body.
+* `signature` is the declaration's tokens exactly as written, without the body: the
+  source text from its first modifier to the end of the header, with comments removed,
+  each run of white space (newlines included) replaced by one space, and no space just
+  inside `(`, `[` or before `)`, `]`, `,`. A signature is always one line.
+* `doc` is the doc comment, its lines joined by `\n` with each line's `///` and one
+  following space removed; absent when there is none.
+* A method of an `impl T` or `impl I for T` has the path `T.name`, and of an interface
+  `I.name`, with the module path in front. An `impl I for T` has its own line with
+  path `T`'s path; an `impl T` has none, only its methods.
+* `size`, `align` and offsets are for the target of `--target`, the host by default.
 * `size`, `align` and offsets are absent for a generic type, whose layout depends on its
   arguments.
 * An `unsafe fn` has its safety preconditions in `doc`, and `"unsafe"` in `modifiers`.
@@ -218,7 +250,15 @@ The first three rows and the concurrency row are the same in both build pipeline
 `symbol`), `export` (with `symbol`), `forget`, `debug`, `unsafe_impl` (with `interface`
 and `for`), `static_interior` (with `value_type`).
 
-### `ingot layout TYPE`
+* It covers every package of the build except `std`; `ingot audit std` audits `std`.
+* One line per occurrence: each `unsafe` block, each `unsafe fn` declaration, each
+  `extern` and `export fn` declaration, each call of `@forget` and `@debug`, each
+  `unsafe impl`, and each `static` whose type has interior mutability (glossary). An
+  occurrence inside a `when` branch the target does not take is not listed.
+* `fn` is the full path of the function or test that contains it; absent for an item.
+* Lines are sorted by file path and then by the start of the span, as diagnostics are.
+
+### `ingot layout TYPE [--target T]`
 
 ```json
 {"type":"layout","name":"t.net.Header","size":24,"align":8,
@@ -229,12 +269,19 @@ and `for`), `static_interior` (with `value_type`).
 An enum has `tag` (`type`, `offset`, `size`) and `variants`, each with its payload's
 `offset` and `size`. A generic type must be given with its arguments.
 
+* `TYPE` is written as in source, with every named type as a full path
+  (`app.net.Header`, `std.mem.Arena`, `?&app.Node`, `[4]u32`), resolved in the build of
+  the current directory. A type that does not resolve is a diagnostic as in `check`.
+* The layout is for the target of `--target`, the host by default.
+* `padding` lists every gap, the tail included, in offset order.
+
 ### `ingot targets`
 
 One `{"type":"target","name":N,"host":B,"build":K,"missing":[...]}` per target the
 compiler supports. `build` is true when everything a build for that target needs was
 found (the pinned `clang`, the system's linker inputs, a sysroot for another system),
-and `missing` names what was not.
+and `missing` names what was not. A target the back end cannot build for yet has
+`build` false and `"code generation for this target"` in `missing`.
 
 ### `ingot deps [update NAME [--rev R] | fetch]`
 

@@ -335,6 +335,17 @@ code alone.
   hash frames lengths as 8 bytes little-endian; graph order is breadth-first with
   `[deps]` by name; a `[deps]` cycle is E0303 at the entry; an override that matches
   nothing is inert; `ingot` is `MAJOR.MINOR`.
+* **Report tools** (*user*, 2026-11-18, before P4b; tools.md §2, §4).
+  * `ingot explain` reads the catalog row and the conformance suite, both embedded
+    when the compiler is built. *Why:* one source of truth that cannot drift.
+    *Rejected:* a hand-written table in the compiler.
+  * `ingot api PATH`: a path on disk first, else a dotted path in the current build; an
+    item prints its whole subtree. A `signature` is one line: the tokens as written,
+    comments dropped, white space collapsed. *Rejected:* verbatim header text, which
+    carries newlines and comments into a field tools compare.
+  * `ingot audit` covers the build minus `std` by default, so a dependency's `unsafe` is
+    visible; `ingot audit std` audits `std`. *Rejected:* the root package only, and the
+    whole build with `std`, whose runtime would dominate the list.
 * **The C ABI** (review 2, U3; 04 §29): `bool` is C's `_Bool`; `copy struct`s cross by
   value by each system's rule; `?extern fn` crosses as a nullable function pointer;
   other optionals, results and enums do not. No unwinding; unwind tables are still
