@@ -72,25 +72,27 @@ pub fn main(env: &Env) -> void ! AppErr {
 
 ## Status
 
-**Ingot does not generate code yet.** The bootstrap compiler, written in Rust, checks
-programs; it does not build or run them.
+**Ingot builds and runs small programs on the M4 Pro.** The bootstrap compiler, written
+in Rust, checks programs for all three targets, and compiles programs without generics to
+native code for `aarch64-macos-m4` through LLVM 22.
 
 | Works today | Not yet |
 |---|---|
-| Lexing, parsing and error recovery | Per-instance checks (phase 11a, in progress) |
-| Names, types, generics, interfaces and constant evaluation | Specialization and code generation for the three targets |
-| Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | `ingot build`, `ingot run` and `ingot test` |
-| Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | Dependencies between packages, and the report tools (`api`, `audit`, `layout`) |
-| Check removal, and the bounds and overflow checks `ingot cost` reports | The other cost items: allocations, indirect calls, copies, spawns, locks, park points |
-| Instance discovery (phase 11a): every generic instance, its depth and its symbol name | The runtime and most of the standard library |
+| Lexing, parsing and error recovery | Generic instances, closures, `&dyn`, error returns and `try` in generated code |
+| Names, types, generics, interfaces and constant evaluation | `ingot test`, and byte-identical executables |
+| Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | Vectors, masks and kernels in generated code |
+| Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | The Linux and Windows targets |
+| Check removal, and every cost item `ingot cost` reports: checks, allocations, indirect calls, copies, spawns, locks, park points | The task scheduler, so `spawn` and `par for` at run time |
+| Instance discovery (phase 11a): every generic instance, its depth and its symbol name | Dependencies between packages, and the report tools (`api`, `audit`, `layout`) |
+| `ingot build` and `ingot run` on `aarch64-macos-m4`: scalars, structs, enums, optionals, arrays and slices, calls, and every check with its trap line | Most of the standard library |
 | `check`, `fix`, `query`, `serve` and an LSP server for editors | |
 
 The example above does not compile yet either: it needs `std.fs`, `std.simd` and the
 arena of `std.mem`, which are still being designed in [docs/std/](docs/std/). `Atomic`
 and `Cell` in `std.sync` are the first standard library types with real bodies. Most of the
-[conformance suite](conformance/README.md) passes; the tests that still fail need code
-generation or standard library pieces that are still missing. [COMPILER.md](COMPILER.md)
-lists the build steps and which are done.
+[conformance suite](conformance/README.md) passes, its `run` and `trap` tests under both
+build pipelines; the tests that still fail need generic instances, error returns, vectors
+or the scheduler. [COMPILER.md](COMPILER.md) lists the build steps and which are done.
 
 ## Trying it
 
@@ -107,11 +109,16 @@ target/release/ingot cost conformance/cost/call_borrow_keeps_second_check.ingot
 ```
 
 ```sh
+target/release/ingot build conformance/types/aggregate_arguments.ingot -o /tmp/aggregate_arguments
+```
+
+```sh
 target/release/ingot conformance
 ```
 
 `check` prints diagnostics (add `--json` for the machine form), `cost` lists the
-checks that survived check removal, and `conformance` runs the whole suite. Before a
+checks that survived check removal, `build` writes an executable (it needs Homebrew's
+`llvm@22`: `brew install llvm@22`), and `conformance` runs the whole suite. Before a
 commit, `scripts/verify.sh` runs formatting, Clippy, the tests, the conformance
 ratchet and a determinism check.
 

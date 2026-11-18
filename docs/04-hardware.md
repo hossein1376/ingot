@@ -391,7 +391,9 @@ export fn ingot_checksum(data: *u8, len: i64) -> u32 {
   `?extern fn(...)` (a nullable C function pointer, with the null niche), and
   `copy struct`s of FFI types with no raised alignment, passed and returned by each
   system's rule for a C struct of the same layout. Other optionals, `T ! E` and enums do
-  not cross; a payload-free enum is converted in the source with `as` and `@enum`.
+  not cross; a payload-free enum is converted in the source with `as` and `@enum`. A
+  result may also be `void`, or `never` for a foreign function that does not return
+  (C's `exit`, marked `noreturn`).
 * `bool` is one byte holding 0 or 1, C's `_Bool`. A foreign function that returns
   anything else has produced an invalid value (section 16.2); C code that uses `int` as
   a truth value is declared with `i32`.
