@@ -100,7 +100,8 @@ conformance suite.
 * `sections` is the union of the `//! section:` headers of every conformance test that
   marks the code, sorted as section numbers (`2` before `10`, `33` before `33.2`).
 * `bad` is the text of the first `reject` test, in byte order of its path, that marks
-  this code and no other; for a trap, the first `trap` test that marks it. `good` is the
+  this code and no other and has a `.fixed.ingot`, or else of the first that marks this
+  code and no other; for a trap, the first `trap` test that marks it. `good` is the
   `.fixed.ingot` of that test, when it has one. Directive lines are removed from both.
   Each is absent when there is no such test.
 * A retired code (its row says **retired**) has `"retired":true` and its row's text as
@@ -164,6 +165,9 @@ the counters.
 
 The summaries of `api`, `audit`, `layout`, `targets` and `explain` have only the fields
 of §1. A report never needs the back end: it runs the front end as far as `check` does.
+`api`, `audit` and `layout` first print the diagnostics `check` would print for the
+same path, then the report for what did resolve; any diagnostic makes `ok` false and the
+exit status 1, so an empty report is never mistaken for an empty package.
 
 ### `ingot api [PATH] [--pkg] [--target T]`
 
@@ -217,8 +221,8 @@ inside the package, with `"pub(pkg)"` in `modifiers`:
   `generics`.
 * A dotted `PATH` that names nothing in the build is a failure (§1), as a path on disk
   that does not exist is.
-* `size`, `align` and offsets are absent for a generic type, whose layout depends on its
-  arguments.
+* `properties`, `size`, `align` and offsets are absent for a generic type, whose
+  properties and layout depend on its arguments.
 * An `unsafe fn` has its safety preconditions in `doc`, and `"unsafe"` in `modifiers`.
 
 ### `ingot cost [PATH] [--fn NAME]`
