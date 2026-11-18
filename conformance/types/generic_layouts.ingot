@@ -1,0 +1,33 @@
+//! expect: run
+//! section: 8, 25
+
+import std.Env;
+
+struct Buf[T, const n: i64] {
+    data: [n + 1]T,
+    len: i64,
+}
+
+fn bytes_of[T: Discard](x: &T) -> i64 {
+    return @sizeof(T);
+}
+
+fn align_of[T: Discard](x: &T) -> i64 {
+    return @alignof(T);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let a = Buf[u8, 3].{ data: [4]u8.{ 1, 2, 3, 4 }, len: 4 };
+    @assert(a.data.len == 4);
+    @assert(a.data[3] == 4);
+    @assert(bytes_of(&a.data[0]) == 1);
+
+    let b = Buf[i64, 2].{ data: [3]i64.{ 5, 6, 7 }, len: 3 };
+    @assert(b.data.len == 3);
+    @assert(b.data[2] == 7);
+    @assert(bytes_of(&b.data[0]) == 8);
+    @assert(align_of(&b.data[0]) == 8);
+    @assert(@sizeof(Buf[u8, 3]) == 16);
+    @assert(@sizeof(Buf[i64, 2]) == 32);
+    return 0;
+}

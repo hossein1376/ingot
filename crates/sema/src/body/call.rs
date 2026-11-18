@@ -1845,7 +1845,16 @@ impl Checker<'_, '_, '_> {
             ret,
             error,
         };
-        let owner_args = self.closure_owner_args();
+        let owner_params = self.closure_owner_params();
+        let owner_args = owner_params
+            .iter()
+            .map(|p| match self.cx.sema.def(*p).kind {
+                crate::defs::DefKind::GenericParam { is_const: true } => {
+                    GenericArg::Const(ConstArg::Param(*p))
+                }
+                _ => GenericArg::Ty(self.mk(TyKind::Param(*p))),
+            })
+            .collect();
         let ty = self.mk(TyKind::Closure(self.owner, e.0, owner_args));
         // The captures: the name inside the body has the captured type.
         let mut caps = Vec::new();
@@ -1898,6 +1907,13 @@ impl Checker<'_, '_, '_> {
             });
         }
         self.register_closure_props(ty, &part_tys);
+        self.cx.d.closure_sigs.insert(
+            (self.owner, e.0),
+            crate::sigs::ClosureSig {
+                params: owner_params,
+                fields: part_tys.clone(),
+            },
+        );
         self.out.closures.insert(
             e,
             ClosureInfo {
@@ -1984,9 +2000,9 @@ impl Checker<'_, '_, '_> {
         self.cx.d.props.insert(ty, p);
     }
 
-    /// The owner's generic arguments, as parameters, for a closure type (pipeline
-    /// §6a: a closure body has its owner's arguments).
-    fn closure_owner_args(&mut self) -> Vec<GenericArg> {
+    /// The owner's generic parameters, in the order `TyKind::Closure` stores its
+    /// arguments (pipeline §6a: a closure body has its owner's arguments).
+    fn closure_owner_params(&mut self) -> Vec<DefId> {
         let mut defs = Vec::new();
         if let Some(parent) = self.cx.sema.def(self.owner).parent {
             match self.cx.sema.def(parent).kind {
@@ -2006,14 +2022,7 @@ impl Checker<'_, '_, '_> {
             }
         }
         defs.extend(self.cx.d.generics_of(self.owner).iter().map(|g| g.def));
-        defs.into_iter()
-            .map(|p| match self.cx.sema.def(p).kind {
-                crate::defs::DefKind::GenericParam { is_const: true } => {
-                    GenericArg::Const(ConstArg::Param(p))
-                }
-                _ => GenericArg::Ty(self.mk(TyKind::Param(p))),
-            })
-            .collect()
+        defs
     }
 
     // ------------------------------------------------- spawn, dispatch (typed)

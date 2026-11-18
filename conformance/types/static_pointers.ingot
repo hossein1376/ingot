@@ -1,0 +1,28 @@
+//! expect: run
+//! section: 4.5, 25
+
+import std.Env;
+
+fn triple(x: i64) -> i64 {
+    return x * 3;
+}
+
+static greeting: []u8 = "hi";
+
+struct Rec {
+    name: []u8,
+    n: i64,
+}
+
+static rec: Rec = Rec.{ name: "ab", n: 7 };
+static names: [2][]u8 = [2][]u8.{ "x", "yz" };
+static grow: fn(i64) -> i64 = triple;
+
+pub fn main(env: &Env) -> u8 {
+    @assert(greeting.len == 2 && greeting[1] == 'i');
+    @assert(rec.name.len == 2 && rec.name[0] == 'a');
+    @assert(rec.n == 7);
+    @assert(names[0].len == 1 && names[1][1] == 'z');
+    @assert(grow(4) == 12);
+    return 0;
+}

@@ -1,0 +1,53 @@
+//! expect: run
+//! section: 4.4
+
+import std.Env;
+
+interface Shape {
+    fn area(self: &Self) -> i64;
+    fn tag(self: &Self) -> i64;
+}
+
+struct Square { n: i64 }
+
+impl Shape for Square {
+    fn area(self: &Square) -> i64 { return self.n * self.n; }
+    fn tag(self: &Square) -> i64 { return 1; }
+}
+
+struct Rect { w: i64, h: i64 }
+
+impl Shape for Rect {
+    fn area(self: &Rect) -> i64 { return self.w * self.h; }
+    fn tag(self: &Rect) -> i64 { return 2; }
+}
+
+fn total(s: &dyn Shape) -> i64 {
+    return s.area() + s.tag();
+}
+
+interface Peek {
+    fn peek(self: &Self) -> i64;
+}
+
+impl Peek for &Square {
+    fn peek(self: & &Square) -> i64 {
+        return self.n + 100;
+    }
+}
+
+fn peeked(s: &dyn Peek) -> i64 {
+    return s.peek();
+}
+
+pub fn main(env: &Env) -> u8 {
+    let sq = Square.{ n: 3 };
+    let r = Rect.{ w: 4, h: 5 };
+    @assert(total(&sq) == 10);
+    @assert(total(&r) == 22);
+    let chosen: &dyn Shape = if r.w > sq.n { &r } else { &sq };
+    @assert(chosen.area() == 20);
+    let p = &sq;
+    @assert(peeked(&p) == 103);
+    return 0;
+}

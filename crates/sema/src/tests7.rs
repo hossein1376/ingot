@@ -1209,6 +1209,35 @@ fn a_closure_has_its_own_type_and_the_properties_of_its_captures() {
 }
 
 #[test]
+fn a_closure_layout_is_its_capture_record() {
+    let mut b = build(
+        "fn f() -> i64 {\n    let k = 2;\n    var total: i64 = 0;\n    let add = fn [k, &mut total](x: i64) -> i64 { total.* += x * k; return total.*; };\n    return add(1);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+    let info = b.body("f").closures.values().next().cloned().unwrap();
+    let l = b
+        .bodies
+        .declarations
+        .layout_of(info.ty)
+        .expect("a closure layout");
+    assert_eq!((l.size, l.align), (16, 8));
+    assert_eq!(
+        l.fields.iter().map(|f| f.offset).collect::<Vec<_>>(),
+        vec![0, 8]
+    );
+    let mut empty = build(
+        "fn f() -> i64 {\n    let k = fn [](x: i64) -> i64 { return x; };\n    return k(1);\n}\n",
+    );
+    let info = empty.body("f").closures.values().next().cloned().unwrap();
+    let l = empty
+        .bodies
+        .declarations
+        .layout_of(info.ty)
+        .expect("an empty closure layout");
+    assert_eq!((l.size, l.align), (0, 1));
+}
+
+#[test]
 fn a_capture_by_exclusive_borrow_needs_a_var() {
     let b = build(
         "fn f() -> i64 {\n    let total: i64 = 0;\n    let add = fn [&mut total](x: i64) { total.* += x; };\n    add(1);\n    return total;\n}\n",

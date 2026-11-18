@@ -12,10 +12,11 @@ use crate::model::{
 use ingot_diag::diagnostic::Diagnostic;
 use ingot_diag::source::{Sources, Span};
 use ingot_sema::defs::{DefId, DefKind, Sema};
-use ingot_sema::sigs::{Declarations, ItemSig};
+use ingot_sema::sigs::{Bound, Declarations, ItemSig};
 use ingot_sema::ty::{ConstArg, ConstValue, GenericArg, Subst, TyKind, TypeId};
 use ingot_sema::typed::{Bodies, ExprRes, FnDynCoercion, FnRef, FnSource, InterfaceVia};
-use std::collections::{BTreeMap, VecDeque};
+use ingot_sema::value::Value as SemValue;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Which command's roots to use (pipeline §6a).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -216,6 +217,30 @@ impl<'a> Discovery<'a> {
                 self.insert_root(key);
             }
         }
+        // A `static` or `const` initializer can hold a function address. It has no
+        // body root of its own in a build, so the function would otherwise be
+        // compiled only if a call happens to reach it.
+        if roots != Roots::Check {
+            let values: Vec<SemValue> = self
+                .decls
+                .values
+                .values()
+                .filter_map(|state| match state {
+                    ingot_sema::consteval::ValueState::Done(Ok(value)) => Some(value.clone()),
+                    _ => None,
+                })
+                .collect();
+            let empty = Subst::new();
+            for value in &values {
+                let mut refs = Vec::new();
+                value_fn_refs(value, &mut refs);
+                for fn_ref in refs {
+                    if let Some(key) = callee_key(self.sema, self.decls, &fn_ref, &empty) {
+                        self.insert_root(key);
+                    }
+                }
+            }
+        }
     }
 
     fn insert_root(&mut self, key: InstanceKey) {
@@ -363,12 +388,6 @@ impl<'a> Discovery<'a> {
 
     fn file_of(&self, def: DefId) -> usize {
         self.sema.def(def).file.unwrap_or(0)
-    }
-
-    /// The generic parameters of a body, in written order: an impl's or interface's
-    /// parameters and `Self`, then the function's own.
-    fn body_params(&self, owner: DefId) -> Vec<DefId> {
-        body_params(self.sema, self.decls, owner)
     }
 
     /// The CFG key and CFG of one instance body, when it has one.
@@ -581,22 +600,7 @@ impl<'a> Discovery<'a> {
 
     /// A closure instance from a `Closure(owner, index, args)` type.
     fn closure_instance(&self, ty: TypeId) -> Option<InstanceKey> {
-        let TyKind::Closure(owner, index, args) = self.decls.types.kind(ty).clone() else {
-            if let TyKind::Ref(_, inner) = self.decls.types.kind(ty) {
-                return self.closure_instance(*inner);
-            }
-            return None;
-        };
-        let params = self.body_params(owner);
-        let mut subst = Subst::new();
-        for (p, a) in params.into_iter().zip(args) {
-            subst.insert(p, a);
-        }
-        Some(InstanceKey {
-            owner,
-            body: InstanceBody::Closure(ingot_sema::hir::ExprId(index)),
-            subst,
-        })
+        closure_instance_key(self.sema, self.decls, ty)
     }
 
     fn closure_and_fn_table(
@@ -628,50 +632,8 @@ impl<'a> Discovery<'a> {
         span: Span,
         out: &mut Vec<(InstanceKey, Span)>,
     ) {
-        let Some(sig) = self.decls.interface_sig(interface).cloned() else {
-            return;
-        };
-        let Some((_, _, matched)) = self
-            .decls
-            .interface_impls(ty)
-            .into_iter()
-            .find(|(i, _, _)| *i == interface)
-        else {
-            return;
-        };
-        let Some(impl_sig) = self.decls.impl_sig(matched.impl_def).cloned() else {
-            return;
-        };
-        let mut base = Subst::new();
-        for g in self.decls.generics_of(matched.impl_def) {
-            if let Some(a) = matched.subst.get(g.def) {
-                base.insert(g.def, a.clone());
-            }
-        }
-        base.insert(impl_sig.self_def, GenericArg::Ty(ty));
-        let iface_params: Vec<DefId> = self
-            .decls
-            .generics_of(interface)
-            .iter()
-            .map(|g| g.def)
-            .collect();
-        for (p, a) in iface_params.into_iter().zip(args.iter().cloned()) {
-            base.insert(p, a);
-        }
-        if let Some(iface_sig) = self.decls.interface_sig(interface) {
-            base.insert(iface_sig.self_def, GenericArg::Ty(ty));
-        }
-        for method in &sig.methods {
-            let name = self.sema.def(*method).name.clone();
-            let def = impl_sig.methods.get(&name).copied().unwrap_or(*method);
-            out.push((
-                InstanceKey {
-                    owner: def,
-                    body: InstanceBody::Item,
-                    subst: self.canonical_subst(def, &base),
-                },
-                span,
-            ));
+        for (_, key) in method_table_methods(self.sema, self.decls, ty, interface, args) {
+            out.push((key, span));
         }
     }
 
@@ -721,7 +683,12 @@ impl<'a> Discovery<'a> {
     ) {
         match target {
             CallTarget::Fn { fn_ref, .. } => {
-                if let Some((key, _)) = self.callee(fn_ref, caller) {
+                if let Some((interface, ty)) = builtin_comparison_target(self.decls, fn_ref, caller)
+                {
+                    for key in comparison_element_keys(self.decls, self.sema, interface, ty) {
+                        out.push((key, span));
+                    }
+                } else if let Some((key, _)) = self.callee(fn_ref, caller) {
                     out.push((key, span));
                 }
             }
@@ -907,6 +874,267 @@ fn resolve_fn(
             decls.types.void,
             Vec::new(),
         )),
+    }
+}
+
+/// A closure instance from a `Closure(owner, index, args)` type (or a reference to
+/// one). Phase 11a and the back end must agree on the key.
+pub fn closure_instance_key(sema: &Sema, decls: &Declarations, ty: TypeId) -> Option<InstanceKey> {
+    let TyKind::Closure(owner, index, args) = decls.types.kind(ty).clone() else {
+        if let TyKind::Ref(_, inner) = decls.types.kind(ty) {
+            return closure_instance_key(sema, decls, *inner);
+        }
+        return None;
+    };
+    let params = body_params(sema, decls, owner);
+    let mut subst = Subst::new();
+    for (p, a) in params.into_iter().zip(args) {
+        subst.insert(p, a);
+    }
+    Some(InstanceKey {
+        owner,
+        body: InstanceBody::Closure(ingot_sema::hir::ExprId(index)),
+        subst,
+    })
+}
+
+/// The methods of `interface` and its supertraits, in method-table order: the
+/// interface's own methods in declaration order, then each supertrait's methods
+/// depth-first in supertrait declaration order, each interface once.
+pub fn interface_method_order(decls: &mut Declarations, interface: DefId) -> Vec<DefId> {
+    let mut interfaces = Vec::new();
+    let mut seen = BTreeSet::new();
+    walk_interfaces(decls, interface, &[], &mut seen, &mut interfaces);
+    let mut out = Vec::new();
+    for (iface, _) in interfaces {
+        if let Some(sig) = decls.interface_sig(iface) {
+            out.extend(sig.methods.iter().copied());
+        }
+    }
+    out
+}
+
+/// The method-table entries of `&dyn I`, in the order of
+/// [`interface_method_order`]. Each entry is the interface's declared method and the
+/// concrete instance that implements it.
+pub fn method_table_methods(
+    sema: &Sema,
+    decls: &mut Declarations,
+    ty: TypeId,
+    interface: DefId,
+    args: &[GenericArg],
+) -> Vec<(DefId, InstanceKey)> {
+    let mut interfaces = Vec::new();
+    let mut seen = BTreeSet::new();
+    walk_interfaces(decls, interface, args, &mut seen, &mut interfaces);
+    let mut out = Vec::new();
+    for (iface, iface_args) in interfaces {
+        let Some(sig) = decls.interface_sig(iface).cloned() else {
+            continue;
+        };
+        let Some((_, _, matched)) = decls
+            .interface_impls(ty)
+            .into_iter()
+            .find(|(i, _, _)| *i == iface)
+        else {
+            continue;
+        };
+        let Some(impl_sig) = decls.impl_sig(matched.impl_def).cloned() else {
+            continue;
+        };
+        let mut base = Subst::new();
+        for g in decls.generics_of(matched.impl_def) {
+            if let Some(a) = matched.subst.get(g.def) {
+                base.insert(g.def, a.clone());
+            }
+        }
+        base.insert(impl_sig.self_def, GenericArg::Ty(ty));
+        let iface_params: Vec<DefId> = decls.generics_of(iface).iter().map(|g| g.def).collect();
+        for (p, a) in iface_params.into_iter().zip(iface_args.iter().cloned()) {
+            base.insert(p, a);
+        }
+        if let Some(iface_sig) = decls.interface_sig(iface) {
+            base.insert(iface_sig.self_def, GenericArg::Ty(ty));
+        }
+        for method in &sig.methods {
+            let name = sema.def(*method).name.clone();
+            let def = impl_sig.methods.get(&name).copied().unwrap_or(*method);
+            out.push((
+                *method,
+                InstanceKey {
+                    owner: def,
+                    body: InstanceBody::Item,
+                    subst: canonical_subst(sema, decls, def, &base),
+                },
+            ));
+        }
+    }
+    out
+}
+
+fn walk_interfaces(
+    decls: &mut Declarations,
+    interface: DefId,
+    args: &[GenericArg],
+    seen: &mut BTreeSet<DefId>,
+    out: &mut Vec<(DefId, Vec<GenericArg>)>,
+) {
+    if !seen.insert(interface) {
+        return;
+    }
+    let Some(sig) = decls.interface_sig(interface).cloned() else {
+        return;
+    };
+    out.push((interface, args.to_vec()));
+    let mut subst = Subst::new();
+    for (g, a) in decls.generics_of(interface).iter().zip(args) {
+        subst.insert(g.def, a.clone());
+    }
+    for sup in sig.supers {
+        if let Bound::Interface(i, iargs) = sup {
+            let mapped = iargs
+                .iter()
+                .map(|a| decls.types.subst_arg(a, &subst))
+                .collect::<Vec<_>>();
+            walk_interfaces(decls, i, &mapped, seen, out);
+        }
+    }
+}
+
+/// A function address held in a constant or static value.
+pub fn value_fn_refs(value: &SemValue, out: &mut Vec<FnRef>) {
+    match value {
+        SemValue::Fn { fn_ref, .. } => out.push((**fn_ref).clone()),
+        SemValue::Aggregate { fields, .. } => {
+            for field in fields {
+                value_fn_refs(field, out);
+            }
+        }
+        SemValue::Variant {
+            payload: Some(payload),
+            ..
+        } => value_fn_refs(payload, out),
+        _ => {}
+    }
+}
+
+/// Whether `fn_ref` is a generated built-in `Eq`/`Ord` call, and for which type.
+pub fn builtin_comparison_target(
+    decls: &mut Declarations,
+    fn_ref: &FnRef,
+    caller: &Subst,
+) -> Option<(DefId, TypeId)> {
+    let FnSource::Interface {
+        interface,
+        self_ty,
+        via,
+        ..
+    } = &fn_ref.source
+    else {
+        return None;
+    };
+    if !matches!(via, InterfaceVia::Builtin | InterfaceVia::Bound) {
+        return None;
+    }
+    let ty = decls.instantiate(*self_ty, caller);
+    is_comparison_builtin(decls, ty, *interface).then_some((*interface, ty))
+}
+
+/// A composite comparison whose elements may need user `Eq`/`Ord` instances.
+pub fn comparison_element_keys(
+    decls: &mut Declarations,
+    sema: &Sema,
+    interface: DefId,
+    ty: TypeId,
+) -> Vec<InstanceKey> {
+    let mut out = Vec::new();
+    collect_comparison_elements(decls, sema, interface, ty, &mut out);
+    out
+}
+
+fn collect_comparison_elements(
+    decls: &mut Declarations,
+    sema: &Sema,
+    interface: DefId,
+    ty: TypeId,
+    out: &mut Vec<InstanceKey>,
+) {
+    match decls.types.kind(ty).clone() {
+        TyKind::Ref(_, inner)
+        | TyKind::Array(inner, _)
+        | TyKind::Slice(_, inner)
+        | TyKind::Optional(inner) => {
+            collect_comparison_elements(decls, sema, interface, inner, out);
+        }
+        TyKind::Tuple(ts) => {
+            for t in ts {
+                collect_comparison_elements(decls, sema, interface, t, out);
+            }
+        }
+        _ => {
+            if decls.builtin_implements(ty, interface) != ingot_sema::sigs::Tri::Yes
+                && let Some(key) = comparison_method_key(sema, decls, interface, ty)
+            {
+                out.push(key);
+            }
+        }
+    }
+}
+
+/// The user `impl` method instance for `Eq.eq`/`Ord.cmp` on `ty`.
+pub fn comparison_method_key(
+    sema: &Sema,
+    decls: &mut Declarations,
+    interface: DefId,
+    ty: TypeId,
+) -> Option<InstanceKey> {
+    let name = match Some(interface) {
+        i if i == decls.builtins.eq => "eq",
+        i if i == decls.builtins.ord => "cmp",
+        _ => return None,
+    };
+    let sig = decls.interface_sig(interface).cloned()?;
+    let method = sig
+        .methods
+        .iter()
+        .copied()
+        .find(|m| sema.def(*m).name == name)?;
+    let (_, _, matched) = decls
+        .interface_impls(ty)
+        .into_iter()
+        .find(|(i, _, _)| *i == interface)?;
+    let impl_sig = decls.impl_sig(matched.impl_def).cloned()?;
+    let mut base = Subst::new();
+    for g in decls.generics_of(matched.impl_def) {
+        if let Some(a) = matched.subst.get(g.def) {
+            base.insert(g.def, a.clone());
+        }
+    }
+    base.insert(impl_sig.self_def, GenericArg::Ty(ty));
+    if let Some(iface_sig) = decls.interface_sig(interface) {
+        base.insert(iface_sig.self_def, GenericArg::Ty(ty));
+    }
+    let def = impl_sig.methods.get(name).copied().unwrap_or(method);
+    Some(InstanceKey {
+        owner: def,
+        body: InstanceBody::Item,
+        subst: canonical_subst(sema, decls, def, &base),
+    })
+}
+
+/// Whether the built-in comparison for `ty` is generated (a scalar, a payload-free
+/// enum, or a structural composite) rather than a user `impl`.
+pub fn is_comparison_builtin(decls: &Declarations, ty: TypeId, interface: DefId) -> bool {
+    if Some(interface) != decls.builtins.eq && Some(interface) != decls.builtins.ord {
+        return false;
+    }
+    match decls.types.kind(ty) {
+        TyKind::Ref(..)
+        | TyKind::Array(..)
+        | TyKind::Slice(..)
+        | TyKind::Optional(..)
+        | TyKind::Tuple(..) => true,
+        _ => decls.builtin_implements(ty, interface) == ingot_sema::sigs::Tri::Yes,
     }
 }
 

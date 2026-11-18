@@ -1,0 +1,34 @@
+//! expect: run
+//! section: 7.1
+
+import std.Env;
+
+struct Countdown {
+    at: i64,
+}
+
+impl Iter for Countdown {
+    type Item = i64;
+
+    fn next(self: &mut Countdown) -> ?Self.Item {
+        if self.at == 0 {
+            return .none;
+        }
+        self.at -= 1;
+        return .some(self.at);
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    var it = Countdown.{ at: 4 };
+    it.at = 4;
+    var sum: i64 = 0;
+    var count: i64 = 0;
+    for x in it {
+        sum += x;
+        count += 1;
+    }
+    @assert(count == 4);
+    @assert(sum == 6);
+    return 0;
+}

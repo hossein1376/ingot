@@ -1,0 +1,79 @@
+//! expect: run
+//! section: 4.4
+
+import std.Env;
+
+fn rank[T: Ord + Copy + Discard](a: T, b: T) -> i64 {
+    match a.cmp(&b) {
+        .less => { return -1; }
+        .equal => { return 0; }
+        .greater => { return 1; }
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    let a = (1, 2);
+    let b = (1, 3);
+    @assert(a.cmp(&b) == .less);
+    @assert(a.cmp(&a) == .equal);
+    @assert(a.eq(&a));
+
+    let xs = [3]i64.{ 1, 2, 3 };
+    let ys = [3]i64.{ 1, 2, 4 };
+    @assert(xs.cmp(&ys) == .less);
+    @assert(!xs.eq(&ys));
+
+    let short = [2]i64.{ 1, 2 };
+    let sx: []i64 = &xs[0..3];
+    let sy: []i64 = &ys[0..3];
+    let ss: []i64 = &short[0..2];
+    @assert(sx.cmp(&sy) == .less);
+    @assert(ss.cmp(&sx) == .less);
+    @assert(sx.cmp(&ss) == .greater);
+    @assert(sx.eq(&sx));
+
+    let absent: ?i64 = .none;
+    let present: ?i64 = .some(1);
+    @assert(absent.cmp(&present) == .less);
+    @assert(present.cmp(&absent) == .greater);
+    @assert(absent.eq(&absent));
+    @assert(!absent.eq(&present));
+
+    let str_a: []u8 = "ab";
+    let str_b: []u8 = "ab";
+    let opt_a: ?[]u8 = .some(str_a);
+    let opt_b: ?[]u8 = .some(str_b);
+    let opt_n: ?[]u8 = .none;
+    @assert(opt_a.eq(&opt_b));
+    @assert(opt_a.cmp(&opt_b) == .equal);
+    @assert(opt_n.cmp(&opt_a) == .less);
+
+    let x: i64 = 1;
+    let y: i64 = 1;
+    let ref_a: ?&i64 = .some(&x);
+    let ref_b: ?&i64 = .some(&y);
+    @assert(ref_a.eq(&ref_b));
+    @assert(ref_a.cmp(&ref_b) == .equal);
+
+    @assert(rank((1, 5), (2, 0)) == -1);
+    @assert(rank((2, 0), (1, 5)) == 1);
+    @assert(rank((1, 5), (1, 5)) == 0);
+    @assert(rank((1, 5, 9), (2, 0, 0)) == -1);
+    @assert(rank((2, 0, 0), (1, 5, 9)) == 1);
+    let ua: (u8, u8) = (1, 5);
+    let ub: (u8, u8) = (2, 0);
+    @assert(rank(ua, ub) == -1);
+
+    let deep_a = (1, (2, 3));
+    let deep_b = (1, (2, 4));
+    @assert(deep_a.cmp(&deep_b) == .less);
+
+    let neg_zero: f64 = -0.0;
+    let pos_zero: f64 = 0.0;
+    @assert(neg_zero.cmp(&pos_zero) == .less);
+    let nan: f64 = pos_zero / pos_zero;
+    @assert(nan.eq(&nan));
+    @assert(nan.cmp(&nan) == .equal);
+    @assert(nan.cmp(&pos_zero) == .greater);
+    return 0;
+}

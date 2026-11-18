@@ -6,23 +6,27 @@
 //! (`/opt/homebrew/opt/llvm@22/bin/clang` on this Mac); a missing or different
 //! major version is a named build failure, never Apple `clang`.
 //!
-//! B1 lowers monomorphic instances. A generic instance is a `not implemented:
-//! generic instances (B2)` entry, and so is any construct this step does not
-//! lower yet.
+//! B2 lowers instances of generic functions and types, closures, `&dyn`,
+//! built-in `Eq`/`Ord`, and `for` over an `Iter`. A construct this step does not
+//! lower is an explicit `not implemented` entry naming its later step.
 
 use ingot_cfg::Cfgs;
-use ingot_cfg::instances::{Instance, InstanceBody, InstanceKey, mangle_key};
+use ingot_cfg::instances::{
+    Instance, InstanceBody, InstanceKey, builtin_comparison_target, closure_instance_key,
+    comparison_element_keys, comparison_method_key, interface_method_order, mangle_key,
+    method_table_methods, value_fn_refs,
+};
 use ingot_cfg::model::{
     AggregateKind, Block, BlockData, BoundsKind, CallTarget, CastKind, Cfg, Check, CheckKind,
     Const, Operand, Place, PlaceBase, Projection, Rvalue, StmtKind, Terminator, Trap, ValueKind,
 };
 use ingot_diag::source::{Sources, Span};
 use ingot_sema::defs::{DefId, DefKind, Sema};
-use ingot_sema::sigs::{Declarations, FnSig, ItemSig, Layout, LayoutKind};
+use ingot_sema::sigs::{Declarations, FnSig, ItemSig, Layout, LayoutKind, ParamSig, Tri};
 use ingot_sema::ty::{
     ConstArg, ConstValue, FloatTy, GenericArg, IntTy, Mutability, Subst, TyKind, TypeId,
 };
-use ingot_sema::value::{PackElems, Value as SemValue};
+use ingot_sema::value::{AllocRef, PackElems, PathComp, SliceSource, Value as SemValue};
 use ingot_syntax::ast::BinOp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -199,17 +203,28 @@ enum CeVal {
     Bool(bool),
 }
 
-fn find_cfg(cfgs: &Cfgs, extra: &[Cfg], key: &InstanceKey) -> Option<Cfg> {
-    if key.body != InstanceBody::Item {
-        return None;
+fn body_key(key: &InstanceKey) -> Option<ingot_cfg::BodyKey> {
+    match key.body {
+        InstanceBody::Item => Some(ingot_cfg::BodyKey::Item),
+        InstanceBody::Closure(e) => Some(ingot_cfg::BodyKey::Closure(e)),
+        InstanceBody::ParFor(s) => Some(ingot_cfg::BodyKey::ParFor(s)),
+        // The table bodies are emitted as globals in `emit_tables`. A `par for`
+        // body and a spawn thunk are R2 work.
+        InstanceBody::MethodTable { .. }
+        | InstanceBody::DynFnTable { .. }
+        | InstanceBody::SpawnThunk { .. } => None,
     }
+}
+
+fn find_cfg(cfgs: &Cfgs, extra: &[Cfg], key: &InstanceKey) -> Option<Cfg> {
+    let body = body_key(key)?;
     cfgs.iter()
-        .find(|(_, cfg)| cfg.key.owner == key.owner && cfg.key.body == ingot_cfg::BodyKey::Item)
+        .find(|(_, cfg)| cfg.key.owner == key.owner && cfg.key.body == body)
         .map(|(_, cfg)| cfg.clone())
         .or_else(|| {
             extra
                 .iter()
-                .find(|cfg| cfg.key.owner == key.owner && cfg.key.body == ingot_cfg::BodyKey::Item)
+                .find(|cfg| cfg.key.owner == key.owner && cfg.key.body == body)
                 .cloned()
         })
 }
@@ -245,6 +260,12 @@ struct Codegen<'p> {
     next_global: usize,
     externs: BTreeMap<String, String>,
     functions: Vec<String>,
+    /// The generated bodies of the built-in `Eq`/`Ord` methods, by interface and
+    /// concrete type.
+    builtin_symbols: BTreeMap<(DefId, TypeId), String>,
+    builtin_requests: BTreeSet<(DefId, TypeId)>,
+    /// The `&dyn` tables emitted so far, by table symbol.
+    tables: BTreeMap<String, String>,
 }
 
 impl<'p> Codegen<'p> {
@@ -270,6 +291,9 @@ impl<'p> Codegen<'p> {
             next_global: 0,
             externs: BTreeMap::new(),
             functions: Vec::new(),
+            builtin_symbols: BTreeMap::new(),
+            builtin_requests: BTreeSet::new(),
+            tables: BTreeMap::new(),
         }
     }
 
@@ -295,6 +319,8 @@ impl<'p> Codegen<'p> {
         for body in &bodies {
             self.register_fn_types(body)?;
         }
+        self.emit_builtins()?;
+        self.emit_tables()?;
         for body in bodies.drain(..) {
             self.emit_body(&body)?;
         }
@@ -306,46 +332,31 @@ impl<'p> Codegen<'p> {
     /// The symbol a body is emitted under: an `export fn` keeps its source name;
     /// every other Ingot body is mangled.
     fn symbol_for_key(&self, key: &InstanceKey) -> String {
-        let sig = self.program.decls.fn_sig(key.owner);
-        if sig.is_some_and(|s| s.mods.export) {
-            return self.program.sema.def(key.owner).name.clone();
+        if key.body == InstanceBody::Item {
+            let sig = self.program.decls.fn_sig(key.owner);
+            if sig.is_some_and(|s| s.mods.export) {
+                return self.program.sema.def(key.owner).name.clone();
+            }
         }
         mangle_key(self.program.decls, self.program.sema, key)
-    }
-
-    /// A concrete `impl P` method has `Self = P` in its key; that is not a generic
-    /// instance. A key with a type parameter or a generic impl still is.
-    fn concrete_method_subst(&self, key: &InstanceKey) -> bool {
-        if !self.program.decls.generics_of(key.owner).is_empty() {
-            return false;
-        }
-        if let Some(parent) = self.program.sema.def(key.owner).parent {
-            if self.program.sema.def(parent).kind != DefKind::Impl {
-                return false;
-            }
-            if !self.program.decls.generics_of(parent).is_empty() {
-                return false;
-            }
-        }
-        key.subst
-            .map
-            .values()
-            .all(|a| !matches!(a, ingot_sema::ty::GenericArg::Ty(t) if matches!(self.program.decls.types.kind(*t), TyKind::Param(_))))
     }
 
     fn collect_instances(&mut self) -> Result<(), BuildError> {
         let mut queue: Vec<InstanceKey> = Vec::new();
         let mut seen: BTreeSet<InstanceKey> = BTreeSet::new();
         for instance in self.program.instances {
-            if instance.key.body != InstanceBody::Item {
-                return self.ni("closures, par-for bodies and method tables (B2)");
-            }
-            if !instance.key.subst.is_empty() && !self.concrete_method_subst(&instance.key) {
-                return Err(BuildError::NotImplemented(
-                    "instances with substitution (B2)".to_string(),
-                ));
+            if matches!(
+                instance.key.body,
+                InstanceBody::ParFor(_) | InstanceBody::SpawnThunk { .. }
+            ) {
+                return self.ni("par-for bodies and spawn thunks (R2)");
             }
             let key = instance.key.clone();
+            if self.is_builtin_method(key.owner) {
+                // A built-in `Eq`/`Ord` method has no CFG: the back end generates it
+                // when a call requests it.
+                continue;
+            }
             if seen.insert(key.clone()) {
                 let symbol = self.symbol_for_key(&key);
                 self.symbols.insert(key.clone(), symbol);
@@ -369,11 +380,44 @@ impl<'p> Codegen<'p> {
                 queue.push(key);
             }
         }
+        // A `static` or `const` initializer can hold a function address. It has no
+        // CFG, so phase 11a's call walk does not see it; add the function instance
+        // here, because the global's initializer names its symbol.
+        let values: Vec<SemValue> = self
+            .program
+            .decls
+            .values
+            .values()
+            .filter_map(|state| match state {
+                ingot_sema::consteval::ValueState::Done(Ok(value)) => Some(value.clone()),
+                _ => None,
+            })
+            .collect();
+        for value in &values {
+            let mut fns = Vec::new();
+            value_fn_refs(value, &mut fns);
+            for fn_ref in fns {
+                if let Some(key) = ingot_cfg::instances::callee_key(
+                    self.program.sema,
+                    &mut *self.program.decls,
+                    &fn_ref,
+                    &Subst::new(),
+                ) {
+                    self.add_instance(key, &mut queue, &mut seen)?;
+                }
+            }
+        }
         let mut at = 0;
         while at < queue.len() {
             let key = queue[at].clone();
             at += 1;
             let Some(cfg) = find_cfg(self.program.cfgs, self.program.extra_cfgs, &key) else {
+                if matches!(
+                    key.body,
+                    InstanceBody::MethodTable { .. } | InstanceBody::DynFnTable { .. }
+                ) {
+                    continue;
+                }
                 let def = self.program.sema.def(key.owner);
                 if def.kind != DefKind::ExternFn {
                     return Err(BuildError::Internal(format!(
@@ -383,12 +427,7 @@ impl<'p> Codegen<'p> {
                 }
                 continue;
             };
-            let sig = self
-                .program
-                .decls
-                .fn_sig(key.owner)
-                .cloned()
-                .ok_or_else(|| BuildError::Internal(format!("no signature for {}", cfg.name)))?;
+            let sig = self.body_sig(&key, &cfg)?;
             let symbol = self
                 .symbols
                 .get(&key)
@@ -404,20 +443,62 @@ impl<'p> Codegen<'p> {
                 },
             );
             for block in &cfg.blocks {
-                self.collect_calls(&key.subst, &block.term, &mut queue, &mut seen)?;
+                self.collect_calls(&key, &cfg, &block.term, &mut queue, &mut seen)?;
             }
         }
         Ok(())
     }
 
-    fn def_package(&self, def: DefId) -> usize {
-        let module = self.program.sema.def(def).module;
-        self.program.sema.module(module).package.0 as usize
+    /// The signature of a body. A closure has no item signature: its parameters are
+    /// the captured-record parameter and the closure's own, from its CFG.
+    fn body_sig(&self, key: &InstanceKey, cfg: &Cfg) -> Result<FnSig, BuildError> {
+        if key.body == InstanceBody::Item {
+            return self
+                .program
+                .decls
+                .fn_sig(key.owner)
+                .cloned()
+                .ok_or_else(|| BuildError::Internal(format!("no signature for {}", cfg.name)));
+        }
+        let params = cfg
+            .params
+            .iter()
+            .map(|p| {
+                let local = cfg.local(*p);
+                ParamSig {
+                    name: local.name.clone().unwrap_or_else(|| "self".to_string()),
+                    name_span: local.span,
+                    ty: local.ty,
+                    ty_span: local.span,
+                    into: None,
+                }
+            })
+            .collect();
+        Ok(FnSig {
+            def: key.owner,
+            parent: None,
+            name: cfg.name.clone(),
+            name_span: Span::default(),
+            mods: ingot_syntax::ast::FnMods::default(),
+            params,
+            ret: cfg.ret,
+            ret_span: Span::default(),
+            error: cfg.error,
+            error_span: None,
+            from: Vec::new(),
+            reduce: None,
+            reduce_span: None,
+            variadic: false,
+            abi: None,
+            has_body: true,
+            span: Span::default(),
+        })
     }
 
     fn collect_calls(
         &mut self,
-        caller: &Subst,
+        caller_key: &InstanceKey,
+        cfg: &Cfg,
         term: &Terminator,
         queue: &mut Vec<InstanceKey>,
         seen: &mut BTreeSet<InstanceKey>,
@@ -426,51 +507,111 @@ impl<'p> Codegen<'p> {
             Terminator::Call { target, .. } => target,
             _ => return Ok(()),
         };
-        let CallTarget::Fn { fn_ref, .. } = target else {
-            if matches!(
-                target,
-                CallTarget::Value {
-                    kind: ValueKind::FnPtr,
-                    ..
+        let caller = &caller_key.subst;
+        match target {
+            CallTarget::Fn { fn_ref, .. } => {
+                if let Some((interface, ty)) = self.builtin_target(fn_ref, caller)? {
+                    for key in comparison_element_keys(
+                        &mut *self.program.decls,
+                        self.program.sema,
+                        interface,
+                        ty,
+                    ) {
+                        self.add_instance(key, queue, seen)?;
+                    }
+                    return Ok(());
                 }
-            ) {
-                return Ok(());
+                if matches!(
+                    fn_ref.source,
+                    ingot_sema::typed::FnSource::Interface {
+                        via: ingot_sema::typed::InterfaceVia::Dyn,
+                        ..
+                    }
+                ) {
+                    return Ok(());
+                }
+                let def = fn_ref.def;
+                if self.program.sema.def(def).kind == DefKind::ExternFn {
+                    return Ok(());
+                }
+                let key = ingot_cfg::instances::callee_key(
+                    self.program.sema,
+                    &mut *self.program.decls,
+                    fn_ref,
+                    caller,
+                )
+                .ok_or_else(|| {
+                    BuildError::NotImplemented("instances with substitution (B2)".to_string())
+                })?;
+                self.add_instance(key, queue, seen)?;
             }
-            return self.ni("calls through closures and dynamic values (B2)");
+            CallTarget::Value { kind, callee, .. } => match kind {
+                ValueKind::FnPtr | ValueKind::DynFn => {}
+                ValueKind::Closure(e) => {
+                    let key = InstanceKey {
+                        owner: caller_key.owner,
+                        body: InstanceBody::Closure(*e),
+                        subst: caller.clone(),
+                    };
+                    self.add_instance(key, queue, seen)?;
+                }
+                ValueKind::Bound => {
+                    let ty = self.operand_ty(cfg, callee, caller)?;
+                    if let Some(key) =
+                        closure_instance_key(self.program.sema, self.program.decls, ty)
+                    {
+                        self.add_instance(key, queue, seen)?;
+                    }
+                }
+            },
+        }
+        Ok(())
+    }
+
+    /// The type of a value operand under a substitution.
+    fn operand_ty(&mut self, cfg: &Cfg, op: &Operand, subst: &Subst) -> Result<TypeId, BuildError> {
+        let ty = match op {
+            Operand::Place(p, _) => match &p.base {
+                PlaceBase::Local(l) => cfg.local(*l).ty,
+                PlaceBase::Static(def) => match self.program.decls.item(*def) {
+                    Some(ItemSig::Static(s)) => s.ty,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a place rooted at something that is not a static".to_string(),
+                        ));
+                    }
+                },
+            },
+            Operand::Const(_) => {
+                return Err(BuildError::Internal(
+                    "a call through a constant value".to_string(),
+                ));
+            }
         };
-        if !fn_ref.args.is_empty() {
-            return self.ni("generic instances (B2)");
-        }
-        let def = fn_ref.def;
-        if self.program.sema.def(def).kind == DefKind::ExternFn {
-            return Ok(());
-        }
-        // A method of a generic impl is a B2 instance.
-        if let Some(parent) = self.program.sema.def(def).parent
-            && self.program.sema.def(parent).kind == DefKind::Impl
-            && !self.program.decls.generics_of(parent).is_empty()
-        {
-            return self.ni("generic method instances (B2)");
-        }
-        let key = ingot_cfg::instances::callee_key(
-            self.program.sema,
-            &mut *self.program.decls,
-            fn_ref,
-            caller,
-        )
-        .ok_or_else(|| {
-            BuildError::NotImplemented("instances with substitution (B2)".to_string())
-        })?;
-        if !key.subst.is_empty() && !self.concrete_method_subst(&key) {
-            return self.ni("instances with substitution (B2)");
-        }
+        Ok(self.program.decls.instantiate(ty, subst))
+    }
+
+    fn def_package(&self, def: DefId) -> usize {
+        let module = self.program.sema.def(def).module;
+        self.program.sema.module(module).package.0 as usize
+    }
+
+    fn add_instance(
+        &mut self,
+        key: InstanceKey,
+        queue: &mut Vec<InstanceKey>,
+        seen: &mut BTreeSet<InstanceKey>,
+    ) -> Result<(), BuildError> {
         if seen.insert(key.clone()) {
-            // Phase 11a sees the checked package. A key it did not report there is
-            // a bug; a std body is what this walk exists to add.
-            if self.def_package(def) == self.program.checked {
+            // Phase 11a sees the checked package and runs its per-instance checks.
+            // A checked-package key it did not report is a bug in the shared
+            // discovery code, not a key for this walk to add silently.
+            if self.def_package(key.owner) == self.program.checked
+                && !self.program.instances.iter().any(|i| i.key == key)
+            {
                 return Err(BuildError::Internal(format!(
                     "phase 11a did not discover the instance of `{}`",
-                    self.program.sema.def(def).name
+                    self.program.sema.def(key.owner).name
                 )));
             }
             let symbol = self.symbol_for_key(&key);
@@ -478,6 +619,60 @@ impl<'p> Codegen<'p> {
             queue.push(key);
         }
         Ok(())
+    }
+
+    fn is_builtin_method(&self, def: DefId) -> bool {
+        let Some(parent) = self.program.sema.def(def).parent else {
+            return false;
+        };
+        [
+            self.program.decls.builtins.eq,
+            self.program.decls.builtins.ord,
+            self.program.decls.builtins.hash,
+            self.program.decls.builtins.format,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|i| i == parent)
+    }
+
+    /// Whether a call is one of the generated built-in `Eq`/`Ord` methods, and for
+    /// which concrete type. The caller's substitution is applied first.
+    fn builtin_target(
+        &mut self,
+        fn_ref: &ingot_sema::typed::FnRef,
+        caller: &Subst,
+    ) -> Result<Option<(DefId, TypeId)>, BuildError> {
+        if let Some((interface, ty)) =
+            builtin_comparison_target(&mut *self.program.decls, fn_ref, caller)
+        {
+            self.builtin_requests.insert((interface, ty));
+            return Ok(Some((interface, ty)));
+        }
+        let ingot_sema::typed::FnSource::Interface {
+            interface,
+            self_ty,
+            via,
+            ..
+        } = &fn_ref.source
+        else {
+            return Ok(None);
+        };
+        if !matches!(
+            via,
+            ingot_sema::typed::InterfaceVia::Builtin | ingot_sema::typed::InterfaceVia::Bound
+        ) {
+            return Ok(None);
+        }
+        let ty = self.program.decls.instantiate(*self_ty, caller);
+        if (Some(*interface) == self.program.decls.builtins.hash
+            || Some(*interface) == self.program.decls.builtins.format)
+            && (matches!(via, ingot_sema::typed::InterfaceVia::Builtin)
+                || self.program.decls.builtin_implements(ty, *interface) == Tri::Yes)
+        {
+            return self.ni("the built-in `Hash`/`Format` (R5)");
+        }
+        Ok(None)
     }
 
     fn find_main(&mut self) -> Result<(), BuildError> {
@@ -542,6 +737,10 @@ impl<'p> Codegen<'p> {
         }
         for global in &self.globals {
             out.push_str(global);
+            out.push('\n');
+        }
+        for table in self.tables.values() {
+            out.push_str(table);
             out.push('\n');
         }
         for site in &self.sites {
@@ -694,6 +893,22 @@ fn int_for_size(size: u64) -> &'static str {
     }
 }
 
+/// The storage of an enum's payload area. A payload that can hold a pointer is an
+/// array of `i64` words, so a global initializer can put a `ptrtoint` there; every
+/// other payload is opaque bytes.
+fn payload_storage(size: u64, has_pointer: bool) -> Result<String, BuildError> {
+    if has_pointer {
+        if !size.is_multiple_of(8) {
+            return Err(BuildError::Internal(format!(
+                "a pointer-bearing payload of {size} bytes is not a whole number of words"
+            )));
+        }
+        Ok(format!("[{} x i64]", size / 8))
+    } else {
+        Ok(format!("[{size} x i8]"))
+    }
+}
+
 impl<'p> Codegen<'p> {
     fn resolve_ty(&mut self, ty: TypeId) -> TypeId {
         if self.subst.is_empty() {
@@ -805,9 +1020,6 @@ impl<'p> Codegen<'p> {
                     );
                     return Ok(());
                 }
-                if !args.is_empty() {
-                    return self.ni("generic instances (B2)");
-                }
                 let (id, name) = self.new_named();
                 let item = self.program.decls.item(def).cloned().ok_or_else(|| {
                     BuildError::Internal(format!(
@@ -815,6 +1027,7 @@ impl<'p> Codegen<'p> {
                         self.program.sema.def(def).name
                     ))
                 })?;
+                let field_subst = self.program.decls.subst_for(def, &args);
                 match item {
                     ItemSig::Struct(sig) => {
                         let layout = self.layout(ty)?;
@@ -828,7 +1041,8 @@ impl<'p> Codegen<'p> {
                                     f.name
                                 ))
                             })?;
-                            let ll = self.llvm_ty(f.ty)?;
+                            let fty = self.program.decls.instantiate(f.ty, &field_subst);
+                            let ll = self.llvm_ty(fty)?;
                             fields.push(FieldInfo { offset: fl.offset });
                             push_pad(&mut ll_fields, &mut offset, fl.offset);
                             ll_fields.push(ll);
@@ -872,15 +1086,21 @@ impl<'p> Codegen<'p> {
                         let mut variants = Vec::new();
                         let mut max_size = 0u64;
                         let mut max_align = 1u64;
+                        let mut payload_has_pointer = false;
                         for v in &sig.variants {
+                            let payload = v
+                                .payload
+                                .map(|p| self.program.decls.instantiate(p, &field_subst));
                             variants.push(VariantInfo {
                                 tag: v.tag,
-                                payload: v.payload,
+                                payload,
                             });
-                            if let Some(p) = v.payload {
+                            if let Some(p) = payload {
                                 let l = self.layout(p)?;
                                 max_size = max_size.max(l.size);
                                 max_align = max_align.max(l.align);
+                                payload_has_pointer |=
+                                    self.type_has_pointer(p, &mut BTreeSet::new());
                             }
                         }
                         let tag = int_for_size(tag_size).to_string();
@@ -891,7 +1111,7 @@ impl<'p> Codegen<'p> {
                             ll_fields.push(a);
                         }
                         let payload_size = layout.size.saturating_sub(payload_offset);
-                        ll_fields.push(format!("[{payload_size} x i8]"));
+                        ll_fields.push(payload_storage(payload_size, payload_has_pointer)?);
                         let ll = format!("{{ {} }}", ll_fields.join(", "));
                         let def = format!("{name} = type {ll}");
                         self.type_defs.push((id, def));
@@ -962,7 +1182,8 @@ impl<'p> Codegen<'p> {
                             ll_fields.push(a);
                         }
                         let payload_size = layout.size.saturating_sub(payload_offset);
-                        ll_fields.push(format!("[{payload_size} x i8]"));
+                        let has_pointer = self.type_has_pointer(inner, &mut BTreeSet::new());
+                        ll_fields.push(payload_storage(payload_size, has_pointer)?);
                         let ll = format!("{{ {} }}", ll_fields.join(", "));
                         self.type_defs.push((id, format!("{name} = type {ll}")));
                         self.types.insert(
@@ -1015,7 +1236,9 @@ impl<'p> Codegen<'p> {
                     ll_fields.push(a);
                 }
                 let payload_size = layout.size.saturating_sub(payload_offset);
-                ll_fields.push(format!("[{payload_size} x i8]"));
+                let has_pointer = self.type_has_pointer(ok, &mut BTreeSet::new())
+                    || self.type_has_pointer(err, &mut BTreeSet::new());
+                ll_fields.push(payload_storage(payload_size, has_pointer)?);
                 let ll = format!("{{ {} }}", ll_fields.join(", "));
                 self.type_defs.push((id, format!("{name} = type {ll}")));
                 self.types.insert(
@@ -1092,7 +1315,7 @@ impl<'p> Codegen<'p> {
                         _ => None,
                     });
                 let Some(len) = len else {
-                    return self.ni("an array whose length depends on a parameter (B2)");
+                    return self.ni("an array whose length has no value");
                 };
                 let ll = self.llvm_ty(elem)?;
                 let _ = layout;
@@ -1108,7 +1331,55 @@ impl<'p> Codegen<'p> {
                 Ok(())
             }
             TyKind::Vector(..) | TyKind::Mask(_) => self.ni("vectors (B4)"),
-            TyKind::Closure(..) => self.ni("closures (B2)"),
+            TyKind::Closure(def, index, args) => {
+                let layout = self.layout(ty)?;
+                let field_tys = self
+                    .program
+                    .decls
+                    .closure_field_tys(def, index, &args)
+                    .ok_or_else(|| {
+                        BuildError::Internal(format!(
+                            "no capture record for the closure {} of `{}`",
+                            index,
+                            self.program.sema.def(def).name
+                        ))
+                    })?;
+                let (id, name) = self.new_named();
+                let mut fields = Vec::new();
+                let mut ll_fields = Vec::new();
+                let mut offset = 0u64;
+                for (i, fty) in field_tys.iter().enumerate() {
+                    let fl = layout.fields.get(i).cloned().ok_or_else(|| {
+                        BuildError::Internal(format!("no layout entry for closure field {i}"))
+                    })?;
+                    let ll = self.llvm_ty(*fty)?;
+                    fields.push(FieldInfo { offset: fl.offset });
+                    push_pad(&mut ll_fields, &mut offset, fl.offset);
+                    ll_fields.push(ll);
+                    offset = offset.max(fl.offset.saturating_add(fl.size));
+                }
+                let tail = layout.size.saturating_sub(offset);
+                if tail > 0 {
+                    ll_fields.push(format!("[{tail} x i8]"));
+                }
+                if let Some(a) = align_type(layout.align) {
+                    ll_fields.push(a);
+                }
+                let ll = if ll_fields.is_empty() {
+                    "{}".to_string()
+                } else {
+                    format!("{{ {} }}", ll_fields.join(", "))
+                };
+                self.type_defs.push((id, format!("{name} = type {ll}")));
+                self.types.insert(
+                    ty,
+                    TypeInfo {
+                        name,
+                        shape: Shape::Aggregate { fields },
+                    },
+                );
+                Ok(())
+            }
             TyKind::Param(_) | TyKind::Projection(..) => self.ni("generic instances (B2)"),
             TyKind::Poison => self.ni("a poisoned type"),
         }
@@ -1202,6 +1473,9 @@ impl<'p> Codegen<'p> {
     fn plain_ret_ll_for(&mut self, ret: TypeId) -> Result<String, BuildError> {
         if ret == self.program.decls.types.void || ret == self.program.decls.types.never {
             return Ok("void".to_string());
+        }
+        if let Some(tag) = self.tag_only_enum(ret) {
+            return Ok(tag);
         }
         self.llvm_ty(ret)
     }
@@ -1444,7 +1718,7 @@ impl<'p> Codegen<'p> {
             | TyKind::Ref(..)
             | TyKind::RawPtr(..)
             | TyKind::FnPtr(_) => true,
-            TyKind::Adt(def, ref args) if args.is_empty() => {
+            TyKind::Adt(def, _) => {
                 Some(def) == self.program.decls.builtins.idx || self.tag_only_enum(ty).is_some()
             }
             _ => false,
@@ -1452,13 +1726,22 @@ impl<'p> Codegen<'p> {
     }
 
     fn abi_params(&mut self, sig: &FnSig) -> Result<Vec<String>, BuildError> {
+        let tys: Vec<TypeId> = sig.params.iter().map(|p| p.ty).collect();
+        self.abi_params_for(&tys)
+    }
+
+    fn abi_params_for(&mut self, tys: &[TypeId]) -> Result<Vec<String>, BuildError> {
         let mut out = Vec::new();
-        for p in &sig.params {
-            let pty = self.resolve_ty(p.ty);
+        for ty in tys {
+            let pty = self.resolve_ty(*ty);
             match self.program.decls.types.kind(pty) {
                 TyKind::Slice(..) => {
                     out.push("ptr".to_string());
                     out.push("i64".to_string());
+                }
+                TyKind::Dyn(..) | TyKind::DynFn(..) => {
+                    out.push("ptr".to_string());
+                    out.push("ptr".to_string());
                 }
                 TyKind::Void | TyKind::Never => {}
                 TyKind::Int(_)
@@ -1471,7 +1754,8 @@ impl<'p> Codegen<'p> {
                 | TyKind::Tuple(_)
                 | TyKind::Array(..)
                 | TyKind::Optional(_)
-                | TyKind::Result(..) => {
+                | TyKind::Result(..)
+                | TyKind::Closure(..) => {
                     if matches!(self.program.decls.types.kind(pty), TyKind::Adt(d, _) if Some(*d) == self.program.decls.builtins.idx)
                     {
                         out.push("i32".to_string());
@@ -1492,10 +1776,57 @@ impl<'p> Codegen<'p> {
                         return self.ni(format!("parameter type {}", self.type_display(pty)));
                     }
                 }
-                _ => return self.ni(format!("parameter type {}", self.type_display(p.ty))),
+                _ => return self.ni(format!("parameter type {}", self.type_display(pty))),
             }
         }
         Ok(out)
+    }
+
+    /// Whether a value of `ty` can contain a pointer and therefore needs a typed
+    /// global initializer rather than a byte array.
+    fn type_has_pointer(&mut self, ty: TypeId, seen: &mut BTreeSet<TypeId>) -> bool {
+        let ty = self.resolve_ty(ty);
+        if !seen.insert(ty) {
+            return false;
+        }
+        let kind = self.program.decls.types.kind(ty).clone();
+        match kind {
+            TyKind::Ref(..)
+            | TyKind::RawPtr(..)
+            | TyKind::FnPtr(_)
+            | TyKind::Slice(..)
+            | TyKind::Dyn(..)
+            | TyKind::DynFn(..) => true,
+            TyKind::Adt(def, args) => {
+                let subst = self.program.decls.subst_for(def, &args);
+                let tys: Vec<TypeId> = match self.program.decls.item(def).cloned() {
+                    Some(ItemSig::Struct(sig)) => sig
+                        .fields
+                        .iter()
+                        .map(|f| self.program.decls.instantiate(f.ty, &subst))
+                        .collect(),
+                    Some(ItemSig::Enum(sig)) => sig
+                        .variants
+                        .iter()
+                        .filter_map(|v| v.payload)
+                        .map(|p| self.program.decls.instantiate(p, &subst))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                tys.into_iter().any(|t| self.type_has_pointer(t, seen))
+            }
+            TyKind::Array(elem, _) | TyKind::Optional(elem) => self.type_has_pointer(elem, seen),
+            TyKind::Result(a, b) => {
+                self.type_has_pointer(a, seen) || self.type_has_pointer(b, seen)
+            }
+            TyKind::Tuple(ts) => ts.into_iter().any(|t| self.type_has_pointer(t, seen)),
+            TyKind::Closure(def, index, args) => self
+                .program
+                .decls
+                .closure_field_tys(def, index, &args)
+                .is_some_and(|fields| fields.into_iter().any(|t| self.type_has_pointer(t, seen))),
+            _ => false,
+        }
     }
 
     fn is_scalar(&mut self, ty: TypeId) -> Result<bool, BuildError> {
@@ -1526,12 +1857,9 @@ impl<'p> Codegen<'p> {
     /// A payload-free enum crosses our own calling convention as its tag.
     fn tag_only_enum(&mut self, ty: TypeId) -> Option<String> {
         let ty = self.resolve_ty(ty);
-        let TyKind::Adt(def, args) = self.program.decls.types.kind(ty) else {
+        let TyKind::Adt(def, _) = self.program.decls.types.kind(ty) else {
             return None;
         };
-        if !args.is_empty() {
-            return None;
-        }
         let sig = self.program.decls.enum_sig(*def)?;
         if sig.variants.iter().any(|v| v.payload.is_some()) {
             return None;
@@ -1659,6 +1987,19 @@ impl<'a, 'p> FnGen<'a, 'p> {
                     self.emit(format!("{b} = insertvalue {ll} {a}, i64 {len}, 1"));
                     self.emit(format!("store {ll} {b}, ptr %l{local}"));
                 }
+                TyKind::Dyn(..) | TyKind::DynFn(..) => {
+                    let data = format!("%arg{arg}");
+                    let table = format!("%arg{}", arg + 1);
+                    arg += 2;
+                    let ll = self.cg.llvm_ty(ty)?;
+                    let a = self.fresh_tmp();
+                    let b = self.fresh_tmp();
+                    self.emit(format!(
+                        "{a} = insertvalue {ll} zeroinitializer, ptr {data}, 0"
+                    ));
+                    self.emit(format!("{b} = insertvalue {ll} {a}, ptr {table}, 1"));
+                    self.emit(format!("store {ll} {b}, ptr %l{local}"));
+                }
                 _ => {
                     let ll = self.cg.llvm_ty(ty)?;
                     if let Some(tag) = self.cg.tag_only_enum(ty) {
@@ -1714,6 +2055,16 @@ impl<'a, 'p> FnGen<'a, 'p> {
                         BuildError::Internal("a return without a value".to_string())
                     })?;
                     let (v, vll) = self.value(op)?;
+                    if let Some(tag) = self.cg.tag_only_enum(self.body.sig.ret) {
+                        if vll == tag {
+                            self.emit(format!("ret {tag} {v}"));
+                        } else {
+                            let t = self.fresh_tmp();
+                            self.emit(format!("{t} = extractvalue {vll} {v}, 0"));
+                            self.emit(format!("ret {tag} {t}"));
+                        }
+                        return Ok(());
+                    }
                     if vll != ll {
                         return Err(BuildError::Internal(format!(
                             "return type {vll} is not {ll}"
@@ -2029,7 +2380,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 ..
             } => self.aggregate(kind, *agg_ty, fields),
             Rvalue::Cast { kind, operand } => self.cast(*kind, operand, ty),
-            Rvalue::DynCast { .. } => self.cg.ni("dyn values (B2)"),
+            Rvalue::DynCast { operand, coercion } => self.dyn_cast(operand, coercion, ty),
             Rvalue::Discriminant(place) => self.discriminant(place),
             Rvalue::SliceLen(place) => self.slice_len(place),
             Rvalue::SlicePtr(place) => self.slice_ptr(place),
@@ -2042,6 +2393,868 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 ..
             } => self.builtin(name, *type_arg, args, ty),
         }
+    }
+}
+
+/// Emits a generated built-in `Eq.eq` or `Ord.cmp` body for one concrete type.
+/// The methods have no source body and only primitive `Eq`/`Ord` types occur here,
+/// so the code is generated directly rather than through a CFG.
+struct BuiltinGen<'a, 'p> {
+    cg: &'a mut Codegen<'p>,
+    ty: TypeId,
+    interface: DefId,
+    name: String,
+    ret_ll: String,
+    ordering: (i128, i128, i128),
+    blocks: Vec<OutBlock>,
+    cur: usize,
+    next_tmp: usize,
+    next_label: usize,
+    entry_allocas: Vec<String>,
+}
+
+impl<'a, 'p> BuiltinGen<'a, 'p> {
+    fn new(
+        cg: &'a mut Codegen<'p>,
+        ty: TypeId,
+        interface: DefId,
+        name: &str,
+        ret_ll: String,
+        ordering: (i128, i128, i128),
+    ) -> Self {
+        BuiltinGen {
+            cg,
+            ty,
+            interface,
+            name: name.to_string(),
+            ret_ll,
+            ordering,
+            blocks: Vec::new(),
+            cur: 0,
+            next_tmp: 0,
+            next_label: 0,
+            entry_allocas: Vec::new(),
+        }
+    }
+
+    fn run(mut self, symbol: &str) -> Result<(), BuildError> {
+        self.blocks.push(OutBlock {
+            label: "entry".to_string(),
+            lines: Vec::new(),
+        });
+        self.cur = 0;
+        let (v, ll) = if self.name == "eq" {
+            self.eq(self.ty, "%a0", "%a1")?
+        } else {
+            self.cmp(self.ty, "%a0", "%a1")?
+        };
+        self.emit(format!("ret {ll} {v}"));
+        let mut out = String::new();
+        out.push_str(&format!(
+            "define internal {} {} (ptr %a0, ptr %a1) nounwind #0 {{\n",
+            self.ret_ll,
+            global_ref(symbol)
+        ));
+        for (i, block) in self.blocks.iter().enumerate() {
+            out.push_str(&format!("{}:\n", block.label));
+            if i == 0 {
+                for line in &self.entry_allocas {
+                    out.push_str("  ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+            for line in &block.lines {
+                out.push_str("  ");
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out.push_str("}\n");
+        self.cg.functions.push(out);
+        Ok(())
+    }
+
+    fn emit(&mut self, line: impl Into<String>) {
+        self.blocks[self.cur].lines.push(line.into());
+    }
+
+    fn fresh_tmp(&mut self) -> String {
+        let n = self.next_tmp;
+        self.next_tmp += 1;
+        format!("%b{n}")
+    }
+
+    fn fresh_label(&mut self, prefix: &str) -> String {
+        let n = self.next_label;
+        self.next_label += 1;
+        format!("{prefix}{n}")
+    }
+
+    fn new_block(&mut self, label: String) -> usize {
+        self.blocks.push(OutBlock {
+            label,
+            lines: Vec::new(),
+        });
+        self.blocks.len() - 1
+    }
+
+    fn br(&mut self, label: &str) {
+        self.emit(format!("br label %{label}"));
+    }
+
+    fn alloca(&mut self, ll: &str, align: u64) -> String {
+        let tmp = self.fresh_tmp();
+        self.entry_allocas
+            .push(format!("{tmp} = alloca {ll}, align {align}"));
+        tmp
+    }
+
+    fn and(&mut self, a: &str, b: &str) -> String {
+        let out = self.fresh_tmp();
+        self.emit(format!("{out} = and i1 {a}, {b}"));
+        out
+    }
+
+    fn gep(&mut self, base: &str, offset: u64) -> String {
+        if offset == 0 {
+            return base.to_string();
+        }
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = getelementptr i8, ptr {base}, i64 {offset}"
+        ));
+        out
+    }
+
+    fn load(&mut self, ty: TypeId, ptr: &str) -> Result<(String, String), BuildError> {
+        let ll = self.cg.llvm_ty(ty)?;
+        let out = self.fresh_tmp();
+        self.emit(format!("{out} = load {ll}, ptr {ptr}"));
+        Ok((out, ll))
+    }
+
+    fn load_ll(&mut self, ll: &str, ptr: &str) -> String {
+        let out = self.fresh_tmp();
+        self.emit(format!("{out} = load {ll}, ptr {ptr}"));
+        out
+    }
+
+    fn tag_of(&mut self, ty: TypeId, ptr: &str) -> Result<(String, String), BuildError> {
+        self.cg.type_info(ty)?;
+        match self.cg.types[&ty].shape.clone() {
+            Shape::Enum { tag, .. } => {
+                let v = self.load_ll(&tag, ptr);
+                Ok((v, tag))
+            }
+            _ => Err(BuildError::Internal(
+                "a built-in comparison of a non-enum".to_string(),
+            )),
+        }
+    }
+
+    fn payload_ptr(&mut self, ty: TypeId, ptr: &str) -> Result<String, BuildError> {
+        self.cg.type_info(ty)?;
+        match self.cg.types[&ty].shape.clone() {
+            Shape::Enum { payload_offset, .. } => Ok(self.gep(ptr, payload_offset)),
+            _ => Err(BuildError::Internal("a payload of a non-enum".to_string())),
+        }
+    }
+
+    fn field_ptr(&mut self, ty: TypeId, ptr: &str, index: usize) -> Result<String, BuildError> {
+        let layout = self.cg.layout(ty)?;
+        let off = layout
+            .fields
+            .get(index)
+            .map(|f| f.offset)
+            .ok_or_else(|| BuildError::Internal("a field index out of range".to_string()))?;
+        Ok(self.gep(ptr, off))
+    }
+
+    fn slice_parts(&mut self, ptr: &str) -> (String, String) {
+        let data = self.load_ll("ptr", ptr);
+        let len_ptr = self.gep(ptr, 8);
+        let len = self.load_ll("i64", &len_ptr);
+        (data, len)
+    }
+
+    fn order_value(&mut self, lt: &str, gt: &str) -> String {
+        let (less, equal, greater) = self.ordering;
+        let less_lit = int_literal(&self.ret_ll, less);
+        let equal_lit = int_literal(&self.ret_ll, equal);
+        let greater_lit = int_literal(&self.ret_ll, greater);
+        let first = self.fresh_tmp();
+        self.emit(format!(
+            "{first} = select i1 {lt}, {} {less_lit}, {} {equal_lit}",
+            self.ret_ll, self.ret_ll
+        ));
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = select i1 {gt}, {} {greater_lit}, {} {first}",
+            self.ret_ll, self.ret_ll
+        ));
+        out
+    }
+
+    fn float_key(&mut self, _ty: TypeId, bits: &str, ll: &str) -> String {
+        let width = if ll == "float" { 32 } else { 64 };
+        let int_ll = format!("i{width}");
+        let key = self.fresh_tmp();
+        self.emit(format!("{key} = bitcast {ll} {bits} to {int_ll}"));
+        let sign_mask = if width == 32 {
+            0x8000_0000u64
+        } else {
+            0x8000_0000_0000_0000u64
+        };
+        let all_ones = "-1".to_string();
+        let mask = self.fresh_tmp();
+        self.emit(format!("{mask} = and {int_ll} {key}, {sign_mask}"));
+        let neg = self.fresh_tmp();
+        self.emit(format!("{neg} = icmp ne {int_ll} {mask}, 0"));
+        let flipped = self.fresh_tmp();
+        self.emit(format!("{flipped} = xor {int_ll} {key}, {all_ones}"));
+        let pos = self.fresh_tmp();
+        self.emit(format!("{pos} = or {int_ll} {key}, {sign_mask}"));
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = select i1 {neg}, {int_ll} {flipped}, {int_ll} {pos}"
+        ));
+        out
+    }
+
+    fn eq(&mut self, ty: TypeId, a: &str, b: &str) -> Result<(String, String), BuildError> {
+        let kind = self.cg.program.decls.types.kind(ty).clone();
+        Ok(match kind {
+            TyKind::Int(_) | TyKind::Bool => {
+                let (va, ll) = self.load(ty, a)?;
+                let (vb, _) = self.load(ty, b)?;
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = icmp eq {ll} {va}, {vb}"));
+                (out, "i1".to_string())
+            }
+            TyKind::Float(_) => {
+                let (va, ll) = self.load(ty, a)?;
+                let (vb, _) = self.load(ty, b)?;
+                let ka = self.float_key(ty, &va, &ll);
+                let kb = self.float_key(ty, &vb, &ll);
+                let int_ll = if ll == "float" { "i32" } else { "i64" };
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = icmp eq {int_ll} {ka}, {kb}"));
+                (out, "i1".to_string())
+            }
+            TyKind::RawPtr(..) => {
+                let va = self.load_ll("ptr", a);
+                let vb = self.load_ll("ptr", b);
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = icmp eq ptr {va}, {vb}"));
+                (out, "i1".to_string())
+            }
+            TyKind::Adt(..) if self.cg.tag_only_enum(ty).is_some() => {
+                let (va, ll) = self.tag_of(ty, a)?;
+                let (vb, _) = self.tag_of(ty, b)?;
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = icmp eq {ll} {va}, {vb}"));
+                (out, "i1".to_string())
+            }
+            TyKind::Adt(..) => self.user_method(ty, a, b)?,
+            TyKind::Ref(_, inner) => {
+                let va = self.load_ll("ptr", a);
+                let vb = self.load_ll("ptr", b);
+                self.eq(inner, &va, &vb)?
+            }
+            TyKind::Array(elem, n) => {
+                let len = self
+                    .cg
+                    .program
+                    .decls
+                    .types
+                    .const_arg_value(n)
+                    .and_then(|v| match v {
+                        ConstValue::Int { value, .. } if value >= 0 => Some(value as u64),
+                        _ => None,
+                    })
+                    .ok_or_else(|| BuildError::Internal("an array with no length".to_string()))?;
+                self.eq_array(elem, len, a, b)?
+            }
+            TyKind::Tuple(ts) => {
+                let mut result = "true".to_string();
+                for (i, t) in ts.iter().enumerate() {
+                    let pa = self.field_ptr(ty, a, i)?;
+                    let pb = self.field_ptr(ty, b, i)?;
+                    let (v, _) = self.eq(*t, &pa, &pb)?;
+                    result = self.and(&result, &v);
+                }
+                (result, "i1".to_string())
+            }
+            TyKind::Slice(_, elem) => self.eq_slice(elem, a, b)?,
+            TyKind::Optional(inner) => self.eq_optional(inner, a, b)?,
+            other => {
+                return Err(BuildError::NotImplemented(format!(
+                    "the built-in `Eq` for {other:?} (B2)"
+                )));
+            }
+        })
+    }
+
+    /// A user `Eq`/`Ord` implementation, called directly. The two arguments are
+    /// pointers to the elements, exactly the receiver and second parameter.
+    fn user_method(
+        &mut self,
+        ty: TypeId,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let key = comparison_method_key(
+            self.cg.program.sema,
+            &mut *self.cg.program.decls,
+            self.interface,
+            ty,
+        )
+        .ok_or_else(|| {
+            BuildError::Internal(format!(
+                "no user comparison method for `{}`",
+                self.cg.type_display(ty)
+            ))
+        })?;
+        let symbol = self.cg.symbols.get(&key).cloned().ok_or_else(|| {
+            BuildError::Internal("a user comparison instance was not discovered".to_string())
+        })?;
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = call {} {}(ptr {a}, ptr {b})",
+            self.ret_ll,
+            global_ref(&symbol)
+        ));
+        Ok((out, self.ret_ll.clone()))
+    }
+
+    fn eq_array(
+        &mut self,
+        elem: TypeId,
+        len: u64,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let index = self.alloca("i64", 8);
+        let same = self.alloca("i1", 1);
+        self.emit(format!("store i64 0, ptr {index}"));
+        self.emit(format!("store i1 true, ptr {same}"));
+        let head = self.fresh_label("head");
+        let body = self.fresh_label("body");
+        let end = self.fresh_label("end");
+        self.br(&head);
+        self.cur = self.new_block(head.clone());
+        let i = self.load_ll("i64", &index);
+        let in_range = self.fresh_tmp();
+        self.emit(format!("{in_range} = icmp ult i64 {i}, {len}"));
+        self.emit(format!("br i1 {in_range}, label %{body}, label %{end}"));
+        self.cur = self.new_block(body);
+        let idx = self.load_ll("i64", &index);
+        let pa = self.elem_ptr_at(a, elem, &idx)?;
+        let pb = self.elem_ptr_at(b, elem, &idx)?;
+        let (v, _) = self.eq(elem, &pa, &pb)?;
+        let prev = self.load_ll("i1", &same);
+        let now = self.and(&prev, &v);
+        self.emit(format!("store i1 {now}, ptr {same}"));
+        let next = self.fresh_tmp();
+        self.emit(format!("{next} = add i64 {idx}, 1"));
+        self.emit(format!("store i64 {next}, ptr {index}"));
+        self.br(&head);
+        self.cur = self.new_block(end);
+        Ok((self.load_ll("i1", &same), "i1".to_string()))
+    }
+
+    fn cmp_array(
+        &mut self,
+        elem: TypeId,
+        len: u64,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let equal = int_literal(&self.ret_ll, self.ordering.1);
+        let index = self.alloca("i64", 8);
+        let result = self.alloca(&self.ret_ll.clone(), 1);
+        self.emit(format!("store i64 0, ptr {index}"));
+        self.emit(format!("store {} {equal}, ptr {result}", self.ret_ll));
+        let head = self.fresh_label("head");
+        let body = self.fresh_label("body");
+        let end = self.fresh_label("end");
+        self.br(&head);
+        self.cur = self.new_block(head.clone());
+        let i = self.load_ll("i64", &index);
+        let in_range = self.fresh_tmp();
+        self.emit(format!("{in_range} = icmp ult i64 {i}, {len}"));
+        let r = self.load_ll(&self.ret_ll.clone(), &result);
+        let still = self.fresh_tmp();
+        self.emit(format!("{still} = icmp eq {} {r}, {equal}", self.ret_ll));
+        let go = self.and(&in_range, &still);
+        self.emit(format!("br i1 {go}, label %{body}, label %{end}"));
+        self.cur = self.new_block(body);
+        let idx = self.load_ll("i64", &index);
+        let pa = self.elem_ptr_at(a, elem, &idx)?;
+        let pb = self.elem_ptr_at(b, elem, &idx)?;
+        let (c, _) = self.cmp(elem, &pa, &pb)?;
+        self.emit(format!("store {} {c}, ptr {result}", self.ret_ll));
+        let next = self.fresh_tmp();
+        self.emit(format!("{next} = add i64 {idx}, 1"));
+        self.emit(format!("store i64 {next}, ptr {index}"));
+        self.br(&head);
+        self.cur = self.new_block(end);
+        Ok((
+            self.load_ll(&self.ret_ll.clone(), &result),
+            self.ret_ll.clone(),
+        ))
+    }
+
+    fn eq_slice(&mut self, elem: TypeId, a: &str, b: &str) -> Result<(String, String), BuildError> {
+        let (pa, la) = self.slice_parts(a);
+        let (pb, lb) = self.slice_parts(b);
+        let index = self.alloca("i64", 8);
+        let same = self.alloca("i1", 1);
+        self.emit(format!("store i64 0, ptr {index}"));
+        self.emit(format!("store i1 true, ptr {same}"));
+        let head = self.fresh_label("head");
+        let body = self.fresh_label("body");
+        let end = self.fresh_label("end");
+        self.br(&head);
+        self.cur = self.new_block(head.clone());
+        let i = self.load_ll("i64", &index);
+        let in_a = self.fresh_tmp();
+        self.emit(format!("{in_a} = icmp ult i64 {i}, {la}"));
+        let in_b = self.fresh_tmp();
+        self.emit(format!("{in_b} = icmp ult i64 {i}, {lb}"));
+        let both = self.and(&in_a, &in_b);
+        self.emit(format!("br i1 {both}, label %{body}, label %{end}"));
+        self.cur = self.new_block(body);
+        let idx = self.load_ll("i64", &index);
+        let ea = self.elem_ptr_at(&pa, elem, &idx)?;
+        let eb = self.elem_ptr_at(&pb, elem, &idx)?;
+        let (ev, _) = self.eq(elem, &ea, &eb)?;
+        let prev = self.load_ll("i1", &same);
+        let now = self.and(&prev, &ev);
+        self.emit(format!("store i1 {now}, ptr {same}"));
+        let next = self.fresh_tmp();
+        self.emit(format!("{next} = add i64 {idx}, 1"));
+        self.emit(format!("store i64 {next}, ptr {index}"));
+        self.br(&head);
+        self.cur = self.new_block(end);
+        let same_now = self.load_ll("i1", &same);
+        let lengths = self.fresh_tmp();
+        self.emit(format!("{lengths} = icmp eq i64 {la}, {lb}"));
+        let out = self.and(&same_now, &lengths);
+        Ok((out, "i1".to_string()))
+    }
+
+    fn eq_optional(
+        &mut self,
+        inner: TypeId,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let ty = self.cg.program.decls.types.intern(TyKind::Optional(inner));
+        self.cg.type_info(ty)?;
+        let shape = self.cg.types[&ty].shape.clone();
+        let Shape::Enum {
+            niche, variants, ..
+        } = shape
+        else {
+            return Err(BuildError::Internal(
+                "an optional that is not an enum".to_string(),
+            ));
+        };
+        if niche {
+            // The null pointer is `.none`. Two `.some` values compare as their
+            // payload, which occupies the same bytes at offset 0.
+            let va = self.load_ll("ptr", a);
+            let vb = self.load_ll("ptr", b);
+            let a_none = self.fresh_tmp();
+            self.emit(format!("{a_none} = icmp eq ptr {va}, null"));
+            let b_none = self.fresh_tmp();
+            self.emit(format!("{b_none} = icmp eq ptr {vb}, null"));
+            let result = self.alloca("i1", 1);
+            let none_block = self.fresh_label("bothnone");
+            let some_block = self.fresh_label("some");
+            let done = self.fresh_label("done");
+            self.emit(format!(
+                "br i1 {a_none}, label %{none_block}, label %{some_block}"
+            ));
+            self.cur = self.new_block(none_block);
+            self.emit(format!("store i1 {b_none}, ptr {result}"));
+            self.br(&done);
+            self.cur = self.new_block(some_block);
+            let both_some = self.fresh_label("bothsome");
+            let b_none_block = self.fresh_label("bnone");
+            self.emit(format!(
+                "br i1 {b_none}, label %{b_none_block}, label %{both_some}"
+            ));
+            self.cur = self.new_block(b_none_block);
+            self.emit(format!("store i1 false, ptr {result}"));
+            self.br(&done);
+            self.cur = self.new_block(both_some);
+            let (v, _) = self.eq(inner, a, b)?;
+            self.emit(format!("store i1 {v}, ptr {result}"));
+            self.br(&done);
+            self.cur = self.new_block(done);
+            return Ok((self.load_ll("i1", &result), "i1".to_string()));
+        }
+        let tag = match &self.cg.types[&ty].shape {
+            Shape::Enum { tag, .. } => tag.clone(),
+            _ => unreachable!(),
+        };
+        let some_tag = variants.get(1).map(|v| v.tag).unwrap_or(1);
+        let result = self.alloca("i1", 1);
+        self.emit(format!("store i1 false, ptr {result}"));
+        let ta = self.load_ll(&tag, a);
+        let tb = self.load_ll(&tag, b);
+        let same = self.fresh_tmp();
+        self.emit(format!("{same} = icmp eq {tag} {ta}, {tb}"));
+        let same_block = self.fresh_label("same");
+        let done = self.fresh_label("done");
+        self.emit(format!("br i1 {same}, label %{same_block}, label %{done}"));
+        self.cur = self.new_block(same_block.clone());
+        let is_some = self.fresh_tmp();
+        self.emit(format!(
+            "{is_some} = icmp eq {tag} {ta}, {}",
+            int_literal(&tag, some_tag)
+        ));
+        let some_block = self.fresh_label("some");
+        let none_block = self.fresh_label("none");
+        self.emit(format!(
+            "br i1 {is_some}, label %{some_block}, label %{none_block}"
+        ));
+        self.cur = self.new_block(some_block);
+        let pa = self.payload_ptr(ty, a)?;
+        let pb = self.payload_ptr(ty, b)?;
+        let (v, _) = self.eq(inner, &pa, &pb)?;
+        self.emit(format!("store i1 {v}, ptr {result}"));
+        self.br(&done);
+        self.cur = self.new_block(none_block);
+        self.emit(format!("store i1 true, ptr {result}"));
+        self.br(&done);
+        self.cur = self.new_block(done);
+        let out = self.load_ll("i1", &result);
+        Ok((out, "i1".to_string()))
+    }
+
+    fn elem_ptr_at(&mut self, data: &str, elem: TypeId, index: &str) -> Result<String, BuildError> {
+        let stride = self.cg.layout(elem)?.size;
+        let scaled = self.fresh_tmp();
+        self.emit(format!("{scaled} = mul i64 {index}, {stride}"));
+        let out = self.fresh_tmp();
+        self.emit(format!(
+            "{out} = getelementptr i8, ptr {data}, i64 {scaled}"
+        ));
+        Ok(out)
+    }
+
+    fn cmp(&mut self, ty: TypeId, a: &str, b: &str) -> Result<(String, String), BuildError> {
+        let kind = self.cg.program.decls.types.kind(ty).clone();
+        let (_less, equal, _greater) = self.ordering;
+        let equal_lit = int_literal(&self.ret_ll, equal);
+        Ok(match kind {
+            TyKind::Int(i) => {
+                let (va, ll) = self.load(ty, a)?;
+                let (vb, _) = self.load(ty, b)?;
+                let lt_op = if i.signed() { "slt" } else { "ult" };
+                let gt_op = if i.signed() { "sgt" } else { "ugt" };
+                let lt = self.fresh_tmp();
+                self.emit(format!("{lt} = icmp {lt_op} {ll} {va}, {vb}"));
+                let gt = self.fresh_tmp();
+                self.emit(format!("{gt} = icmp {gt_op} {ll} {va}, {vb}"));
+                let out = self.order_value(&lt, &gt);
+                (out, self.ret_ll.clone())
+            }
+            TyKind::Bool => {
+                let va = self.load_ll("i1", a);
+                let vb = self.load_ll("i1", b);
+                let lt = self.fresh_tmp();
+                self.emit(format!("{lt} = icmp ult i1 {va}, {vb}"));
+                let gt = self.fresh_tmp();
+                self.emit(format!("{gt} = icmp ugt i1 {va}, {vb}"));
+                let out = self.order_value(&lt, &gt);
+                (out, self.ret_ll.clone())
+            }
+            TyKind::Float(_) => {
+                let (va, ll) = self.load(ty, a)?;
+                let (vb, _) = self.load(ty, b)?;
+                let ka = self.float_key(ty, &va, &ll);
+                let kb = self.float_key(ty, &vb, &ll);
+                let int_ll = if ll == "float" { "i32" } else { "i64" };
+                let lt = self.fresh_tmp();
+                self.emit(format!("{lt} = icmp ult {int_ll} {ka}, {kb}"));
+                let gt = self.fresh_tmp();
+                self.emit(format!("{gt} = icmp ugt {int_ll} {ka}, {kb}"));
+                let out = self.order_value(&lt, &gt);
+                (out, self.ret_ll.clone())
+            }
+            TyKind::RawPtr(..) => {
+                let va = self.load_ll("ptr", a);
+                let vb = self.load_ll("ptr", b);
+                let lt = self.fresh_tmp();
+                self.emit(format!("{lt} = icmp ult ptr {va}, {vb}"));
+                let gt = self.fresh_tmp();
+                self.emit(format!("{gt} = icmp ugt ptr {va}, {vb}"));
+                let out = self.order_value(&lt, &gt);
+                (out, self.ret_ll.clone())
+            }
+            TyKind::Adt(..) if self.cg.tag_only_enum(ty).is_some() => {
+                let (va, ll) = self.tag_of(ty, a)?;
+                let (vb, _) = self.tag_of(ty, b)?;
+                let signed = match self.cg.program.decls.types.kind(ty) {
+                    TyKind::Adt(def, _) => self
+                        .cg
+                        .program
+                        .decls
+                        .enum_sig(*def)
+                        .is_some_and(|s| s.tag_ty.signed()),
+                    _ => false,
+                };
+                let op_lt = if signed { "slt" } else { "ult" };
+                let op_gt = if signed { "sgt" } else { "ugt" };
+                let lt = self.fresh_tmp();
+                self.emit(format!("{lt} = icmp {op_lt} {ll} {va}, {vb}"));
+                let gt = self.fresh_tmp();
+                self.emit(format!("{gt} = icmp {op_gt} {ll} {va}, {vb}"));
+                let out = self.order_value(&lt, &gt);
+                (out, self.ret_ll.clone())
+            }
+            TyKind::Adt(..) => self.user_method(ty, a, b)?,
+            TyKind::Ref(_, inner) => {
+                let va = self.load_ll("ptr", a);
+                let vb = self.load_ll("ptr", b);
+                self.cmp(inner, &va, &vb)?
+            }
+            TyKind::Array(elem, n) => {
+                let len = self
+                    .cg
+                    .program
+                    .decls
+                    .types
+                    .const_arg_value(n)
+                    .and_then(|v| match v {
+                        ConstValue::Int { value, .. } if value >= 0 => Some(value as u64),
+                        _ => None,
+                    })
+                    .ok_or_else(|| BuildError::Internal("an array with no length".to_string()))?;
+                self.cmp_array(elem, len, a, b)?
+            }
+            TyKind::Tuple(ts) => {
+                let mut result = equal_lit.clone();
+                for (i, t) in ts.iter().enumerate() {
+                    let pa = self.field_ptr(ty, a, i)?;
+                    let pb = self.field_ptr(ty, b, i)?;
+                    let (c, _) = self.cmp(*t, &pa, &pb)?;
+                    let undecided = self.fresh_tmp();
+                    self.emit(format!(
+                        "{undecided} = icmp eq {} {result}, {equal_lit}",
+                        self.ret_ll
+                    ));
+                    let out = self.fresh_tmp();
+                    self.emit(format!(
+                        "{out} = select i1 {undecided}, {} {c}, {} {result}",
+                        self.ret_ll, self.ret_ll
+                    ));
+                    result = out;
+                }
+                (result, self.ret_ll.clone())
+            }
+            TyKind::Slice(_, elem) => self.cmp_slice(elem, a, b)?,
+            TyKind::Optional(inner) => self.cmp_optional(inner, a, b)?,
+            other => {
+                return Err(BuildError::NotImplemented(format!(
+                    "the built-in `Ord` for {other:?} (B2)"
+                )));
+            }
+        })
+    }
+
+    fn cmp_slice(
+        &mut self,
+        elem: TypeId,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let (pa, la) = self.slice_parts(a);
+        let (pb, lb) = self.slice_parts(b);
+        let (less, equal, greater) = self.ordering;
+        let equal_lit = int_literal(&self.ret_ll, equal);
+        let index = self.alloca("i64", 8);
+        let result = self.alloca(&self.ret_ll.clone(), 1);
+        self.emit(format!("store i64 0, ptr {index}"));
+        self.emit(format!("store {} {equal_lit}, ptr {result}", self.ret_ll));
+        let head = self.fresh_label("head");
+        let body = self.fresh_label("body");
+        let tail = self.fresh_label("tail");
+        self.br(&head);
+        self.cur = self.new_block(head.clone());
+        let i = self.load_ll("i64", &index);
+        let in_a = self.fresh_tmp();
+        self.emit(format!("{in_a} = icmp ult i64 {i}, {la}"));
+        let in_b = self.fresh_tmp();
+        self.emit(format!("{in_b} = icmp ult i64 {i}, {lb}"));
+        let both = self.and(&in_a, &in_b);
+        let r = self.load_ll(&self.ret_ll.clone(), &result);
+        let still = self.fresh_tmp();
+        self.emit(format!(
+            "{still} = icmp eq {} {r}, {equal_lit}",
+            self.ret_ll
+        ));
+        let go = self.and(&both, &still);
+        self.emit(format!("br i1 {go}, label %{body}, label %{tail}"));
+        self.cur = self.new_block(body);
+        let idx = self.load_ll("i64", &index);
+        let ea = self.elem_ptr_at(&pa, elem, &idx)?;
+        let eb = self.elem_ptr_at(&pb, elem, &idx)?;
+        let (c, _) = self.cmp(elem, &ea, &eb)?;
+        self.emit(format!("store {} {c}, ptr {result}", self.ret_ll));
+        let next = self.fresh_tmp();
+        self.emit(format!("{next} = add i64 {idx}, 1"));
+        self.emit(format!("store i64 {next}, ptr {index}"));
+        self.br(&head);
+        self.cur = self.new_block(tail);
+        let r = self.load_ll(&self.ret_ll.clone(), &result);
+        let still = self.fresh_tmp();
+        self.emit(format!(
+            "{still} = icmp eq {} {r}, {equal_lit}",
+            self.ret_ll
+        ));
+        let by_len = self.fresh_label("bylen");
+        let done = self.fresh_label("done");
+        self.emit(format!("br i1 {still}, label %{by_len}, label %{done}"));
+        self.cur = self.new_block(by_len);
+        let lt = self.fresh_tmp();
+        self.emit(format!("{lt} = icmp ult i64 {la}, {lb}"));
+        let gt = self.fresh_tmp();
+        self.emit(format!("{gt} = icmp ugt i64 {la}, {lb}"));
+        let out = self.order_value(&lt, &gt);
+        self.emit(format!("store {} {out}, ptr {result}", self.ret_ll));
+        self.br(&done);
+        self.cur = self.new_block(done);
+        let out = self.load_ll(&self.ret_ll.clone(), &result);
+        let _ = (less, greater);
+        Ok((out, self.ret_ll.clone()))
+    }
+
+    fn cmp_optional(
+        &mut self,
+        inner: TypeId,
+        a: &str,
+        b: &str,
+    ) -> Result<(String, String), BuildError> {
+        let ty = self.cg.program.decls.types.intern(TyKind::Optional(inner));
+        self.cg.type_info(ty)?;
+        let shape = self.cg.types[&ty].shape.clone();
+        let Shape::Enum {
+            niche, variants, ..
+        } = shape
+        else {
+            return Err(BuildError::Internal(
+                "an optional that is not an enum".to_string(),
+            ));
+        };
+        let (less, _equal, greater) = self.ordering;
+        let result = self.alloca(&self.ret_ll.clone(), 1);
+        let done = self.fresh_label("done");
+        if niche {
+            let va = self.load_ll("ptr", a);
+            let vb = self.load_ll("ptr", b);
+            let a_none = self.fresh_tmp();
+            self.emit(format!("{a_none} = icmp eq ptr {va}, null"));
+            let b_none = self.fresh_tmp();
+            self.emit(format!("{b_none} = icmp eq ptr {vb}, null"));
+            let some_block = self.fresh_label("some");
+            let a_none_block = self.fresh_label("anone");
+            self.emit(format!(
+                "br i1 {a_none}, label %{a_none_block}, label %{some_block}"
+            ));
+            self.cur = self.new_block(a_none_block);
+            let less_lit = int_literal(&self.ret_ll, less);
+            let equal_lit = int_literal(&self.ret_ll, self.ordering.1);
+            let both_none = self.fresh_label("bothnone");
+            let a_less = self.fresh_label("aless");
+            self.emit(format!(
+                "br i1 {b_none}, label %{both_none}, label %{a_less}"
+            ));
+            self.cur = self.new_block(both_none);
+            self.emit(format!("store {} {equal_lit}, ptr {result}", self.ret_ll));
+            self.br(&done);
+            self.cur = self.new_block(a_less);
+            self.emit(format!("store {} {less_lit}, ptr {result}", self.ret_ll));
+            self.br(&done);
+            self.cur = self.new_block(some_block);
+            let some_done = self.fresh_label("somed");
+            let some_b_none = self.fresh_label("sbn");
+            self.emit(format!(
+                "br i1 {b_none}, label %{some_b_none}, label %{some_done}"
+            ));
+            self.cur = self.new_block(some_b_none);
+            let greater_lit = int_literal(&self.ret_ll, greater);
+            self.emit(format!("store {} {greater_lit}, ptr {result}", self.ret_ll));
+            self.br(&done);
+            self.cur = self.new_block(some_done);
+            let (c, _) = self.cmp(inner, a, b)?;
+            self.emit(format!("store {} {c}, ptr {result}", self.ret_ll));
+            self.br(&done);
+            self.cur = self.new_block(done);
+            return Ok((
+                self.load_ll(&self.ret_ll.clone(), &result),
+                self.ret_ll.clone(),
+            ));
+        }
+        let tag = match &self.cg.types[&ty].shape {
+            Shape::Enum { tag, .. } => tag.clone(),
+            _ => unreachable!(),
+        };
+        let some_tag = variants.get(1).map(|v| v.tag).unwrap_or(1);
+        let ta = self.load_ll(&tag, a);
+        let tb = self.load_ll(&tag, b);
+        let same = self.fresh_tmp();
+        self.emit(format!("{same} = icmp eq {tag} {ta}, {tb}"));
+        let same_block = self.fresh_label("same");
+        let diff = self.fresh_label("diff");
+        self.emit(format!("br i1 {same}, label %{same_block}, label %{diff}"));
+        self.cur = self.new_block(same_block);
+        let is_some = self.fresh_tmp();
+        self.emit(format!(
+            "{is_some} = icmp eq {tag} {ta}, {}",
+            int_literal(&tag, some_tag)
+        ));
+        let some_block = self.fresh_label("some");
+        let eq_block = self.fresh_label("eq");
+        self.emit(format!(
+            "br i1 {is_some}, label %{some_block}, label %{eq_block}"
+        ));
+        self.cur = self.new_block(some_block);
+        let pa = self.payload_ptr(ty, a)?;
+        let pb = self.payload_ptr(ty, b)?;
+        let (c, _) = self.cmp(inner, &pa, &pb)?;
+        self.emit(format!("store {} {c}, ptr {result}", self.ret_ll));
+        self.br(&done);
+        self.cur = self.new_block(eq_block);
+        let equal_lit = int_literal(&self.ret_ll, self.ordering.1);
+        self.emit(format!("store {} {equal_lit}, ptr {result}", self.ret_ll));
+        self.br(&done);
+        self.cur = self.new_block(diff);
+        let a_less = self.fresh_tmp();
+        self.emit(format!("{a_less} = icmp ult {tag} {ta}, {tb}"));
+        let less_block = self.fresh_label("less");
+        let greater_block = self.fresh_label("greater");
+        self.emit(format!(
+            "br i1 {a_less}, label %{less_block}, label %{greater_block}"
+        ));
+        self.cur = self.new_block(less_block);
+        let less_lit = int_literal(&self.ret_ll, less);
+        self.emit(format!("store {} {less_lit}, ptr {result}", self.ret_ll));
+        self.br(&done);
+        self.cur = self.new_block(greater_block);
+        let greater_lit = int_literal(&self.ret_ll, greater);
+        self.emit(format!("store {} {greater_lit}, ptr {result}", self.ret_ll));
+        self.br(&done);
+        self.cur = self.new_block(done);
+        Ok((
+            self.load_ll(&self.ret_ll.clone(), &result),
+            self.ret_ll.clone(),
+        ))
     }
 }
 
@@ -2131,14 +3344,29 @@ impl<'a, 'p> FnGen<'a, 'p> {
         let ty = self.cg.resolve_ty(ty);
         let kind = self.cg.program.decls.types.kind(ty).clone();
         match (proj, kind) {
-            (Projection::Field { index, .. }, TyKind::Adt(def, _)) => {
+            (Projection::Field { index, .. }, TyKind::Adt(def, args)) => {
                 let sig = self.cg.program.decls.struct_sig(def).cloned();
                 let Some(sig) = sig else {
                     return Err(BuildError::Internal("a field of a non-struct".to_string()));
                 };
-                sig.fields
+                let fty = sig.fields.get(*index).map(|f| f.ty).ok_or_else(|| {
+                    BuildError::Internal("a field index out of range".to_string())
+                })?;
+                let subst = self.cg.program.decls.subst_for(def, &args);
+                Ok(self.cg.program.decls.instantiate(fty, &subst))
+            }
+            (Projection::Field { index, .. }, TyKind::Closure(def, idx, args)) => {
+                let fields = self
+                    .cg
+                    .program
+                    .decls
+                    .closure_field_tys(def, idx, &args)
+                    .ok_or_else(|| {
+                        BuildError::Internal("a field of an unknown closure".to_string())
+                    })?;
+                fields
                     .get(*index)
-                    .map(|f| f.ty)
+                    .copied()
                     .ok_or_else(|| BuildError::Internal("a field index out of range".to_string()))
             }
             (Projection::TupleField(index), TyKind::Tuple(ts)) => ts
@@ -2271,7 +3499,16 @@ impl<'a, 'p> FnGen<'a, 'p> {
             Const::Str(_) => self.cg.string_slice_ty(),
             Const::CStr(_) => self.cg.cstr_ty(),
             Const::Zero { ty, .. } | Const::Uninit { ty, .. } => *ty,
-            Const::Param { .. } => return self.cg.ni("constant generic parameters (B2)"),
+            Const::Param { def, .. } => self
+                .cg
+                .program
+                .decls
+                .param_const_ty
+                .get(def)
+                .copied()
+                .ok_or_else(|| {
+                    BuildError::Internal("a constant parameter with no type".to_string())
+                })?,
             Const::Expr { id, .. } => self.cg.const_expr_ty(*id)?,
             Const::Named { def, .. } => match self.cg.program.decls.item(*def) {
                 Some(ItemSig::Const(s)) => s.ty,
@@ -2434,8 +3671,43 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 Ok(("undef".to_string(), ll))
             }
             Const::Named { def, name } => self.named_constant(*def, name),
-            Const::Param { name, .. } => {
-                self.cg.ni(format!("the constant expression `{name}` (B2)"))
+            Const::Param { def, name } => {
+                let arg = self.cg.subst.get(*def).cloned().ok_or_else(|| {
+                    BuildError::Internal(format!(
+                        "the constant parameter `{name}` has no value in this instance"
+                    ))
+                })?;
+                match arg {
+                    ingot_sema::ty::GenericArg::Const(ingot_sema::ty::ConstArg::Value(
+                        ConstValue::Int { ty, value },
+                    )) => {
+                        let ty = self.cg.program.decls.types.int(ty);
+                        let ty = self.cg.resolve_ty(ty);
+                        let ll = self.cg.llvm_ty(ty)?;
+                        Ok((int_literal(&ll, value), ll))
+                    }
+                    ingot_sema::ty::GenericArg::Const(ingot_sema::ty::ConstArg::Value(
+                        ConstValue::Bool(b),
+                    )) => Ok((
+                        if b { "true" } else { "false" }.to_string(),
+                        "i1".to_string(),
+                    )),
+                    ingot_sema::ty::GenericArg::Const(ingot_sema::ty::ConstArg::Expr(id)) => {
+                        let value = self.cg.const_expr_value(id)?.ok_or_else(|| {
+                            BuildError::Internal(format!(
+                                "the constant expression `{name}` has no value"
+                            ))
+                        })?;
+                        let ll = self.cg.const_expr_ll(&value)?;
+                        Ok(match value {
+                            CeVal::Int(_, v) => (int_literal(&ll, v), ll),
+                            CeVal::Bool(b) => (if b { "true" } else { "false" }.to_string(), ll),
+                        })
+                    }
+                    _ => self.cg.ni(format!(
+                        "the constant parameter `{name}` of an unsupported kind"
+                    )),
+                }
             }
             Const::Expr { id, name } => {
                 let value = self.cg.const_expr_value(*id)?;
@@ -2472,7 +3744,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
         self.emit(format!("store {ll} zeroinitializer, ptr {tmp}"));
         match (kind, &info.shape) {
             (
-                AggregateKind::Struct(_) | AggregateKind::Tuple,
+                AggregateKind::Struct(_) | AggregateKind::Tuple | AggregateKind::Closure(_),
                 Shape::Aggregate { fields: infos, .. },
             ) => {
                 if infos.len() != fields.len() {
@@ -2907,6 +4179,43 @@ impl<'a, 'p> FnGen<'a, 'p> {
             }
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let _ = result_ty == bool_ty;
+                if let Some(tag) = self.cg.tag_only_enum(lty) {
+                    let tag_of = |this: &mut Self, v: &str, ll: &str| {
+                        if ll == tag {
+                            v.to_string()
+                        } else {
+                            let t = this.fresh_tmp();
+                            this.emit(format!("{t} = extractvalue {ll} {v}, 0"));
+                            t
+                        }
+                    };
+                    let ta = tag_of(self, &a, &all);
+                    let tb = tag_of(self, &b, &bll);
+                    let signed = match self.cg.program.decls.types.kind(lty) {
+                        TyKind::Adt(def, _) => self
+                            .cg
+                            .program
+                            .decls
+                            .enum_sig(*def)
+                            .is_some_and(|s| s.tag_ty.signed()),
+                        _ => false,
+                    };
+                    let pred = match (op, signed) {
+                        (BinOp::Eq, _) => "eq",
+                        (BinOp::Ne, _) => "ne",
+                        (BinOp::Lt, true) => "slt",
+                        (BinOp::Lt, false) => "ult",
+                        (BinOp::Le, true) => "sle",
+                        (BinOp::Le, false) => "ule",
+                        (BinOp::Gt, true) => "sgt",
+                        (BinOp::Gt, false) => "ugt",
+                        (BinOp::Ge, true) => "sge",
+                        (BinOp::Ge, false) => "uge",
+                        _ => unreachable!(),
+                    };
+                    self.emit(format!("{out} = icmp {pred} {tag} {ta}, {tb}"));
+                    return Ok((out, "i1".to_string()));
+                }
                 if float {
                     let pred = match op {
                         BinOp::Eq => "oeq",
@@ -3036,6 +4345,69 @@ impl<'a, 'p> FnGen<'a, 'p> {
     }
 
     // --------------------------------------------------------------- casts
+
+    fn dyn_cast(
+        &mut self,
+        operand: &Operand,
+        coercion: &ingot_cfg::DynCoercionKind,
+        ty: TypeId,
+    ) -> Result<(String, String), BuildError> {
+        let (data, dll) = self.value(operand)?;
+        if dll != "ptr" {
+            return Err(BuildError::Internal(
+                "a dynamic value from something that is not a borrow".to_string(),
+            ));
+        }
+        let key = match coercion {
+            ingot_cfg::DynCoercionKind::Interface { coercion, .. } => {
+                let self_ty = self
+                    .cg
+                    .program
+                    .decls
+                    .instantiate(coercion.self_ty, &self.cg.subst);
+                let args: Vec<ingot_sema::ty::GenericArg> = coercion
+                    .interface_args
+                    .iter()
+                    .map(|a| self.cg.program.decls.types.subst_arg(a, &self.cg.subst))
+                    .collect();
+                InstanceKey {
+                    owner: coercion.interface,
+                    body: InstanceBody::MethodTable {
+                        ty: self_ty,
+                        interface: coercion.interface,
+                        args,
+                    },
+                    subst: Subst::new(),
+                }
+            }
+            ingot_cfg::DynCoercionKind::Fn(fd) => InstanceKey {
+                owner: self.body.cfg.key.owner,
+                body: InstanceBody::DynFnTable {
+                    ty: self
+                        .cg
+                        .program
+                        .decls
+                        .instantiate(fd.self_ty, &self.cg.subst),
+                    kind: fd.kind,
+                },
+                subst: Subst::new(),
+            },
+        };
+        let table = self.cg.symbols.get(&key).cloned().ok_or_else(|| {
+            BuildError::Internal("a dynamic table was not discovered".to_string())
+        })?;
+        let ll = self.cg.llvm_ty(ty)?;
+        let a = self.fresh_tmp();
+        let b = self.fresh_tmp();
+        self.emit(format!(
+            "{a} = insertvalue {ll} zeroinitializer, ptr {data}, 0"
+        ));
+        self.emit(format!(
+            "{b} = insertvalue {ll} {a}, ptr {}, 1",
+            global_ref(&table)
+        ));
+        Ok((b, ll))
+    }
 
     fn cast(
         &mut self,
@@ -3233,7 +4605,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
                     .ok_or_else(|| BuildError::Internal(format!("`@{name}` without a value")))?;
                 self.convert_builtin(name, op, target)
             }
-            "debug" => self.cg.ni("`@debug` (B2)"),
+            "debug" => self.cg.ni("`@debug` (R5)"),
             other => self.cg.ni(format!("the builtin `@{other}` (B2)")),
         }
     }
@@ -4008,218 +5380,104 @@ impl<'a, 'p> FnGen<'a, 'p> {
         Ok(())
     }
 
-    fn call_value(
+    /// Lower one value to the ABI pieces of a parameter of type `pty`.
+    fn abi_arg(
         &mut self,
-        callee: &Operand,
-        args: &[Operand],
-        dest: Option<&Place>,
-        next: Block,
+        v: String,
+        vll: String,
+        pty: TypeId,
+        abi_types: &mut Vec<String>,
+        values: &mut Vec<String>,
     ) -> Result<(), BuildError> {
-        let cty = self.operand_ty(callee)?;
-        let sig = match self.cg.program.decls.types.kind(cty).clone() {
-            TyKind::FnPtr(sig) => sig,
-            _ => return self.cg.ni("a call of a value that is not `fn` (B2)"),
-        };
-        let (cv, _) = self.value(callee)?;
-        let ret_abi = if sig.ext {
-            RetAbi::Plain {
-                ll: self.cg.plain_ret_ll_for(sig.ret)?,
+        let pty = self.cg.resolve_ty(pty);
+        match self.cg.program.decls.types.kind(pty).clone() {
+            TyKind::Slice(..) => {
+                let v = self.as_ssa(&v, &vll, 8)?;
+                let a = self.fresh_tmp();
+                let b = self.fresh_tmp();
+                self.emit(format!("{a} = extractvalue {vll} {v}, 0"));
+                self.emit(format!("{b} = extractvalue {vll} {v}, 1"));
+                abi_types.push("ptr".to_string());
+                abi_types.push("i64".to_string());
+                values.push(a);
+                values.push(b);
             }
-        } else {
-            self.cg.ret_abi_for(sig.ret, sig.error)?
-        };
-        let ret_ll = ret_abi.ret_ll();
-        let result_abi = ret_abi.result().cloned();
-        let mut tys = Vec::new();
-        for (i, p) in sig.params.iter().enumerate() {
-            let op = args.get(i).ok_or_else(|| {
-                BuildError::Internal("a function-pointer call with too few arguments".to_string())
-            })?;
-            let pty = self.cg.resolve_ty(*p);
-            match self.cg.program.decls.types.kind(pty).clone() {
-                TyKind::Slice(..) => {
-                    let (v, vll) = self.value(op)?;
+            TyKind::Dyn(..) | TyKind::DynFn(..) => {
+                let v = self.as_ssa(&v, &vll, 8)?;
+                let a = self.fresh_tmp();
+                let b = self.fresh_tmp();
+                self.emit(format!("{a} = extractvalue {vll} {v}, 0"));
+                self.emit(format!("{b} = extractvalue {vll} {v}, 1"));
+                abi_types.push("ptr".to_string());
+                abi_types.push("ptr".to_string());
+                values.push(a);
+                values.push(b);
+            }
+            _ => {
+                if let Some(tag) = self.cg.tag_only_enum(pty) {
                     let v = self.as_ssa(&v, &vll, 8)?;
-                    let a = self.fresh_tmp();
-                    let b = self.fresh_tmp();
-                    self.emit(format!("{a} = extractvalue {vll} {v}, 0"));
-                    self.emit(format!("{b} = extractvalue {vll} {v}, 1"));
-                    tys.push(format!("ptr {a}"));
-                    tys.push(format!("i64 {b}"));
-                }
-                _ => {
-                    if let Some(tag) = self.cg.tag_only_enum(pty) {
-                        let (v, vll) = self.value(op)?;
-                        let v = self.as_ssa(&v, &vll, 8)?;
-                        let t = self.fresh_tmp();
-                        self.emit(format!("{t} = extractvalue {vll} {v}, 0"));
-                        tys.push(format!("{tag} {t}"));
-                    } else if let Some((size, align)) = self.cg.aggregate_size(pty)? {
-                        let (v, vll) = self.value(op)?;
-                        let v = self.as_ssa(&v, &vll, align)?;
-                        if size > 16 {
-                            let tmp = self.alloca(&vll, align);
-                            self.emit(format!("store {vll} {v}, ptr {tmp}"));
-                            tys.push(format!("ptr {tmp}"));
-                        } else if size > 0 {
-                            let tmp = self.split_slot(&vll, &v, align);
-                            let a = self.fresh_tmp();
-                            self.emit(format!("{a} = load i64, ptr {tmp}"));
-                            tys.push(format!("i64 {a}"));
-                            if size > 8 {
-                                let p = self.fresh_tmp();
-                                self.emit(format!("{p} = getelementptr i8, ptr {tmp}, i64 8"));
-                                let b = self.fresh_tmp();
-                                self.emit(format!("{b} = load i64, ptr {p}"));
-                                tys.push(format!("i64 {b}"));
-                            }
+                    let t = self.fresh_tmp();
+                    self.emit(format!("{t} = extractvalue {vll} {v}, 0"));
+                    abi_types.push(tag);
+                    values.push(t);
+                } else if let Some((size, align)) = self.cg.aggregate_size(pty)? {
+                    let v = self.as_ssa(&v, &vll, align)?;
+                    if size > 16 {
+                        let tmp = self.alloca(&vll, align);
+                        self.emit(format!("store {vll} {v}, ptr {tmp}"));
+                        abi_types.push("ptr".to_string());
+                        values.push(tmp);
+                    } else if size > 0 {
+                        let tmp = self.split_slot(&vll, &v, align);
+                        let a = self.fresh_tmp();
+                        self.emit(format!("{a} = load i64, ptr {tmp}"));
+                        abi_types.push("i64".to_string());
+                        values.push(a);
+                        if size > 8 {
+                            let p = self.fresh_tmp();
+                            self.emit(format!("{p} = getelementptr i8, ptr {tmp}, i64 8"));
+                            let b = self.fresh_tmp();
+                            self.emit(format!("{b} = load i64, ptr {p}"));
+                            abi_types.push("i64".to_string());
+                            values.push(b);
                         }
-                    } else {
-                        let (v, vll) = self.value(op)?;
-                        tys.push(format!("{vll} {v}"));
                     }
+                } else {
+                    abi_types.push(vll);
+                    values.push(v);
                 }
             }
         }
-        let result_slot = match &result_abi {
-            Some(r) if r.ptr => {
-                let slot = self.zeroed_bytes(r.payload_area, r.payload_align.max(1));
-                tys.push(format!("ptr {slot}"));
-                Some(slot)
-            }
-            _ => None,
-        };
-        let call = if ret_ll == "void" {
-            self.emit(format!("call void {cv}({})", tys.join(", ")));
-            String::new()
-        } else {
-            let out = self.fresh_tmp();
-            self.emit(format!("{out} = call {ret_ll} {cv}({})", tys.join(", ")));
-            out
-        };
-        self.store_call_result(&ret_abi, &ret_ll, &call, result_slot.as_deref(), dest)?;
-        self.emit(format!("br label %{}", self.label_of(next)));
         Ok(())
     }
 
-    fn call(
+    fn lower_call_args(
         &mut self,
-        target: &CallTarget,
+        params: &[TypeId],
         args: &[Operand],
-        dest: Option<&Place>,
-        next: Block,
-        _span: Span,
-    ) -> Result<(), BuildError> {
-        if let CallTarget::Value {
-            callee,
-            kind: ValueKind::FnPtr,
-            ..
-        } = target
-        {
-            return self.call_value(callee, args, dest, next);
-        }
-        let CallTarget::Fn { fn_ref, .. } = target else {
-            return self.cg.ni("calls through closures and dynamic values (B2)");
-        };
-        let (symbol, external, _ret, params) = self.cg.resolve_fn(fn_ref)?;
-        let sig = self
-            .cg
-            .program
-            .decls
-            .fn_sig(fn_ref.def)
-            .cloned()
-            .ok_or_else(|| {
-                BuildError::Internal("a call of a function with no signature".to_string())
-            })?;
-        let variadic = sig.variadic;
-        if variadic && args.len() > params.len() {
-            return self.cg.ni("variadic extern calls (B2)");
-        }
-        let ret_abi = if external {
-            RetAbi::Plain {
-                ll: self.cg.plain_ret_ll(&sig)?,
-            }
-        } else {
-            self.cg.ret_abi(&sig)?
-        };
-        let ret_ll = ret_abi.ret_ll();
-        let result_abi = ret_abi.result().cloned();
+    ) -> Result<(Vec<String>, Vec<String>), BuildError> {
         let mut abi_types = Vec::new();
         let mut values = Vec::new();
-        if external {
-            for (i, p) in params.iter().enumerate() {
-                let ll = self.cg.llvm_ty(*p)?;
-                abi_types.push(ll.clone());
-                let op = args.get(i).ok_or_else(|| {
-                    BuildError::Internal("an extern call with too few arguments".to_string())
-                })?;
-                let (v, vll) = self.value(op)?;
-                if vll != ll {
-                    return Err(BuildError::Internal(format!(
-                        "an extern argument of type {vll}, expected {ll}"
-                    )));
-                }
-                values.push(v);
-            }
-        } else {
-            for (i, p) in params.iter().enumerate() {
-                let op = args.get(i).ok_or_else(|| {
-                    BuildError::Internal("a call with too few arguments".to_string())
-                })?;
-                let pty = self.cg.resolve_ty(*p);
-                match self.cg.program.decls.types.kind(pty).clone() {
-                    TyKind::Slice(..) => {
-                        let (v, vll) = self.value(op)?;
-                        let v = self.as_ssa(&v, &vll, 8)?;
-                        let p0 = self.fresh_tmp();
-                        let p1 = self.fresh_tmp();
-                        self.emit(format!("{p0} = extractvalue {vll} {v}, 0"));
-                        self.emit(format!("{p1} = extractvalue {vll} {v}, 1"));
-                        abi_types.push("ptr".to_string());
-                        abi_types.push("i64".to_string());
-                        values.push(p0);
-                        values.push(p1);
-                    }
-                    _ => {
-                        if let Some(tag) = self.cg.tag_only_enum(pty) {
-                            let (v, vll) = self.value(op)?;
-                            let v = self.as_ssa(&v, &vll, 8)?;
-                            let t = self.fresh_tmp();
-                            self.emit(format!("{t} = extractvalue {vll} {v}, 0"));
-                            abi_types.push(tag);
-                            values.push(t);
-                        } else if let Some((size, align)) = self.cg.aggregate_size(pty)? {
-                            let (v, vll) = self.value(op)?;
-                            let v = self.as_ssa(&v, &vll, align)?;
-                            if size > 16 {
-                                let tmp = self.alloca(&vll, align);
-                                self.emit(format!("store {vll} {v}, ptr {tmp}"));
-                                abi_types.push("ptr".to_string());
-                                values.push(tmp);
-                            } else if size > 0 {
-                                let tmp = self.split_slot(&vll, &v, align);
-                                let a = self.fresh_tmp();
-                                self.emit(format!("{a} = load i64, ptr {tmp}"));
-                                abi_types.push("i64".to_string());
-                                values.push(a);
-                                if size > 8 {
-                                    let p = self.fresh_tmp();
-                                    self.emit(format!("{p} = getelementptr i8, ptr {tmp}, i64 8"));
-                                    let b = self.fresh_tmp();
-                                    self.emit(format!("{b} = load i64, ptr {p}"));
-                                    abi_types.push("i64".to_string());
-                                    values.push(b);
-                                }
-                            }
-                        } else {
-                            let (v, vll) = self.value(op)?;
-                            abi_types.push(vll.clone());
-                            values.push(v);
-                        }
-                    }
-                }
-            }
+        for (i, pty) in params.iter().enumerate() {
+            let op = args
+                .get(i)
+                .ok_or_else(|| BuildError::Internal("a call with too few arguments".to_string()))?;
+            let (v, vll) = self.value(op)?;
+            self.abi_arg(v, vll, *pty, &mut abi_types, &mut values)?;
         }
+        Ok((abi_types, values))
+    }
+
+    fn emit_call(
+        &mut self,
+        callee: &str,
+        ret_abi: &RetAbi,
+        abi_types: &mut Vec<String>,
+        values: &mut Vec<String>,
+        dest: Option<&Place>,
+    ) -> Result<(), BuildError> {
+        let ret_ll = ret_abi.ret_ll();
+        let result_abi = ret_abi.result().cloned();
         let result_slot = match &result_abi {
             Some(r) if r.ptr => {
                 let slot = self.zeroed_bytes(r.payload_area, r.payload_align.max(1));
@@ -4235,24 +5493,485 @@ impl<'a, 'p> FnGen<'a, 'p> {
             .map(|(i, v)| format!("{} {}", abi_types[i], v))
             .collect();
         let call = if ret_ll == "void" {
-            self.emit(format!(
-                "call void {}({})",
-                global_ref(&symbol),
-                tys.join(", ")
-            ));
+            self.emit(format!("call void {callee}({})", tys.join(", ")));
             String::new()
         } else {
             let out = self.fresh_tmp();
             self.emit(format!(
-                "{out} = call {ret_ll} {}({})",
-                global_ref(&symbol),
+                "{out} = call {ret_ll} {callee}({})",
                 tys.join(", ")
             ));
             out
         };
-        self.store_call_result(&ret_abi, &ret_ll, &call, result_slot.as_deref(), dest)?;
+        self.store_call_result(ret_abi, &ret_ll, &call, result_slot.as_deref(), dest)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_direct_symbol(
+        &mut self,
+        symbol: &str,
+        sig: &FnSig,
+        subst: &Subst,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+        external: bool,
+    ) -> Result<(), BuildError> {
+        let params: Vec<TypeId> = sig
+            .params
+            .iter()
+            .map(|p| {
+                if external {
+                    p.ty
+                } else {
+                    self.cg.program.decls.instantiate(p.ty, subst)
+                }
+            })
+            .collect();
+        if sig.variadic && args.len() > params.len() {
+            return self.cg.ni("variadic extern calls (B2)");
+        }
+        let ret = if external {
+            sig.ret
+        } else {
+            self.cg.program.decls.instantiate(sig.ret, subst)
+        };
+        let error = sig.error.map(|e| {
+            if external {
+                e
+            } else {
+                self.cg.program.decls.instantiate(e, subst)
+            }
+        });
+        let ret_abi = if external {
+            RetAbi::Plain {
+                ll: if ret == self.cg.program.decls.types.void
+                    || ret == self.cg.program.decls.types.never
+                {
+                    "void".to_string()
+                } else {
+                    self.cg.llvm_ty(ret)?
+                },
+            }
+        } else {
+            self.cg.ret_abi_for(ret, error)?
+        };
+        let (mut abi_types, mut values) = if external {
+            let mut abi_types = Vec::new();
+            let mut values = Vec::new();
+            for (i, pty) in params.iter().enumerate() {
+                let ll = self.cg.llvm_ty(*pty)?;
+                abi_types.push(ll.clone());
+                let op = args.get(i).ok_or_else(|| {
+                    BuildError::Internal("an extern call with too few arguments".to_string())
+                })?;
+                let (v, vll) = self.value(op)?;
+                if vll != ll {
+                    return Err(BuildError::Internal(format!(
+                        "an extern argument of type {vll}, expected {ll}"
+                    )));
+                }
+                values.push(v);
+            }
+            (abi_types, values)
+        } else {
+            self.lower_call_args(&params, args)?
+        };
+        self.emit_call(
+            &global_ref(symbol),
+            &ret_abi,
+            &mut abi_types,
+            &mut values,
+            dest,
+        )?;
         self.emit(format!("br label %{}", self.label_of(next)));
         Ok(())
+    }
+
+    /// A call through a function pointer value already in SSA form.
+    #[allow(clippy::too_many_arguments)]
+    fn call_indirect(
+        &mut self,
+        fp: &str,
+        params: &[TypeId],
+        args: &[Operand],
+        ret: TypeId,
+        error: Option<TypeId>,
+        ext: bool,
+        prepend: Option<String>,
+        dest: Option<&Place>,
+        next: Block,
+    ) -> Result<(), BuildError> {
+        let ret_abi = if ext {
+            RetAbi::Plain {
+                ll: if ret == self.cg.program.decls.types.void
+                    || ret == self.cg.program.decls.types.never
+                {
+                    "void".to_string()
+                } else {
+                    self.cg.llvm_ty(ret)?
+                },
+            }
+        } else {
+            self.cg.ret_abi_for(ret, error)?
+        };
+        let (mut abi_types, mut values) = if let Some(data) = prepend {
+            let (mut abi_types, mut values) = self.lower_call_args(params, args)?;
+            abi_types.insert(0, "ptr".to_string());
+            values.insert(0, data);
+            (abi_types, values)
+        } else {
+            self.lower_call_args(params, args)?
+        };
+        self.emit_call(fp, &ret_abi, &mut abi_types, &mut values, dest)?;
+        self.emit(format!("br label %{}", self.label_of(next)));
+        Ok(())
+    }
+
+    fn closure_call(
+        &mut self,
+        callee: &Operand,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+    ) -> Result<(), BuildError> {
+        let cty = self.operand_ty(callee)?;
+        let (v, _) = self.value(callee)?;
+        let mut ty = cty;
+        let mut record = v;
+        loop {
+            if let TyKind::Closure(..) = self.cg.program.decls.types.kind(ty) {
+                break;
+            }
+            let TyKind::Ref(_, inner) = self.cg.program.decls.types.kind(ty).clone() else {
+                return self
+                    .cg
+                    .ni("a call of a value that is not a closure or `fn` (B2)");
+            };
+            if let TyKind::Closure(..) = self.cg.program.decls.types.kind(inner) {
+                ty = inner;
+                break;
+            }
+            let out = self.fresh_tmp();
+            self.emit(format!("{out} = load ptr, ptr {record}"));
+            record = out;
+            ty = inner;
+        }
+        let key = closure_instance_key(self.cg.program.sema, self.cg.program.decls, ty)
+            .ok_or_else(|| BuildError::Internal("a closure with no instance".to_string()))?;
+        let symbol = self.cg.symbols.get(&key).cloned().ok_or_else(|| {
+            BuildError::Internal("the closure instance was not discovered".to_string())
+        })?;
+        let sig = self
+            .cg
+            .bodies
+            .get(&symbol)
+            .map(|b| b.sig.clone())
+            .ok_or_else(|| BuildError::Internal("the closure body was not emitted".to_string()))?;
+        let params: Vec<TypeId> = sig
+            .params
+            .iter()
+            .map(|p| self.cg.program.decls.instantiate(p.ty, &key.subst))
+            .collect();
+        let ret = self.cg.program.decls.instantiate(sig.ret, &key.subst);
+        let error = sig
+            .error
+            .map(|e| self.cg.program.decls.instantiate(e, &key.subst));
+        let ret_abi = self.cg.ret_abi_for(ret, error)?;
+        let mut abi_types = Vec::new();
+        let mut values = Vec::new();
+        let first = params
+            .first()
+            .copied()
+            .ok_or_else(|| BuildError::Internal("a closure with no record".to_string()))?;
+        let record_ll = self.cg.llvm_ty(first)?;
+        self.abi_arg(record, record_ll, first, &mut abi_types, &mut values)?;
+        for (i, pty) in params.iter().enumerate().skip(1) {
+            let op = args.get(i - 1).ok_or_else(|| {
+                BuildError::Internal("a closure call with too few arguments".to_string())
+            })?;
+            let (v, vll) = self.value(op)?;
+            self.abi_arg(v, vll, *pty, &mut abi_types, &mut values)?;
+        }
+        self.emit_call(
+            &global_ref(&symbol),
+            &ret_abi,
+            &mut abi_types,
+            &mut values,
+            dest,
+        )?;
+        self.emit(format!("br label %{}", self.label_of(next)));
+        Ok(())
+    }
+
+    fn fn_ptr_call(
+        &mut self,
+        callee: &Operand,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+    ) -> Result<(), BuildError> {
+        let mut ty = self.operand_ty(callee)?;
+        let (mut v, _) = self.value(callee)?;
+        loop {
+            match self.cg.program.decls.types.kind(ty).clone() {
+                TyKind::FnPtr(sig) => {
+                    return self.call_indirect(
+                        &v,
+                        &sig.params,
+                        args,
+                        sig.ret,
+                        sig.error,
+                        sig.ext,
+                        None,
+                        dest,
+                        next,
+                    );
+                }
+                TyKind::Ref(_, inner) => {
+                    let out = self.fresh_tmp();
+                    self.emit(format!("{out} = load ptr, ptr {v}"));
+                    v = out;
+                    ty = inner;
+                }
+                _ => return self.cg.ni("a call of a value that is not `fn` (B2)"),
+            }
+        }
+    }
+
+    fn dyn_fn_call(
+        &mut self,
+        callee: &Operand,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+    ) -> Result<(), BuildError> {
+        let mut ty = self.operand_ty(callee)?;
+        let (mut v, mut vll) = self.value(callee)?;
+        let sig = loop {
+            match self.cg.program.decls.types.kind(ty).clone() {
+                TyKind::DynFn(_, _, sig) => break sig,
+                TyKind::Ref(_, inner) => {
+                    if matches!(self.cg.program.decls.types.kind(inner), TyKind::DynFn(..)) {
+                        let out = self.fresh_tmp();
+                        self.emit(format!("{out} = load {{ ptr, ptr }}, ptr {v}"));
+                        v = out;
+                        vll = "{ ptr, ptr }".to_string();
+                    } else {
+                        let out = self.fresh_tmp();
+                        self.emit(format!("{out} = load ptr, ptr {v}"));
+                        v = out;
+                        vll = "ptr".to_string();
+                    }
+                    ty = inner;
+                }
+                _ => return self.cg.ni("a call of a value that is not `&dyn Fn` (B2)"),
+            }
+        };
+        let v = self.as_ssa(&v, &vll, 8)?;
+        let data = self.fresh_tmp();
+        let table = self.fresh_tmp();
+        self.emit(format!("{data} = extractvalue {vll} {v}, 0"));
+        self.emit(format!("{table} = extractvalue {vll} {v}, 1"));
+        let slot = self.fresh_tmp();
+        self.emit(format!("{slot} = getelementptr ptr, ptr {table}, i64 0"));
+        let fp = self.fresh_tmp();
+        self.emit(format!("{fp} = load ptr, ptr {slot}"));
+        self.call_indirect(
+            &fp,
+            &sig.params,
+            args,
+            sig.ret,
+            sig.error,
+            false,
+            Some(data),
+            dest,
+            next,
+        )
+    }
+
+    fn dyn_interface_call(
+        &mut self,
+        fn_ref: &ingot_sema::typed::FnRef,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+    ) -> Result<(), BuildError> {
+        let ingot_sema::typed::FnSource::Interface {
+            interface,
+            interface_args,
+            self_ty,
+            via: ingot_sema::typed::InterfaceVia::Dyn,
+            ..
+        } = &fn_ref.source
+        else {
+            return self.cg.ni("a dynamic call outside an interface");
+        };
+        let isig = self
+            .cg
+            .program
+            .decls
+            .interface_sig(*interface)
+            .cloned()
+            .ok_or_else(|| {
+                BuildError::Internal("a dynamic call of an unknown interface".to_string())
+            })?;
+        let dyn_interface = match self.cg.program.decls.types.kind(*self_ty) {
+            TyKind::Dyn(_, d, _) => *d,
+            _ => *interface,
+        };
+        let index = interface_method_order(&mut *self.cg.program.decls, dyn_interface)
+            .iter()
+            .position(|m| *m == fn_ref.def)
+            .ok_or_else(|| {
+                BuildError::Internal("a dynamic call of an unknown method".to_string())
+            })?;
+        let sig = self
+            .cg
+            .program
+            .decls
+            .fn_sig(fn_ref.def)
+            .cloned()
+            .ok_or_else(|| {
+                BuildError::Internal("a dynamic method with no signature".to_string())
+            })?;
+        let iface_args: Vec<ingot_sema::ty::GenericArg> = interface_args
+            .iter()
+            .map(|a| self.cg.program.decls.types.subst_arg(a, &self.cg.subst))
+            .collect();
+        let self_ty = self.cg.program.decls.instantiate(*self_ty, &self.cg.subst);
+        let mut subst = self.cg.program.decls.subst_for(*interface, &iface_args);
+        subst.insert(isig.self_def, ingot_sema::ty::GenericArg::Ty(self_ty));
+        let params: Vec<TypeId> = sig
+            .params
+            .iter()
+            .skip(1)
+            .map(|p| self.cg.program.decls.instantiate(p.ty, &subst))
+            .collect();
+        let ret = self.cg.program.decls.instantiate(sig.ret, &subst);
+        let error = sig
+            .error
+            .map(|e| self.cg.program.decls.instantiate(e, &subst));
+        let receiver = args
+            .first()
+            .ok_or_else(|| BuildError::Internal("a dynamic call without a receiver".to_string()))?;
+        let rty = self.operand_ty(receiver)?;
+        let (fat, fat_ll) = self.value(receiver)?;
+        let (fat, fat_ty) = match self.cg.program.decls.types.kind(rty).clone() {
+            TyKind::Dyn(..) | TyKind::DynFn(..) => {
+                let v = self.as_ssa(&fat, &fat_ll, 8)?;
+                (v, fat_ll)
+            }
+            _ => {
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = load {{ ptr, ptr }}, ptr {fat}"));
+                (out, "{ ptr, ptr }".to_string())
+            }
+        };
+        let data = self.fresh_tmp();
+        let table = self.fresh_tmp();
+        self.emit(format!("{data} = extractvalue {fat_ty} {fat}, 0"));
+        self.emit(format!("{table} = extractvalue {fat_ty} {fat}, 1"));
+        let slot = self.fresh_tmp();
+        self.emit(format!(
+            "{slot} = getelementptr ptr, ptr {table}, i64 {index}"
+        ));
+        let fp = self.fresh_tmp();
+        self.emit(format!("{fp} = load ptr, ptr {slot}"));
+        self.call_indirect(
+            &fp,
+            &params,
+            &args[1..],
+            ret,
+            error,
+            false,
+            Some(data),
+            dest,
+            next,
+        )
+    }
+
+    fn call(
+        &mut self,
+        target: &CallTarget,
+        args: &[Operand],
+        dest: Option<&Place>,
+        next: Block,
+        _span: Span,
+    ) -> Result<(), BuildError> {
+        match target {
+            CallTarget::Value { callee, kind, .. } => match kind {
+                ValueKind::FnPtr => self.fn_ptr_call(callee, args, dest, next),
+                ValueKind::Closure(_) => self.closure_call(callee, args, dest, next),
+                ValueKind::Bound => {
+                    let cty = self.operand_ty(callee)?;
+                    let mut ty = cty;
+                    while let TyKind::Ref(_, inner) = self.cg.program.decls.types.kind(ty).clone() {
+                        ty = inner;
+                    }
+                    match self.cg.program.decls.types.kind(ty) {
+                        TyKind::Closure(..) => self.closure_call(callee, args, dest, next),
+                        TyKind::FnPtr(_) => self.fn_ptr_call(callee, args, dest, next),
+                        _ => self.cg.ni("a call through a bound that is not `Fn` (B2)"),
+                    }
+                }
+                ValueKind::DynFn => self.dyn_fn_call(callee, args, dest, next),
+            },
+            CallTarget::Fn { fn_ref, .. } => {
+                let caller_subst = self.cg.subst.clone();
+                if let Some((interface, ty)) = self.cg.builtin_target(fn_ref, &caller_subst)? {
+                    let name = self.cg.program.sema.def(fn_ref.def).name.clone();
+                    let method = self
+                        .cg
+                        .program
+                        .decls
+                        .interface_sig(interface)
+                        .and_then(|s| {
+                            s.methods
+                                .iter()
+                                .copied()
+                                .find(|m| self.cg.program.sema.def(*m).name == name)
+                        })
+                        .ok_or_else(|| {
+                            BuildError::Internal("a built-in method with no definition".to_string())
+                        })?;
+                    let sig = self
+                        .cg
+                        .program
+                        .decls
+                        .fn_sig(method)
+                        .cloned()
+                        .ok_or_else(|| {
+                            BuildError::Internal("a built-in method with no signature".to_string())
+                        })?;
+                    let mut subst = Subst::new();
+                    if let Some(isig) = self.cg.program.decls.interface_sig(interface) {
+                        subst.insert(isig.self_def, ingot_sema::ty::GenericArg::Ty(ty));
+                    }
+                    let symbol = self
+                        .cg
+                        .builtin_symbols
+                        .get(&(interface, ty))
+                        .cloned()
+                        .ok_or_else(|| {
+                            BuildError::Internal("a built-in method was not emitted".to_string())
+                        })?;
+                    return self.call_direct_symbol(&symbol, &sig, &subst, args, dest, next, false);
+                }
+                if matches!(
+                    fn_ref.source,
+                    ingot_sema::typed::FnSource::Interface {
+                        via: ingot_sema::typed::InterfaceVia::Dyn,
+                        ..
+                    }
+                ) {
+                    return self.dyn_interface_call(fn_ref, args, dest, next);
+                }
+                let (symbol, external, sig, subst) = self.cg.resolve_fn(fn_ref)?;
+                self.call_direct_symbol(&symbol, &sig, &subst, args, dest, next, external)
+            }
+        }
     }
 }
 
@@ -4282,12 +6001,13 @@ impl<'p> Codegen<'p> {
     fn resolve_fn(
         &mut self,
         fn_ref: &ingot_sema::typed::FnRef,
-    ) -> Result<(String, bool, TypeId, Vec<TypeId>), BuildError> {
+    ) -> Result<(String, bool, FnSig, Subst), BuildError> {
         let def = fn_ref.def;
         let sig = self.program.decls.fn_sig(def).cloned().ok_or_else(|| {
             BuildError::Internal("a call of a function with no signature".to_string())
         })?;
         let external = self.program.sema.def(def).kind == DefKind::ExternFn;
+        let mut call_subst = Subst::new();
         let symbol = if external {
             self.program.sema.def(def).name.clone()
         } else {
@@ -4300,9 +6020,7 @@ impl<'p> Codegen<'p> {
             .ok_or_else(|| {
                 BuildError::NotImplemented("instances with substitution (B2)".to_string())
             })?;
-            if !key.subst.is_empty() && !self.concrete_method_subst(&key) {
-                return self.ni("instances with substitution (B2)");
-            }
+            call_subst = key.subst.clone();
             self.symbols.get(&key).cloned().ok_or_else(|| {
                 BuildError::Internal(format!(
                     "phase 11a did not discover the instance of `{}`",
@@ -4333,12 +6051,7 @@ impl<'p> Codegen<'p> {
             );
             self.externs.entry(symbol.clone()).or_insert(decl);
         }
-        Ok((
-            symbol,
-            external,
-            sig.ret,
-            sig.params.iter().map(|p| p.ty).collect(),
-        ))
+        Ok((symbol, external, sig, call_subst))
     }
 
     fn fn_value_ty(&mut self, fn_ref: &ingot_sema::typed::FnRef) -> Result<TypeId, BuildError> {
@@ -4351,15 +6064,30 @@ impl<'p> Codegen<'p> {
                 BuildError::Internal("a function value with no signature".to_string())
             })?;
         let ext = self.program.sema.def(fn_ref.def).kind == DefKind::ExternFn || sig.mods.export;
+        let subst = ingot_cfg::instances::callee_key(
+            self.program.sema,
+            &mut *self.program.decls,
+            fn_ref,
+            &self.subst,
+        )
+        .map(|k| k.subst)
+        .unwrap_or_default();
+        let params = sig
+            .params
+            .iter()
+            .map(|p| self.program.decls.instantiate(p.ty, &subst))
+            .collect();
+        let ret = self.program.decls.instantiate(sig.ret, &subst);
+        let error = sig.error.map(|e| self.program.decls.instantiate(e, &subst));
         Ok(self
             .program
             .decls
             .types
             .intern(TyKind::FnPtr(ingot_sema::ty::FnPtrSig {
                 ext,
-                params: sig.params.iter().map(|p| p.ty).collect(),
-                ret: sig.ret,
-                error: sig.error,
+                params,
+                ret,
+                error,
             })))
     }
 
@@ -4437,6 +6165,18 @@ impl<'p> Codegen<'p> {
         bytes: &mut [u8],
         base: usize,
     ) -> Result<(), BuildError> {
+        let mut relocs = Vec::new();
+        self.write_value_relocs(value, ty, bytes, base, &mut relocs)
+    }
+
+    fn write_value_relocs(
+        &mut self,
+        value: &SemValue,
+        ty: TypeId,
+        bytes: &mut [u8],
+        base: usize,
+        relocs: &mut Vec<(usize, String)>,
+    ) -> Result<(), BuildError> {
         let ty = self.resolve_ty(ty);
         let layout = self.layout(ty)?;
         let size = layout.size;
@@ -4477,10 +6217,11 @@ impl<'p> Codegen<'p> {
                 let ty = self.resolve_ty(*vty);
                 let layout = self.layout(ty)?;
                 match (kind, self.program.decls.types.kind(ty).clone()) {
-                    (ingot_sema::value::AggKind::Struct(_), TyKind::Adt(def, _)) => {
+                    (ingot_sema::value::AggKind::Struct(_), TyKind::Adt(def, args)) => {
                         let sig = self.program.decls.struct_sig(def).cloned().ok_or_else(|| {
                             BuildError::Internal("a constant of a non-struct".to_string())
                         })?;
+                        let subst = self.program.decls.subst_for(def, &args);
                         for (i, field) in fields.iter().enumerate() {
                             let fl = layout.fields.get(i).ok_or_else(|| {
                                 BuildError::Internal(
@@ -4492,7 +6233,30 @@ impl<'p> Codegen<'p> {
                                     "a constant struct has a field with no type".to_string(),
                                 )
                             })?;
-                            self.write_value(field, fty.ty, bytes, at(fl.offset))?;
+                            let fty = self.program.decls.instantiate(fty.ty, &subst);
+                            self.write_value_relocs(field, fty, bytes, at(fl.offset), relocs)?;
+                        }
+                    }
+                    (ingot_sema::value::AggKind::Closure(_), TyKind::Closure(def, idx, args)) => {
+                        let ftys = self
+                            .program
+                            .decls
+                            .closure_field_tys(def, idx, &args)
+                            .ok_or_else(|| {
+                                BuildError::Internal("a constant of an unknown closure".to_string())
+                            })?;
+                        for (i, field) in fields.iter().enumerate() {
+                            let fl = layout.fields.get(i).ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant closure has no field layout".to_string(),
+                                )
+                            })?;
+                            let fty = ftys.get(i).copied().ok_or_else(|| {
+                                BuildError::Internal(
+                                    "a constant closure has a field with no type".to_string(),
+                                )
+                            })?;
+                            self.write_value_relocs(field, fty, bytes, at(fl.offset), relocs)?;
                         }
                     }
                     (ingot_sema::value::AggKind::Tuple, TyKind::Tuple(ts)) => {
@@ -4507,13 +6271,19 @@ impl<'p> Codegen<'p> {
                                     "a constant tuple has a field with no type".to_string(),
                                 )
                             })?;
-                            self.write_value(field, *fty, bytes, at(fl.offset))?;
+                            self.write_value_relocs(field, *fty, bytes, at(fl.offset), relocs)?;
                         }
                     }
                     (ingot_sema::value::AggKind::Array, TyKind::Array(elem, _)) => {
                         let stride = self.layout(elem)?.size;
                         for (i, field) in fields.iter().enumerate() {
-                            self.write_value(field, elem, bytes, at(stride * i as u64))?;
+                            self.write_value_relocs(
+                                field,
+                                elem,
+                                bytes,
+                                at(stride * i as u64),
+                                relocs,
+                            )?;
                         }
                     }
                     _ => {
@@ -4555,7 +6325,7 @@ impl<'p> Codegen<'p> {
                             Some(if *index == 0 { ok } else { err }),
                         ),
                         TyKind::Optional(inner) => (i128::from(*index as u8), Some(inner)),
-                        TyKind::Adt(def, _) => {
+                        TyKind::Adt(def, args) => {
                             let sig =
                                 self.program.decls.enum_sig(def).cloned().ok_or_else(|| {
                                     BuildError::Internal("a constant of a non-enum".to_string())
@@ -4565,7 +6335,10 @@ impl<'p> Codegen<'p> {
                                     "a constant variant index out of range".to_string(),
                                 )
                             })?;
-                            (v.tag, v.payload)
+                            let subst = self.program.decls.subst_for(def, &args);
+                            let payload =
+                                v.payload.map(|p| self.program.decls.instantiate(p, &subst));
+                            (v.tag, payload)
                         }
                         _ => {
                             return Err(BuildError::Internal(
@@ -4576,7 +6349,7 @@ impl<'p> Codegen<'p> {
                 match layout.kind {
                     LayoutKind::Niche => {
                         if let Some(p) = payload {
-                            self.write_value(
+                            self.write_value_relocs(
                                 p,
                                 payload_ty.ok_or_else(|| {
                                     BuildError::Internal(
@@ -4585,6 +6358,7 @@ impl<'p> Codegen<'p> {
                                 })?,
                                 bytes,
                                 at(0),
+                                relocs,
                             )?;
                         }
                     }
@@ -4599,7 +6373,7 @@ impl<'p> Codegen<'p> {
                         }
                         write_low(&mut bytes[at(0)..], tag, tag_size);
                         if let Some(p) = payload {
-                            self.write_value(
+                            self.write_value_relocs(
                                 p,
                                 payload_ty.ok_or_else(|| {
                                     BuildError::Internal(
@@ -4608,6 +6382,7 @@ impl<'p> Codegen<'p> {
                                 })?,
                                 bytes,
                                 at(payload_offset),
+                                relocs,
                             )?;
                         }
                     }
@@ -4623,9 +6398,14 @@ impl<'p> Codegen<'p> {
             | SemValue::Fn { .. }
             | SemValue::Borrow { .. }
             | SemValue::Slice { .. }
-            | SemValue::StrPtr { .. }
-            | SemValue::Uninit => {
-                return self.ni("a constant pointer value (B2)");
+            | SemValue::StrPtr { .. } => {
+                let Some(expr) = self.pointer_initializer(value, ty)? else {
+                    return self.ni("this constant pointer value");
+                };
+                relocs.push((at(0), expr));
+            }
+            SemValue::Uninit => {
+                return self.ni("a constant that is uninitialized");
             }
         }
         let _ = size;
@@ -4648,9 +6428,114 @@ impl<'p> Codegen<'p> {
         }
     }
 
+    /// The address expression for a place inside a static, for a `&` or a slice
+    /// source that points at one.
+    fn static_path_expr(
+        &mut self,
+        def: DefId,
+        path: &[PathComp],
+    ) -> Result<Option<String>, BuildError> {
+        let Some(ItemSig::Static(sig)) = self.program.decls.item(def).cloned() else {
+            return Ok(None);
+        };
+        let mut ty = sig.ty;
+        let mut addr = self.static_ref(def)?;
+        for comp in path {
+            let (offset, next) = self.path_step(ty, *comp)?;
+            if offset != 0 {
+                addr = format!("getelementptr i8, ptr {addr}, i64 {offset}");
+            }
+            ty = next;
+        }
+        Ok(Some(addr))
+    }
+
+    /// The byte offset and type of one `PathComp` inside `ty`.
+    fn path_step(&mut self, ty: TypeId, comp: PathComp) -> Result<(u64, TypeId), BuildError> {
+        let ty = self.resolve_ty(ty);
+        let layout = self.layout(ty)?;
+        match (comp, self.program.decls.types.kind(ty).clone()) {
+            (PathComp::Field(i), TyKind::Adt(def, args)) => {
+                let off = layout.fields.get(i).map(|f| f.offset).ok_or_else(|| {
+                    BuildError::Internal("a static path field out of range".to_string())
+                })?;
+                let sig = self.program.decls.struct_sig(def).cloned().ok_or_else(|| {
+                    BuildError::Internal("a field path into a non-struct".to_string())
+                })?;
+                let subst = self.program.decls.subst_for(def, &args);
+                let fty = sig.fields.get(i).ok_or_else(|| {
+                    BuildError::Internal("a static path field out of range".to_string())
+                })?;
+                Ok((off, self.program.decls.instantiate(fty.ty, &subst)))
+            }
+            (PathComp::Field(i), TyKind::Tuple(ts)) => {
+                let off = layout.fields.get(i).map(|f| f.offset).ok_or_else(|| {
+                    BuildError::Internal("a static path tuple field out of range".to_string())
+                })?;
+                let next = ts.get(i).copied().ok_or_else(|| {
+                    BuildError::Internal("a static path tuple field out of range".to_string())
+                })?;
+                Ok((off, next))
+            }
+            (PathComp::Field(i), TyKind::Array(elem, _)) => {
+                let stride = self.layout(elem)?.size;
+                Ok((stride * i as u64, elem))
+            }
+            (PathComp::Payload(v), TyKind::Optional(inner)) => {
+                let off = match layout.kind {
+                    LayoutKind::Niche => 0,
+                    LayoutKind::Enum { payload_offset, .. } => payload_offset,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a payload path into an optional with no payload".to_string(),
+                        ));
+                    }
+                };
+                let _ = v;
+                Ok((off, inner))
+            }
+            (PathComp::Payload(v), TyKind::Result(ok, err)) => {
+                let off = match layout.kind {
+                    LayoutKind::Enum { payload_offset, .. } => payload_offset,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a payload path into a result with no payload".to_string(),
+                        ));
+                    }
+                };
+                Ok((off, if v == 0 { ok } else { err }))
+            }
+            (PathComp::Payload(v), TyKind::Adt(def, args)) => {
+                let sig = self.program.decls.enum_sig(def).cloned().ok_or_else(|| {
+                    BuildError::Internal("a payload path into a non-enum".to_string())
+                })?;
+                let subst = self.program.decls.subst_for(def, &args);
+                let variant = sig.variants.get(v).ok_or_else(|| {
+                    BuildError::Internal("a static path variant out of range".to_string())
+                })?;
+                let payload = variant.payload.ok_or_else(|| {
+                    BuildError::Internal(
+                        "a payload path into a variant with no payload".to_string(),
+                    )
+                })?;
+                let off = match layout.kind {
+                    LayoutKind::Enum { payload_offset, .. } => payload_offset,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a payload path into an enum with no payload".to_string(),
+                        ));
+                    }
+                };
+                Ok((off, self.program.decls.instantiate(payload, &subst)))
+            }
+            (comp, kind) => Err(BuildError::Internal(format!(
+                "a static path step {comp:?} on {kind:?}"
+            ))),
+        }
+    }
+
     /// The initializer of a value that contains a pointer, where a byte-array global
-    /// cannot carry the relocation. Only the forms a `static` may hold are handled;
-    /// the rest report a B2 gap.
+    /// cannot carry the relocation.
     fn pointer_initializer(
         &mut self,
         value: &SemValue,
@@ -4679,26 +6564,40 @@ impl<'p> Codegen<'p> {
             }
             (
                 SemValue::Borrow {
-                    alloc: ingot_sema::value::AllocRef::Static(def),
+                    alloc: AllocRef::Static(def),
                     path,
                 },
                 TyKind::Ref(..) | TyKind::RawPtr(..),
-            ) if path.is_empty() => Some(self.static_ref(*def)?),
-            (SemValue::Slice { source, lo, len }, TyKind::Slice(..)) => match source {
-                ingot_sema::value::SliceSource::Str(bytes) => {
-                    let at = (*lo as usize).min(bytes.len());
-                    let sym = self.add_string(&bytes[at..]);
-                    Some(format!("{{ ptr @{sym}, i64 {len} }}"))
-                }
-                ingot_sema::value::SliceSource::Alloc {
-                    alloc: ingot_sema::value::AllocRef::Static(def),
-                    path,
-                } if path.is_empty() && *lo == 0 => {
-                    let sym = self.static_ref(*def)?;
-                    Some(format!("{{ ptr {sym}, i64 {len} }}"))
-                }
-                _ => None,
-            },
+            ) => self.static_path_expr(*def, path)?,
+            (
+                SemValue::Slice {
+                    source: SliceSource::Str(bytes),
+                    lo,
+                    len,
+                },
+                TyKind::Slice(..),
+            ) => {
+                let at = (*lo as usize).min(bytes.len());
+                let sym = self.add_string(&bytes[at..]);
+                Some(format!("{{ ptr @{sym}, i64 {len} }}"))
+            }
+            (
+                SemValue::Slice {
+                    source:
+                        SliceSource::Alloc {
+                            alloc: AllocRef::Static(def),
+                            path,
+                        },
+                    lo,
+                    len,
+                },
+                TyKind::Slice(..),
+            ) if *lo == 0 => {
+                let p = self.static_path_expr(*def, path)?.ok_or_else(|| {
+                    BuildError::Internal("a slice source with no static address".to_string())
+                })?;
+                Some(format!("{{ ptr {p}, i64 {len} }}"))
+            }
             (
                 SemValue::Variant {
                     index: 0,
@@ -4720,6 +6619,500 @@ impl<'p> Codegen<'p> {
             ) => self.pointer_initializer(p, inner)?,
             _ => None,
         })
+    }
+
+    /// A typed LLVM initializer for a constant value, for a global that must carry a
+    /// relocation. Aggregates are built field by field; an enum payload that can hold
+    /// a pointer is an array of `i64` words with `ptrtoint` expressions.
+    fn const_init(&mut self, value: &SemValue, ty: TypeId) -> Result<Option<String>, BuildError> {
+        let ty = self.resolve_ty(ty);
+        let kind = self.program.decls.types.kind(ty).clone();
+        if let Some(p) = self.pointer_initializer(value, ty)? {
+            let ll = self.llvm_ty(ty)?;
+            return Ok(Some(format!("{ll} {p}")));
+        }
+        Ok(match kind {
+            TyKind::Int(i) => {
+                let ll = format!("i{}", i.bits());
+                match value {
+                    SemValue::Int { value, .. } => {
+                        Some(format!("{ll} {}", int_literal(&ll, *value)))
+                    }
+                    _ => Some(format!("{ll} 0")),
+                }
+            }
+            TyKind::Float(f) => {
+                let ll = if f == FloatTy::F32 { "float" } else { "double" };
+                match value {
+                    SemValue::Float { ty: vty, bits } => {
+                        let text = match self.program.decls.types.kind(*vty) {
+                            TyKind::Float(FloatTy::F32) => format_float_f32(f64::from(
+                                ingot_sema::consteval::f32_from_bits(*bits),
+                            )),
+                            _ => format_float_f64(f64::from_bits(*bits)),
+                        };
+                        Some(format!("{ll} {text}"))
+                    }
+                    _ => Some(format!("{ll} 0.0")),
+                }
+            }
+            TyKind::Bool => match value {
+                SemValue::Bool(b) => Some(format!("i1 {}", if *b { "true" } else { "false" })),
+                _ => Some("i1 false".to_string()),
+            },
+            TyKind::Void => Some("zeroinitializer".to_string()),
+            TyKind::Adt(def, args) => {
+                let item = self.program.decls.item(def).cloned();
+                let subst = self.program.decls.subst_for(def, &args);
+                match item {
+                    Some(ItemSig::Struct(sig)) => {
+                        let values = match value {
+                            SemValue::Aggregate { fields, .. } => fields,
+                            _ => return Ok(None),
+                        };
+                        let tys: Vec<TypeId> = sig
+                            .fields
+                            .iter()
+                            .map(|f| self.program.decls.instantiate(f.ty, &subst))
+                            .collect();
+                        let Some(init) = self.struct_init(values, &tys, ty)? else {
+                            return Ok(None);
+                        };
+                        Some(init)
+                    }
+                    Some(ItemSig::Enum(sig)) => {
+                        let variants: Vec<(i128, Option<TypeId>)> = sig
+                            .variants
+                            .iter()
+                            .map(|v| {
+                                (
+                                    v.tag,
+                                    v.payload.map(|p| self.program.decls.instantiate(p, &subst)),
+                                )
+                            })
+                            .collect();
+                        self.enum_init(value, ty, &variants)?
+                    }
+                    _ => None,
+                }
+            }
+            TyKind::Optional(inner) => {
+                let variants = vec![(0, None), (1, Some(inner))];
+                self.enum_init(value, ty, &variants)?
+            }
+            TyKind::Result(ok, err) => {
+                let variants = vec![(0, Some(ok)), (1, Some(err))];
+                self.enum_init(value, ty, &variants)?
+            }
+            TyKind::Tuple(ts) => {
+                let values = match value {
+                    SemValue::Aggregate { fields, .. } => fields,
+                    _ => return Ok(None),
+                };
+                self.struct_init(values, &ts, ty)?
+            }
+            TyKind::Array(elem, n) => {
+                let values = match value {
+                    SemValue::Aggregate { fields, .. } => fields,
+                    _ => return Ok(None),
+                };
+                let len = self
+                    .program
+                    .decls
+                    .types
+                    .const_arg_value(n)
+                    .and_then(|v| match v {
+                        ConstValue::Int { value, .. } if value >= 0 => Some(value as usize),
+                        _ => None,
+                    })
+                    .unwrap_or(values.len());
+                let elem_ll = self.llvm_ty(elem)?;
+                let mut parts = Vec::new();
+                for i in 0..len {
+                    let part = match values.get(i) {
+                        Some(v) => self.const_init(v, elem)?,
+                        None => Some(format!("{elem_ll} zeroinitializer")),
+                    };
+                    let Some(part) = part else {
+                        return Ok(None);
+                    };
+                    parts.push(part);
+                }
+                let ll = self.llvm_ty(ty)?;
+                if parts.is_empty() {
+                    Some(format!("{ll} zeroinitializer"))
+                } else {
+                    Some(format!("{ll} [{}]", parts.join(", ")))
+                }
+            }
+            TyKind::Closure(def, idx, args) => {
+                let values = match value {
+                    SemValue::Aggregate { fields, .. } => fields,
+                    _ => return Ok(None),
+                };
+                let Some(tys) = self.program.decls.closure_field_tys(def, idx, &args) else {
+                    return Ok(None);
+                };
+                self.struct_init(values, &tys, ty)?
+            }
+            _ => None,
+        })
+    }
+
+    /// A struct or tuple initializer, with the pads the LLVM type has.
+    fn struct_init(
+        &mut self,
+        values: &[SemValue],
+        field_tys: &[TypeId],
+        ty: TypeId,
+    ) -> Result<Option<String>, BuildError> {
+        let layout = self.layout(ty)?;
+        let mut parts = Vec::new();
+        let mut offset = 0u64;
+        for (i, fty) in field_tys.iter().enumerate() {
+            let Some(fl) = layout.fields.get(i) else {
+                return Ok(None);
+            };
+            if fl.offset > offset {
+                parts.push(format!("[{} x i8] zeroinitializer", fl.offset - offset));
+                offset = fl.offset;
+            }
+            let Some(v) = values.get(i) else {
+                return Ok(None);
+            };
+            let Some(part) = self.const_init(v, *fty)? else {
+                return Ok(None);
+            };
+            parts.push(part);
+            offset = offset.max(fl.offset.saturating_add(fl.size));
+        }
+        let tail = layout.size.saturating_sub(offset);
+        if tail > 0 {
+            parts.push(format!("[{tail} x i8] zeroinitializer"));
+        }
+        if let Some(a) = align_type(layout.align) {
+            parts.push(format!("{a} []"));
+        }
+        let ll = self.llvm_ty(ty)?;
+        if parts.is_empty() {
+            Ok(Some(format!("{ll} {{}}")))
+        } else {
+            Ok(Some(format!("{ll} {{ {} }}", parts.join(", "))))
+        }
+    }
+
+    /// An enum initializer. `variants` gives each tag and payload type.
+    fn enum_init(
+        &mut self,
+        value: &SemValue,
+        ty: TypeId,
+        variants: &[(i128, Option<TypeId>)],
+    ) -> Result<Option<String>, BuildError> {
+        let layout = self.layout(ty)?;
+        if matches!(layout.kind, LayoutKind::Niche) {
+            return self.pointer_initializer(value, ty);
+        }
+        let SemValue::Variant { index, payload, .. } = value else {
+            return Ok(None);
+        };
+        let (tag, payload_ty) = variants
+            .get(*index)
+            .copied()
+            .ok_or_else(|| BuildError::Internal("a constant variant out of range".to_string()))?;
+        let (tag_size, payload_offset) = match layout.kind {
+            LayoutKind::Enum {
+                tag_size,
+                payload_offset,
+            } => (tag_size, payload_offset),
+            _ => return Ok(None),
+        };
+        let tag_ll = int_for_size(tag_size);
+        let mut parts = vec![format!("{tag_ll} {}", int_literal(tag_ll, tag))];
+        let offset = tag_size;
+        if payload_offset > offset {
+            parts.push(format!(
+                "[{} x i8] zeroinitializer",
+                payload_offset - offset
+            ));
+        }
+        let area = layout.size.saturating_sub(payload_offset);
+        let mut has_pointer = false;
+        let mut max_align = 1u64;
+        for (_, p) in variants {
+            if let Some(p) = p {
+                has_pointer |= self.type_has_pointer(*p, &mut BTreeSet::new());
+                max_align = max_align.max(self.layout(*p)?.align);
+            }
+        }
+        if let Some(a) = align_type(max_align) {
+            parts.push(format!("{a} []"));
+        }
+        if has_pointer {
+            let area = area as usize;
+            let mut bytes = vec![0u8; area];
+            let mut relocs: Vec<(usize, String)> = Vec::new();
+            if let (Some(p), Some(pty)) = (payload, payload_ty) {
+                self.write_value_relocs(p, pty, &mut bytes, 0, &mut relocs)?;
+            }
+            let mut words = Vec::new();
+            for w in 0..(area / 8) {
+                let off = w * 8;
+                if let Some((_, expr)) = relocs.iter().find(|(o, _)| *o == off) {
+                    words.push(format!("i64 ptrtoint (ptr {expr} to i64)"));
+                } else {
+                    let mut v = 0u64;
+                    for b in 0..8 {
+                        v |= u64::from(bytes[off + b]) << (b * 8);
+                    }
+                    words.push(format!("i64 {v}"));
+                }
+            }
+            parts.push(format!("[{}]", words.join(", ")));
+        } else if area > 0 {
+            let mut bytes = vec![0u8; area as usize];
+            if let (Some(p), Some(pty)) = (payload, payload_ty) {
+                self.write_value(p, pty, &mut bytes, 0)?;
+            }
+            parts.push(format!("[{} x i8] c{}", area, llvm_string(&bytes)));
+        } else {
+            parts.push("[0 x i8] []".to_string());
+        }
+        let ll = self.llvm_ty(ty)?;
+        Ok(Some(format!("{ll} {{ {} }}", parts.join(", "))))
+    }
+
+    /// Emit the private constant array behind each `&dyn` value.
+    fn emit_tables(&mut self) -> Result<(), BuildError> {
+        let mut keys: Vec<InstanceKey> = self
+            .symbols
+            .keys()
+            .filter(|k| {
+                matches!(
+                    k.body,
+                    InstanceBody::MethodTable { .. } | InstanceBody::DynFnTable { .. }
+                )
+            })
+            .cloned()
+            .collect();
+        keys.sort_by_key(|k| self.symbols.get(k).cloned().unwrap_or_default());
+        for key in keys {
+            self.emit_table(&key)?;
+        }
+        Ok(())
+    }
+
+    fn emit_table(&mut self, key: &InstanceKey) -> Result<(), BuildError> {
+        let table =
+            self.symbols.get(key).cloned().ok_or_else(|| {
+                BuildError::Internal("a dynamic table without a symbol".to_string())
+            })?;
+        let entries: Vec<String> = match &key.body {
+            InstanceBody::MethodTable {
+                ty,
+                interface,
+                args,
+            } => {
+                let methods = method_table_methods(
+                    self.program.sema,
+                    &mut *self.program.decls,
+                    *ty,
+                    *interface,
+                    args,
+                );
+                let mut out = Vec::new();
+                for (_, method) in methods {
+                    let symbol = self.symbols.get(&method).cloned().ok_or_else(|| {
+                        BuildError::Internal("a method table entry was not discovered".to_string())
+                    })?;
+                    out.push(format!("ptr {}", global_ref(&symbol)));
+                }
+                out
+            }
+            InstanceBody::DynFnTable { ty, .. } => {
+                let entry = if let Some(closure) =
+                    closure_instance_key(self.program.sema, self.program.decls, *ty)
+                {
+                    let symbol = self.symbols.get(&closure).cloned().ok_or_else(|| {
+                        BuildError::Internal("a closure table entry was not discovered".to_string())
+                    })?;
+                    format!("ptr {}", global_ref(&symbol))
+                } else {
+                    let TyKind::FnPtr(sig) = self.program.decls.types.kind(*ty).clone() else {
+                        return self.ni("a dynamic function table of this type (B2)");
+                    };
+                    if sig.ext {
+                        return self.ni("a dynamic function table of an `extern fn` (B2)");
+                    }
+                    let shim = format!("{table}.call");
+                    self.emit_fnptr_shim(&shim, &sig)?;
+                    format!("ptr {}", global_ref(&shim))
+                };
+                vec![entry]
+            }
+            _ => return Ok(()),
+        };
+        let text = format!(
+            "{} = private constant [{} x ptr] [{}]",
+            global_ref(&table),
+            entries.len(),
+            entries.join(", ")
+        );
+        self.tables.insert(table, text);
+        Ok(())
+    }
+
+    /// The one-entry table shim for a `fn` pointer behind `&dyn Fn`: the data pointer
+    /// points at a stored `fn` pointer, so the shim loads it and forwards its own
+    /// ABI arguments unchanged.
+    fn emit_fnptr_shim(
+        &mut self,
+        symbol: &str,
+        sig: &ingot_sema::ty::FnPtrSig,
+    ) -> Result<(), BuildError> {
+        let ret_abi = self.ret_abi_for(sig.ret, sig.error)?;
+        let ret_ll = ret_abi.ret_ll();
+        let abi_params = self.abi_params_for(&sig.params)?;
+        let mut params = vec!["ptr %data".to_string()];
+        for (i, ll) in abi_params.iter().enumerate() {
+            params.push(format!("{ll} %arg{}", i + 1));
+        }
+        let has_res = ret_abi.result().is_some_and(|r| r.ptr);
+        if has_res {
+            params.push("ptr %res".to_string());
+        }
+        let mut args: Vec<String> = abi_params
+            .iter()
+            .enumerate()
+            .map(|(i, ll)| format!("{ll} %arg{}", i + 1))
+            .collect();
+        if has_res {
+            args.push("ptr %res".to_string());
+        }
+        let mut out = String::new();
+        out.push_str(&format!(
+            "define internal {ret_ll} {} ({}) nounwind #0 {{\nentry:\n",
+            global_ref(symbol),
+            params.join(", ")
+        ));
+        out.push_str("  %fp = load ptr, ptr %data\n");
+        if ret_ll == "void" {
+            out.push_str(&format!("  call void %fp({})\n", args.join(", ")));
+            out.push_str("  ret void\n");
+        } else {
+            out.push_str(&format!(
+                "  %r = call {ret_ll} %fp({})\n  ret {ret_ll} %r\n",
+                args.join(", ")
+            ));
+        }
+        out.push_str("}\n");
+        self.functions.push(out);
+        Ok(())
+    }
+
+    /// Emit the generated built-in `Eq`/`Ord` method for each requested type.
+    fn emit_builtins(&mut self) -> Result<(), BuildError> {
+        loop {
+            let next = self
+                .builtin_requests
+                .iter()
+                .find(|k| !self.builtin_symbols.contains_key(*k))
+                .copied();
+            let Some((interface, ty)) = next else {
+                break;
+            };
+            let isig = self
+                .program
+                .decls
+                .interface_sig(interface)
+                .cloned()
+                .ok_or_else(|| BuildError::Internal("an unknown built-in interface".to_string()))?;
+            let name = if Some(interface) == self.program.decls.builtins.eq {
+                "eq"
+            } else {
+                "cmp"
+            };
+            let method = isig
+                .methods
+                .iter()
+                .copied()
+                .find(|m| self.program.sema.def(*m).name == name)
+                .ok_or_else(|| BuildError::Internal(format!("the built-in `{name}` is missing")))?;
+            let mut subst = Subst::new();
+            subst.insert(isig.self_def, ingot_sema::ty::GenericArg::Ty(ty));
+            let key = InstanceKey {
+                owner: method,
+                body: InstanceBody::Item,
+                subst,
+            };
+            let symbol = mangle_key(self.program.decls, self.program.sema, &key);
+            self.builtin_symbols.insert((interface, ty), symbol.clone());
+            self.emit_builtin_body(interface, ty, &symbol, name)?;
+        }
+        Ok(())
+    }
+
+    fn emit_builtin_body(
+        &mut self,
+        interface: DefId,
+        ty: TypeId,
+        symbol: &str,
+        name: &str,
+    ) -> Result<(), BuildError> {
+        let isig = self
+            .program
+            .decls
+            .interface_sig(interface)
+            .cloned()
+            .ok_or_else(|| BuildError::Internal("an unknown built-in interface".to_string()))?;
+        let method = isig
+            .methods
+            .iter()
+            .copied()
+            .find(|m| self.program.sema.def(*m).name == name)
+            .ok_or_else(|| BuildError::Internal("a built-in method is missing".to_string()))?;
+        let ret = self
+            .program
+            .decls
+            .fn_sig(method)
+            .map(|s| s.ret)
+            .ok_or_else(|| {
+                BuildError::Internal("a built-in method with no signature".to_string())
+            })?;
+        let ret = self
+            .program
+            .decls
+            .instantiate(ret, &self.program.decls.subst_for(interface, &[]));
+        let ret_ll = if name == "eq" {
+            "i1".to_string()
+        } else {
+            self.tag_only_enum(ret).ok_or_else(|| {
+                BuildError::Internal("`Ord.cmp` does not return `Ordering`".to_string())
+            })?
+        };
+        let ordering = self.ordering_tags()?;
+        BuiltinGen::new(self, ty, interface, name, ret_ll, ordering).run(symbol)
+    }
+
+    fn ordering_tags(&mut self) -> Result<(i128, i128, i128), BuildError> {
+        let Some(def) = self.program.decls.builtins.ordering else {
+            return Err(BuildError::Internal(
+                "the builtin `Ordering` is missing".to_string(),
+            ));
+        };
+        let sig = self
+            .program
+            .decls
+            .enum_sig(def)
+            .cloned()
+            .ok_or_else(|| BuildError::Internal("`Ordering` has no signature".to_string()))?;
+        let tag = |name: &str| {
+            sig.variants
+                .iter()
+                .find(|v| v.name == name)
+                .map(|v| v.tag)
+                .ok_or_else(|| BuildError::Internal(format!("`Ordering.{name}` is missing")))
+        };
+        Ok((tag("less")?, tag("equal")?, tag("greater")?))
     }
 
     /// A private global for a `const` or `static` item, initialized from the
@@ -4749,14 +7142,14 @@ impl<'p> Codegen<'p> {
         let align = align.unwrap_or(layout.align).max(1);
         if Self::value_has_pointer(&value) {
             let ll = self.llvm_ty(ty)?;
-            let init = self.pointer_initializer(&value, ty)?.ok_or_else(|| {
+            let init = self.const_init(&value, ty)?.ok_or_else(|| {
                 BuildError::NotImplemented(
                     "a static of a pointer-containing aggregate (B2)".to_string(),
                 )
             })?;
-            self.globals.push(format!(
-                "@{sym} = private constant {ll} {init}, align {align}"
-            ));
+            let _ = ll;
+            self.globals
+                .push(format!("@{sym} = private constant {init}, align {align}"));
             self.item_globals.insert(def, sym.clone());
             return Ok(sym);
         }

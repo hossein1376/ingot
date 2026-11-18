@@ -256,6 +256,15 @@ pub struct StaticSig {
     pub span: Span,
 }
 
+/// The capture record of a closure type: the owner's generic parameters (in the
+/// order `TyKind::Closure` stores its arguments), and the type of each capture in
+/// capture-list order. The layout is a struct with these fields.
+#[derive(Clone, Debug)]
+pub struct ClosureSig {
+    pub params: Vec<DefId>,
+    pub fields: Vec<TypeId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct AliasSig {
     pub def: DefId,
@@ -557,6 +566,9 @@ pub struct Declarations {
     pub generic_types: Vec<ConcreteType>,
     /// For each associated type of an interface: the interface and the name.
     pub assoc_info: BTreeMap<DefId, (DefId, String)>,
+    /// The capture record of each closure expression: its owner's parameters and its
+    /// field types, before substitution. Keyed by the owner and `ExprId.0`.
+    pub closure_sigs: BTreeMap<(DefId, u32), ClosureSig>,
     /// The definitions behind the builtin names `Eq`, `Ord`, ... (section 4.4).
     pub builtins: BuiltinNames,
     /// Structs and enums that contain themselves by value (E0516).
@@ -590,6 +602,7 @@ impl Declarations {
             concrete_types: Vec::new(),
             generic_types: Vec::new(),
             assoc_info: BTreeMap::new(),
+            closure_sigs: BTreeMap::new(),
             builtins: BuiltinNames::default(),
             infinite: BTreeSet::new(),
             diagnostics: Vec::new(),
@@ -657,6 +670,27 @@ impl Declarations {
             s.insert(g.def, a.clone());
         }
         s
+    }
+
+    /// The field types of a closure's capture record, with its owner's arguments
+    /// applied. `None` when the closure expression is unknown.
+    pub fn closure_field_tys(
+        &mut self,
+        owner: DefId,
+        index: u32,
+        args: &[GenericArg],
+    ) -> Option<Vec<TypeId>> {
+        let sig = self.closure_sigs.get(&(owner, index))?.clone();
+        let mut subst = Subst::new();
+        for (p, a) in sig.params.iter().zip(args) {
+            subst.insert(*p, a.clone());
+        }
+        Some(
+            sig.fields
+                .iter()
+                .map(|t| self.instantiate(*t, &subst))
+                .collect(),
+        )
     }
 }
 

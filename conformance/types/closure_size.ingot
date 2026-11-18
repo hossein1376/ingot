@@ -1,0 +1,29 @@
+//! expect: run
+//! section: 5.6, 25
+
+import std.Env;
+
+fn size_of[T: Discard](x: &T) -> i64 {
+    return @sizeof(T);
+}
+
+fn align_of[T: Discard](x: &T) -> i64 {
+    return @alignof(T);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let empty = fn [](x: i64) -> i64 { return x; };
+    @assert(size_of(&empty) == 0);
+    @assert(align_of(&empty) == 1);
+
+    let k = 2;
+    let one = fn [k](x: i64) -> i64 { return x + k; };
+    @assert(size_of(&one) == 8);
+    @assert(align_of(&one) == 8);
+
+    let p = &k;
+    let two = fn [k, &p](x: i64) -> i64 { return x + k + p.*.*; };
+    @assert(size_of(&two) == 16);
+    @assert(align_of(&two) == 8);
+    return 0;
+}

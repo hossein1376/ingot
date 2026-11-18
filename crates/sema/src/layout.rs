@@ -160,9 +160,28 @@ impl Declarations {
                 }
             }
             TyKind::Param(_) | TyKind::Projection(..) => Err(LayoutError::Params),
-            TyKind::Closure(..) => Err(LayoutError::Unspecified(
-                "the layout of a closure (the specification gives none)".to_string(),
-            )),
+            TyKind::Closure(def, index, args) => {
+                // A closure is its capture record: a struct of the captures in
+                // capture-list order (01 §5.6, 04 §25). Phase 7 recorded the field
+                // types and the owner's parameters for each closure expression.
+                let Some(sig) = self.closure_sigs.get(&(def, index)).cloned() else {
+                    return Err(LayoutError::Unspecified(
+                        "the layout of a closure with no recorded captures".to_string(),
+                    ));
+                };
+                let mut subst = Subst::new();
+                for (p, a) in sig.params.iter().zip(args) {
+                    subst.insert(*p, a.clone());
+                }
+                let mut fields = Vec::new();
+                for (i, t) in sig.fields.iter().enumerate() {
+                    let t = self.types.subst(*t, &subst);
+                    let t = self.fold_layout_exprs(t);
+                    let l = self.layout_inner(t, stack)?;
+                    fields.push((i.to_string(), l, 1u64));
+                }
+                self.struct_layout(fields, 1)
+            }
             TyKind::Poison => Err(LayoutError::Poison),
         }
     }

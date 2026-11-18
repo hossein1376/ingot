@@ -1,0 +1,34 @@
+//! expect: run
+//! section: 5.6
+
+import std.Env;
+
+fn double(x: i64) -> i64 {
+    return x * 2;
+}
+
+fn call(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+fn call_mut(f: &mut dyn FnMut(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let k = 3;
+    let by_closure = fn [k](x: i64) -> i64 { return x * k; };
+    @assert(call(&by_closure, 4) == 12);
+    let p: fn(i64) -> i64 = double;
+    @assert(call(&p, 5) == 10);
+    @assert(call(&double, 6) == 12);
+    var total: i64 = 0;
+    var by_mut = fn [&mut total](x: i64) -> i64 {
+        total.* += x;
+        return total.*;
+    };
+    @assert(call_mut(&mut by_mut, 4) == 4);
+    @assert(call_mut(&mut by_mut, 5) == 9);
+    @assert(total == 9);
+    return 0;
+}

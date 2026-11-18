@@ -1,0 +1,17 @@
+//! expect: run
+//! section: 4.4
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+    let a: [4096]u8 = @zero;
+    let b: [4096]u8 = @zero;
+    var c: [4096]u8 = @zero;
+    c[4095] = 1;
+    @assert(a.eq(&b));
+    @assert(a.cmp(&b) == .equal);
+    @assert(!a.eq(&c));
+    @assert(a.cmp(&c) == .less);
+    @assert(c.cmp(&a) == .greater);
+    return 0;
+}

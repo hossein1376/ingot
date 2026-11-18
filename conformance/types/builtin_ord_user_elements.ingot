@@ -1,0 +1,67 @@
+//! expect: run
+//! section: 4.4, 8
+
+import std.Env;
+
+copy struct Pt { x: i64, y: i64 }
+
+impl Eq for Pt {
+    fn eq(self: &Pt, other: &Pt) -> bool {
+        return self.x == other.x && self.y == other.y;
+    }
+}
+
+impl Ord for Pt {
+    fn cmp(self: &Pt, other: &Pt) -> Ordering {
+        if self.x < other.x { return .less; }
+        if self.x > other.x { return .greater; }
+        if self.y < other.y { return .less; }
+        if self.y > other.y { return .greater; }
+        return .equal;
+    }
+}
+
+fn rank[T: Ord + Copy + Discard](a: T, b: T) -> i64 {
+    match a.cmp(&b) {
+        .less => { return 0; }
+        .equal => { return 1; }
+        .greater => { return 2; }
+    }
+}
+
+fn rank_pair[T: Ord + Copy + Discard](a: (T, i64), b: (T, i64)) -> i64 {
+    return rank(a, b);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let p = Pt.{ x: 1, y: 2 };
+    let q = Pt.{ x: 2, y: 0 };
+    let eq = Pt.{ x: 1, y: 2 };
+
+    let ta = [2]Pt.{ p, p };
+    let tb = [2]Pt.{ q, q };
+    @assert(rank(ta, tb) == 0);
+    @assert(rank(ta, ta) == 1);
+
+    let sa: []Pt = &ta[0..2];
+    let sb: []Pt = &tb[0..2];
+    @assert(rank(sa, sb) == 0);
+    @assert(rank(sa, sa) == 1);
+
+    let oa: ?Pt = .some(p);
+    let ob: ?Pt = .some(q);
+    let oe: ?Pt = .some(eq);
+    let on: ?Pt = .none;
+    @assert(rank(oa, ob) == 0);
+    @assert(rank(oa, oe) == 1);
+    @assert(rank(on, oa) == 0);
+
+    @assert(rank_pair((p, 1), (q, 1)) == 0);
+    @assert(rank_pair((p, 1), (eq, 1)) == 1);
+    @assert(rank_pair((p, 9), (q, 0)) == 0);
+    @assert(rank_pair((q, 0), (p, 9)) == 2);
+    @assert(rank_pair((1, 2), (1, 3)) == 0);
+    @assert(rank_pair((1, 9), (2, 0)) == 0);
+    @assert(rank_pair((2, 0), (1, 9)) == 2);
+    return 0;
+}

@@ -1,0 +1,40 @@
+//! expect: run
+//! section: 4.4
+
+import std.Env;
+
+interface Base {
+    fn base(self: &Self) -> i64;
+}
+
+interface Named: Base {
+    fn name(self: &Self) -> i64;
+}
+
+interface Shape: Named {
+    fn area(self: &Self) -> i64;
+}
+
+copy struct Sq { n: i64 }
+
+impl Base for Sq {
+    fn base(self: &Sq) -> i64 { return 1; }
+}
+
+impl Named for Sq {
+    fn name(self: &Sq) -> i64 { return 7; }
+}
+
+impl Shape for Sq {
+    fn area(self: &Sq) -> i64 { return self.n * self.n; }
+}
+
+fn all(x: &dyn Shape) -> i64 {
+    return x.area() + x.name() + x.base();
+}
+
+pub fn main(env: &Env) -> u8 {
+    let s = Sq.{ n: 3 };
+    @assert(all(&s) == 17);
+    return 0;
+}

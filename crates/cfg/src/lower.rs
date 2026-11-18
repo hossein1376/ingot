@@ -337,6 +337,10 @@ struct Lowerer<'a, 'b> {
     /// Set while lowering a `let`: bindings record the statement span so an E1003
     /// edit can be inserted after the whole declaration, not after its first line.
     let_span: Option<Span>,
+    /// The type an expression has before its `&dyn` coercion. Phase 7 rewrites the
+    /// expression's type to the target, while the value being coerced is still the
+    /// borrow of the concrete type.
+    expr_ty_override: Option<(ExprId, TypeId)>,
 }
 
 impl<'a, 'b> Lowerer<'a, 'b> {
@@ -360,6 +364,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             failed: None,
             stmt_span: Span::default(),
             let_span: None,
+            expr_ty_override: None,
         }
     }
 
@@ -590,6 +595,11 @@ impl<'a, 'b> Lowerer<'a, 'b> {
 
 impl<'a, 'b> Lowerer<'a, 'b> {
     fn ty(&self, e: ExprId) -> TypeId {
+        if let Some((id, ty)) = self.expr_ty_override
+            && id == e
+        {
+            return ty;
+        }
         self.body
             .expr(e)
             .map(|i| i.ty)
@@ -1767,7 +1777,15 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         if !self.reachable {
             return None;
         }
-        let op = match self.lower_expr_value(e) {
+        // A `&T` that becomes `&dyn I` keeps the type of the borrow while its value
+        // is lowered; only `apply_coercions` builds the fat value.
+        let saved = self.expr_ty_override;
+        if let Some(ty) = self.coerced_source_ty(e) {
+            self.expr_ty_override = Some((e, ty));
+        }
+        let lowered = self.lower_expr_value(e);
+        self.expr_ty_override = saved;
+        let op = match lowered {
             Some(op) => op,
             None => {
                 // A reachable expression that yields no value is a lowering gap,
@@ -1780,6 +1798,21 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             }
         };
         self.apply_coercions(e, op)
+    }
+
+    /// The borrow type an expression had before phase 7 rewrote it to `&dyn`.
+    fn coerced_source_ty(&mut self, e: ExprId) -> Option<TypeId> {
+        let info = self.body.expr(e)?;
+        let target = match self.kind(info.ty) {
+            TyKind::Dyn(m, ..) | TyKind::DynFn(m, ..) => m,
+            _ => return None,
+        };
+        let inner = info
+            .coerce
+            .as_ref()
+            .map(|c| c.self_ty)
+            .or_else(|| info.fn_dyn.as_ref().map(|f| f.self_ty))?;
+        Some(self.ref_ty(target, inner))
     }
 
     fn apply_coercions(&mut self, e: ExprId, op: Operand) -> Option<Operand> {
