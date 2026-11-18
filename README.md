@@ -73,26 +73,27 @@ pub fn main(env: &Env) -> void ! AppErr {
 ## Status
 
 **Ingot builds and runs small programs on the M4 Pro.** The bootstrap compiler, written
-in Rust, checks programs for all three targets, and compiles programs without generics to
-native code for `aarch64-macos-m4` through LLVM 22.
+in Rust, checks programs for all three targets, and compiles them to native code for
+`aarch64-macos-m4` through LLVM 22: generics, closures, `&dyn`, errors and `try`
+included. Tasks, vectors and most of the standard library are still missing.
 
 | Works today | Not yet |
 |---|---|
-| Lexing, parsing and error recovery | Generic instances, closures, `&dyn`, error returns and `try` in generated code |
+| Lexing, parsing and error recovery | Tasks, `spawn`, `par for` and `select` at run time (the scheduler) |
 | Names, types, generics, interfaces and constant evaluation | `ingot test`, and byte-identical executables |
 | Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | Vectors, masks and kernels in generated code |
 | Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | The Linux and Windows targets |
-| Check removal, and every cost item `ingot cost` reports: checks, allocations, indirect calls, copies, spawns, locks, park points | The task scheduler, so `spawn` and `par for` at run time |
+| Check removal, and every cost item `ingot cost` reports: checks, allocations, indirect calls, copies, spawns, locks, park points | Atomics, `Cell` and locks in generated code |
 | Instance discovery (phase 11a): every generic instance, its depth and its symbol name | Dependencies between packages, and the report tools (`api`, `audit`, `layout`) |
-| `ingot build` and `ingot run` on `aarch64-macos-m4`: scalars, structs, enums, optionals, arrays and slices, calls, and every check with its trap line | Most of the standard library |
+| `ingot build` and `ingot run` on `aarch64-macos-m4`: generic instances, closures, `&dyn`, `T ! E` with `try`/`catch`, constants and statics, and every check with its trap line | Most of the standard library, `@format` and `Hash` |
 | `check`, `fix`, `query`, `serve` and an LSP server for editors | |
 
 The example above does not compile yet either: it needs `std.fs`, `std.simd` and the
 arena of `std.mem`, which are still being designed in [docs/std/](docs/std/). `Atomic`
 and `Cell` in `std.sync` are the first standard library types with real bodies. Most of the
 [conformance suite](conformance/README.md) passes, its `run` and `trap` tests under both
-build pipelines; the tests that still fail need generic instances, error returns, vectors
-or the scheduler. [COMPILER.md](COMPILER.md) lists the build steps and which are done.
+build pipelines; the tests that still fail need the scheduler, atomics, vectors or
+`@format`. [COMPILER.md](COMPILER.md) lists the build steps and which are done.
 
 ## Trying it
 

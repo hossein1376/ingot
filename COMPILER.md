@@ -515,7 +515,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | P3 | relay | The cost items that need no back end: `indirect_call`, `task_spawn`, `copy`, `alloc` | done (97c0be1, 690c570) |
 | P4 | relay | Packages and the report tools that need no back end: loading `[deps]` and workspaces (§33.2, E1708–E1711, `ingot deps`), `ingot api` with `--pkg`, `audit`, `layout`, `targets`, `explain`, `fmt` (tools.md §2, §4) | two-package conformance tests (the cross-package half of `pub(pkg)`); a golden output per command |
 | B1 | relay | `ingot-codegen`: 11b, layouts per instance, mangling, IR for scalars, control flow, calls, aggregates, checks and trap sites; `rt` core in Ingot (entry, `trap`, `write`, `exit`); linking on `aarch64-macos-m4` | done (fe9f223) |
-| B2 | — | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | the `errors` tests, `unsafe/raw_round_trip`, three programs of real size (review 2 Q6) |
+| B2 | relay | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | done (352a45e, 917c624) |
 | B3 | — | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | the gate |
 | R1 | — | `std.mem` (`Heap`, `Vm`, `Arena`, `FixedBuf`, `Box`), `list`, `str` | `test` blocks in std; a `run` test with an arena and a list |
 | B4, B5 | — | Vectors, masks and the §26 builtins; the kernel IR, `exec.seq`, `exec.simd` | `simd/*`, `kernels/saxpy` |
