@@ -91,7 +91,7 @@ loop_stmt    = "while" cond block
              | "loop" block
              | [ "par" [ "(" "grain" ":" expr ")" ] ] "for" IDENT [ "," IDENT ] "in" expr [ ( ".." | "..=" ) expr [ "step" expr ] ] block ;
 match_stmt   = "match" expr "{" { arm } "}" ;
-arm          = ( pattern { "|" pattern } [ "if" expr ] | "else" ) "=>" ( block | expr "," ) ;
+arm          = ( pattern { "|" pattern } [ "if" expr ] | "else" ) "=>" ( block | expr [ "," ] ) ;
 
 pattern      = "_" | IDENT | literal | literal ( ".." | "..=" ) literal
              | [ path_type ] "." IDENT [ "(" pattern ")" ]
@@ -171,3 +171,6 @@ literal      = INT | FLOAT | STRING | CSTRING | "true" | "false" ;
   use `..` only.
 * **Trailing commas** are allowed wherever a comma-separated list is closed by a
   bracket on a later line, and `ingot fmt` adds them.
+* **Match arms.** An arm whose body is an expression ends with `,`, which may be left
+  off only on the last arm, before the closing `}`. A missing `,` between two arms is
+  E0201. An arm whose body is a block needs none.

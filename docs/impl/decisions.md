@@ -322,6 +322,10 @@ code alone.
   2026-11-17, asked in B1; `docs/std/rt.md` §1). It is sized for `argc`, filled once, never
   freed; `start` still uses no allocator. *Rejected:* a fixed static table (an arbitrary
   limit) and an empty `args` until B3 (a value that is not true).
+* **The `,` after an expression arm may be omitted only before the closing `}`**
+  (*user*, 2026-11-18; grammar.md). As every other comma list. *Rejected:* always
+  required (`match c { true => o, false => s }` reads naturally), and optional
+  everywhere (`.a => 1 .b => 2`, which the parser had accepted).
 * **`&dyn Fn` converts as `&dyn I` does** (*user*, 2026-11-18, found in P2, settled before
   B2; 01 §5.6). A `&T` becomes `&dyn Fn(A) -> R` when `T: Fn(A) -> R`, and a `&mut T`
   becomes `&mut dyn FnMut(A) -> R` when `T: FnMut(A) -> R`. Closures, functions and `fn`
