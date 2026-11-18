@@ -1,0 +1,11 @@
+//! expect: reject
+//! section: 7.2
+
+enum E { a, b }
+
+fn f(e: E) -> i64 {
+    match e {
+        .a => 1
+        .b => 2, //~ E0201
+    }
+}

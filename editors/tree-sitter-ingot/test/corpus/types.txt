@@ -1,0 +1,294 @@
+==================
+types
+==================
+
+import std.mem.Arena;
+
+struct Ring[T, const n: i64] { items: [n]T }
+
+type Wide = [n + 1]u8;
+type Applied = Ring[u8, 4];
+type Names = Ring[u8, max_depth];
+type Block = Ring[u8, { 2 * 4 }];
+type Nested = Ring[u8, -1];
+
+fn types(
+    a: &i64,
+    b: &mut i64,
+    c: &dyn Named,
+    d: []u8,
+    e: []mut u8,
+    f: [4]u8,
+    g: *mut u8,
+    h: ?i64,
+    i: (i64, bool),
+    j: fn(i64) -> i64,
+    k: extern fn(i64) -> i64 ! Error,
+    l: std.mem.Arena,
+    m: Ring[u8, 4],
+    n: u8x16,
+    o: boolx8,
+) -> std.mem.Arena.Ticket {
+    return 0;
+}
+
+fn bounds[F: Fn, G: FnMut(i64) -> i64, H: FnOnce() -> i64 ! Error](f: F, g: G, h: H) {
+}
+
+fn applied_bound[T: Ring[u8, 4,]](x: T) {
+}
+
+fn trailing[T,](x: (i64, bool,)) -> Ring[u8, 4,] {
+    return x.0;
+}
+
+---
+
+(module
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)
+      (type_identifier)))
+  (struct_item
+    (type_identifier)
+    (generic_parameters
+      (type_parameter
+        (type_identifier))
+      (const_parameter
+        (identifier)
+        (scalar_type)))
+    (field_declaration
+      (identifier)
+      (array_type
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier))))))
+  (type_item
+    (type_identifier)
+    (array_type
+      (binary_expression
+        (identifier)
+        (operator)
+        (literal
+          (integer)))
+      (scalar_type)))
+  (type_item
+    (type_identifier)
+    (generic_type
+      (path_base
+        (type_identifier))
+      (type_arguments
+        (generic_argument
+          (scalar_type))
+        (generic_argument
+          (integer)))))
+  (type_item
+    (type_identifier)
+    (generic_type
+      (path_base
+        (type_identifier))
+      (type_arguments
+        (generic_argument
+          (scalar_type))
+        (generic_argument
+          (identifier)))))
+  (type_item
+    (type_identifier)
+    (generic_type
+      (path_base
+        (type_identifier))
+      (type_arguments
+        (generic_argument
+          (scalar_type))
+        (generic_argument
+          (binary_expression
+            (literal
+              (integer))
+            (operator)
+            (literal
+              (integer)))))))
+  (type_item
+    (type_identifier)
+    (generic_type
+      (path_base
+        (type_identifier))
+      (type_arguments
+        (generic_argument
+          (scalar_type))
+        (generic_argument
+          (operator)
+          (integer)))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (reference_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (reference_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (reference_type
+          (dyn_type
+            (path_type
+              (path_base
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (slice_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (slice_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (array_type
+          (literal
+            (integer))
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (pointer_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (optional_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (tuple_type
+          (scalar_type)
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (function_type
+          (scalar_type)
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (function_type
+          (scalar_type)
+          (scalar_type)
+          (path_type
+            (path_base
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (module_name)
+            (module_name)
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (generic_type
+          (path_base
+            (type_identifier))
+          (type_arguments
+            (generic_argument
+              (scalar_type))
+            (generic_argument
+              (integer)))))
+      (parameter
+        (identifier)
+        (vector_type))
+      (parameter
+        (identifier)
+        (vector_type)))
+    (result
+      (path_type
+        (path_base
+          (module_name)
+          (module_name)
+          (type_identifier)
+          (type_identifier))))
+    (block
+      (return_statement
+        (literal
+          (integer)))))
+  (function_item
+    (identifier)
+    (generic_parameters
+      (type_parameter
+        (type_identifier)
+        (function_bound))
+      (type_parameter
+        (type_identifier)
+        (function_bound
+          (scalar_type)
+          (scalar_type)))
+      (type_parameter
+        (type_identifier)
+        (function_bound
+          (scalar_type)
+          (path_type
+            (path_base
+              (type_identifier))))))
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (block))
+  (function_item
+    (identifier)
+    (generic_parameters
+      (type_parameter
+        (type_identifier)
+        (generic_type
+          (path_base
+            (type_identifier))
+          (type_arguments
+            (generic_argument
+              (scalar_type))
+            (generic_argument
+              (integer))))))
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (block))
+  (function_item
+    (identifier)
+    (generic_parameters
+      (type_parameter
+        (type_identifier)))
+    (parameters
+      (parameter
+        (identifier)
+        (tuple_type
+          (scalar_type)
+          (scalar_type))))
+    (result
+      (generic_type
+        (path_base
+          (type_identifier))
+        (type_arguments
+          (generic_argument
+            (scalar_type))
+          (generic_argument
+            (integer)))))
+    (block
+      (return_statement
+        (field_expression
+          (identifier)
+          (integer))))))

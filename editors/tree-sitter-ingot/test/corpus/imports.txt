@@ -1,0 +1,50 @@
+==================
+imports
+==================
+
+import std;
+import std.mem;
+import std.mem.Arena;
+import std.io.Reader as In;
+import app.net.http;
+
+fn f(a: std.mem.Arena) {
+}
+
+---
+
+(module
+  (import_declaration
+    (import_path
+      (identifier)))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)
+      (type_identifier)))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)
+      (type_identifier)
+      (type_identifier)))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)
+      (identifier)))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (module_name)
+            (module_name)
+            (type_identifier)))))
+    (block)))

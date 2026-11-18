@@ -1,0 +1,490 @@
+import std.mem.Arena;
+// <- @keyword
+//     ^ @namespace
+//        ^ @punctuation.delimiter
+//         ^ @namespace
+//            ^ @punctuation.delimiter
+//             ^ @namespace
+//                  ^ @punctuation.delimiter
+
+const limit: i64 = 1;
+// <- @keyword
+//    ^ @constant
+//         ^ @punctuation.delimiter
+//           ^ @type.builtin
+//               ^ @operator
+//                 ^ @number
+//                  ^ @punctuation.delimiter
+static count: i64 = 0;
+// <- @keyword
+//     ^ @constant
+//          ^ @punctuation.delimiter
+//            ^ @type.builtin
+//                ^ @operator
+//                  ^ @number
+//                   ^ @punctuation.delimiter
+
+struct Config {
+// <- @keyword
+//     ^ @type
+//            ^ @punctuation.bracket
+    pub name: i64,
+//  ^ @keyword
+//      ^ @property
+//          ^ @punctuation.delimiter
+//            ^ @type.builtin
+//               ^ @punctuation.delimiter
+}
+// <- @punctuation.bracket
+
+enum Colour {
+// <- @keyword
+//   ^ @type
+//          ^ @punctuation.bracket
+    red,
+//  ^ @variant
+//     ^ @punctuation.delimiter
+}
+// <- @punctuation.bracket
+
+interface Named {
+// <- @keyword
+//        ^ @type
+//              ^ @punctuation.bracket
+    fn name(self: &Self) -> i64;
+//  ^ @keyword
+//     ^ @function
+//         ^ @punctuation.bracket
+//          ^ @variable.special
+//              ^ @punctuation.delimiter
+//                ^ @operator
+//                 ^ @type
+//                     ^ @punctuation.bracket
+//                       ^ @operator
+//                          ^ @type.builtin
+//                             ^ @punctuation.delimiter
+}
+// <- @punctuation.bracket
+
+fn generic[T: Fn](x: T) -> T { return x; }
+// <- @keyword
+// ^ @function
+//        ^ @punctuation.bracket
+//         ^ @type
+//          ^ @punctuation.delimiter
+//            ^ @type.builtin
+//              ^ @punctuation.bracket
+//               ^ @punctuation.bracket
+//                ^ @variable.parameter
+//                 ^ @punctuation.delimiter
+//                   ^ @type
+//                    ^ @punctuation.bracket
+//                      ^ @operator
+//                         ^ @type
+//                           ^ @punctuation.bracket
+//                             ^ @keyword
+//                                     ^ @punctuation.delimiter
+//                                       ^ @punctuation.bracket
+
+fn fn_bounds[F: Fn, G: FnMut, H: FnOnce]() { }
+// <- @keyword
+// ^ @function
+//          ^ @punctuation.bracket
+//           ^ @type
+//            ^ @punctuation.delimiter
+//              ^ @type.builtin
+//                ^ @punctuation.delimiter
+//                  ^ @type
+//                   ^ @punctuation.delimiter
+//                     ^ @type.builtin
+//                          ^ @punctuation.delimiter
+//                            ^ @type
+//                             ^ @punctuation.delimiter
+//                               ^ @type.builtin
+//                                     ^ @punctuation.bracket
+//                                      ^ @punctuation.bracket
+//                                       ^ @punctuation.bracket
+//                                         ^ @punctuation.bracket
+//                                           ^ @punctuation.bracket
+
+fn sized[const n: i64](x: [n]u8) -> i64 { return n as i64; }
+// <- @keyword
+// ^ @function
+//      ^ @punctuation.bracket
+//       ^ @keyword
+//             ^ @constant
+//              ^ @punctuation.delimiter
+//                ^ @type.builtin
+//                   ^ @punctuation.bracket
+//                    ^ @punctuation.bracket
+//                     ^ @variable.parameter
+//                      ^ @punctuation.delimiter
+//                        ^ @punctuation.bracket
+//                          ^ @punctuation.bracket
+//                           ^ @type.builtin
+//                             ^ @punctuation.bracket
+//                               ^ @operator
+//                                  ^ @type.builtin
+//                                      ^ @punctuation.bracket
+//                                        ^ @keyword
+//                                                 ^ @keyword
+//                                                    ^ @type.builtin
+//                                                       ^ @punctuation.delimiter
+//                                                         ^ @punctuation.bracket
+
+fn reduced(x: i64) -> i64 reduce (+) { return x; }
+// <- @keyword
+// ^ @function
+//        ^ @punctuation.bracket
+//         ^ @variable.parameter
+//          ^ @punctuation.delimiter
+//            ^ @type.builtin
+//               ^ @punctuation.bracket
+//                 ^ @operator
+//                    ^ @type.builtin
+//                        ^ @keyword
+//                               ^ @punctuation.bracket
+//                                ^ @operator
+//                                 ^ @punctuation.bracket
+//                                   ^ @punctuation.bracket
+//                                     ^ @keyword
+//                                             ^ @punctuation.delimiter
+//                                               ^ @punctuation.bracket
+
+fn callee(x: i64) -> i64 { return x; }
+// <- @keyword
+// ^ @function
+//       ^ @punctuation.bracket
+//        ^ @variable.parameter
+//         ^ @punctuation.delimiter
+//           ^ @type.builtin
+//              ^ @punctuation.bracket
+//                ^ @operator
+//                   ^ @type.builtin
+//                       ^ @punctuation.bracket
+//                         ^ @keyword
+//                                 ^ @punctuation.delimiter
+//                                   ^ @punctuation.bracket
+
+fn caller(a: &dyn Named, o: ?i64, r: Ordering, v: f32x4, m: std.mem.Arena) -> i64 ! Error {
+// <- @keyword
+// ^ @function
+//       ^ @punctuation.bracket
+//        ^ @variable.parameter
+//         ^ @punctuation.delimiter
+//           ^ @operator
+//            ^ @keyword
+//                ^ @type
+//                     ^ @punctuation.delimiter
+//                       ^ @variable.parameter
+//                        ^ @punctuation.delimiter
+//                          ^ @operator
+//                           ^ @type.builtin
+//                              ^ @punctuation.delimiter
+//                                ^ @variable.parameter
+//                                 ^ @punctuation.delimiter
+//                                   ^ @type.builtin
+//                                           ^ @punctuation.delimiter
+//                                             ^ @variable.parameter
+//                                              ^ @punctuation.delimiter
+//                                                ^ @type.builtin
+//                                                     ^ @punctuation.delimiter
+//                                                       ^ @variable.parameter
+//                                                        ^ @punctuation.delimiter
+//                                                          ^ @namespace
+//                                                             ^ @punctuation.delimiter
+//                                                              ^ @namespace
+//                                                                 ^ @punctuation.delimiter
+//                                                                  ^ @type
+//                                                                       ^ @punctuation.bracket
+//                                                                         ^ @operator
+//                                                                            ^ @type.builtin
+//                                                                                ^ @operator
+//                                                                                  ^ @type
+//                                                                                        ^ @punctuation.bracket
+    @assert(true);
+//  ^ @function.builtin
+//         ^ @punctuation.bracket
+//          ^ @boolean
+//              ^ @punctuation.bracket
+//               ^ @punctuation.delimiter
+    let f = callee(1);
+//  ^ @keyword
+//        ^ @operator
+//          ^ @function
+//                ^ @punctuation.bracket
+//                 ^ @number
+//                  ^ @punctuation.bracket
+//                   ^ @punctuation.delimiter
+    let g = Config.callee(1);
+//  ^ @keyword
+//        ^ @operator
+//          ^ @type
+//                ^ @punctuation.delimiter
+//                 ^ @function
+//                       ^ @punctuation.bracket
+//                        ^ @number
+//                         ^ @punctuation.bracket
+//                          ^ @punctuation.delimiter
+    let h = a.name(1);
+//  ^ @keyword
+//        ^ @operator
+//           ^ @punctuation.delimiter
+//            ^ @function
+//                ^ @punctuation.bracket
+//                 ^ @number
+//                  ^ @punctuation.bracket
+//                   ^ @punctuation.delimiter
+    let i = a.name();
+//  ^ @keyword
+//        ^ @operator
+//           ^ @punctuation.delimiter
+//            ^ @function
+//                ^ @punctuation.bracket
+//                 ^ @punctuation.bracket
+//                  ^ @punctuation.delimiter
+    let j = .red;
+//  ^ @keyword
+//        ^ @operator
+//          ^ @punctuation.delimiter
+//           ^ @variant
+//              ^ @punctuation.delimiter
+    let k = Colour.red;
+//  ^ @keyword
+//        ^ @operator
+//          ^ @type
+//                ^ @punctuation.delimiter
+//                 ^ @variant
+//                    ^ @punctuation.delimiter
+    let l = Config.{ name: 1 };
+//  ^ @keyword
+//        ^ @operator
+//          ^ @type
+//                ^ @punctuation.bracket
+//                   ^ @property
+//                       ^ @punctuation.delimiter
+//                         ^ @number
+//                           ^ @punctuation.bracket
+//                            ^ @punctuation.delimiter
+    let m = l.name;
+//  ^ @keyword
+//        ^ @operator
+//           ^ @punctuation.delimiter
+//            ^ @property
+//                ^ @punctuation.delimiter
+    let Config.{ name } = l;
+//  ^ @keyword
+//      ^ @type
+//            ^ @punctuation.bracket
+//               ^ @property
+//                    ^ @punctuation.bracket
+//                      ^ @operator
+//                         ^ @punctuation.delimiter
+    let n = a.*;
+//  ^ @keyword
+//        ^ @operator
+//           ^ @operator
+//             ^ @punctuation.delimiter
+    let p = [4]i64.{ 1, 2, 3 };
+//  ^ @keyword
+//        ^ @operator
+//          ^ @punctuation.bracket
+//           ^ @number
+//            ^ @punctuation.bracket
+//             ^ @type.builtin
+//                ^ @punctuation.bracket
+//                   ^ @number
+//                    ^ @punctuation.delimiter
+//                      ^ @number
+//                       ^ @punctuation.delimiter
+//                         ^ @number
+//                           ^ @punctuation.bracket
+//                            ^ @punctuation.delimiter
+    let q = p[0..2];
+//  ^ @keyword
+//        ^ @operator
+//           ^ @punctuation.bracket
+//            ^ @number
+//             ^ @operator
+//               ^ @number
+//                ^ @punctuation.bracket
+//                 ^ @punctuation.delimiter
+    let s = "text\n";
+//  ^ @keyword
+//        ^ @operator
+//          ^ @string
+//               ^ @string.escape
+//                  ^ @punctuation.delimiter
+    let t = c"bytes";
+//  ^ @keyword
+//        ^ @operator
+//          ^ @string.special
+//                  ^ @punctuation.delimiter
+    let u = 'x';
+//  ^ @keyword
+//        ^ @operator
+//          ^ @string
+//             ^ @punctuation.delimiter
+    let v = '\n';
+//  ^ @keyword
+//        ^ @operator
+//          ^ @string
+//           ^ @string.escape
+//              ^ @punctuation.delimiter
+    let w = true;
+//  ^ @keyword
+//        ^ @operator
+//          ^ @boolean
+//              ^ @punctuation.delimiter
+    let z = 1 + 2;
+//  ^ @keyword
+//        ^ @operator
+//          ^ @number
+//            ^ @operator
+//              ^ @number
+//               ^ @punctuation.delimiter
+    par(grain: 1) for i in 0..1 step 1 { }
+//  ^ @keyword
+//     ^ @punctuation.bracket
+//      ^ @keyword
+//           ^ @punctuation.delimiter
+//             ^ @number
+//              ^ @punctuation.bracket
+//                ^ @keyword
+//                      ^ @keyword
+//                         ^ @number
+//                          ^ @operator
+//                            ^ @number
+//                              ^ @keyword
+//                                   ^ @number
+//                                     ^ @punctuation.bracket
+//                                       ^ @punctuation.bracket
+    dispatch work(1) over 0..1 on exec.par;
+//  ^ @keyword
+//           ^ @function
+//               ^ @punctuation.bracket
+//                ^ @number
+//                 ^ @punctuation.bracket
+//                   ^ @keyword
+//                        ^ @number
+//                         ^ @operator
+//                           ^ @number
+//                             ^ @keyword
+//                                    ^ @punctuation.delimiter
+//                                     ^ @property
+//                                        ^ @punctuation.delimiter
+    return match j { .red => 1, else => 0 };
+//  ^ @keyword
+//         ^ @keyword
+//                 ^ @punctuation.bracket
+//                   ^ @punctuation.delimiter
+//                    ^ @variant
+//                        ^ @operator
+//                           ^ @number
+//                            ^ @punctuation.delimiter
+//                              ^ @keyword
+//                                   ^ @operator
+//                                      ^ @number
+//                                        ^ @punctuation.bracket
+//                                         ^ @punctuation.delimiter
+}
+// <- @punctuation.bracket
+
+fn labelled() {
+// <- @keyword
+// ^ @function
+//         ^ @punctuation.bracket
+//          ^ @punctuation.bracket
+//            ^ @punctuation.bracket
+    outer: loop {
+//  ^ @label
+//       ^ @punctuation.delimiter
+//         ^ @keyword
+//              ^ @punctuation.bracket
+        break outer;
+//      ^ @keyword
+//            ^ @label
+//                 ^ @punctuation.delimiter
+    }
+//  ^ @punctuation.bracket
+}
+// <- @punctuation.bracket
+
+fn punctuation() {
+// <- @keyword
+// ^ @function
+//            ^ @punctuation.bracket
+//             ^ @punctuation.bracket
+//               ^ @punctuation.bracket
+    let s = Config.{ name: 1 };
+//  ^ @keyword
+//        ^ @operator
+//          ^ @type
+//                ^ @punctuation.bracket
+//                   ^ @property
+//                       ^ @punctuation.delimiter
+//                         ^ @number
+//                           ^ @punctuation.bracket
+//                            ^ @punctuation.delimiter
+    let t = generic.[i64]();
+//  ^ @keyword
+//        ^ @operator
+//                 ^ @punctuation.bracket
+//                   ^ @type.builtin
+//                      ^ @punctuation.bracket
+//                       ^ @punctuation.bracket
+//                        ^ @punctuation.bracket
+//                         ^ @punctuation.delimiter
+    let u = s.name;
+//  ^ @keyword
+//        ^ @operator
+//           ^ @punctuation.delimiter
+//            ^ @property
+//                ^ @punctuation.delimiter
+    let v = (1, 2);
+//  ^ @keyword
+//        ^ @operator
+//          ^ @punctuation.bracket
+//           ^ @number
+//            ^ @punctuation.delimiter
+//              ^ @number
+//               ^ @punctuation.bracket
+//                ^ @punctuation.delimiter
+    let w = [2]i64.{ 1, 2 };
+//  ^ @keyword
+//        ^ @operator
+//          ^ @punctuation.bracket
+//           ^ @number
+//            ^ @punctuation.bracket
+//             ^ @type.builtin
+//                ^ @punctuation.bracket
+//                   ^ @number
+//                    ^ @punctuation.delimiter
+//                      ^ @number
+//                        ^ @punctuation.bracket
+//                         ^ @punctuation.delimiter
+}
+// <- @punctuation.bracket
+
+fn literals() -> i64 {
+// <- @keyword
+// ^ @function
+//         ^ @punctuation.bracket
+//          ^ @punctuation.bracket
+//            ^ @operator
+//               ^ @type.builtin
+//                   ^ @punctuation.bracket
+}
+// <- @punctuation.bracket
+
+/// Doc comment.
+// <- @comment.doc
+fn documented() { }
+// <- @keyword
+// ^ @function
+//           ^ @punctuation.bracket
+//            ^ @punctuation.bracket
+//              ^ @punctuation.bracket
+//                ^ @punctuation.bracket
+// plain comment
+// <- @comment

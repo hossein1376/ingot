@@ -1,0 +1,211 @@
+==================
+patterns
+==================
+
+copy struct Pair { a: i64, b: i64 }
+
+fn rest(p: Pair) -> i64 {
+    let Pair.{ a, .. } = p;
+    let .{ b, .. } = p;
+    let Pair.{ } = p;
+    return a + b;
+}
+
+fn arms(x: ?i64, p: Pair) -> i64 {
+    return match x {
+        .some(1..=9) => 1,
+        .some(v) if v > 20 => v,
+        .some(_) => 2,
+        .none | else => 0,
+    };
+}
+
+fn fields(p: Pair) -> i64 {
+    return match p {
+        Pair.{ a: 0, .. } => 0,
+        Pair.{ a, b: 1 } => a,
+        Pair.{ .. } => 1,
+    };
+}
+
+fn tuples(x: (i64, bool)) -> i64 {
+    return match x {
+        (0, true) => 1,
+        (a, false) => a,
+        _ => 3,
+    };
+}
+
+---
+
+(module
+  (struct_item
+    (type_identifier)
+    (field_declaration
+      (identifier)
+      (scalar_type))
+    (field_declaration
+      (identifier)
+      (scalar_type)))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (struct_pattern
+          (path_type
+            (path_base
+              (type_identifier)))
+          (field_pattern
+            (identifier)))
+        (identifier))
+      (let_statement
+        (struct_pattern
+          (field_pattern
+            (identifier)))
+        (identifier))
+      (let_statement
+        (struct_pattern
+          (path_type
+            (path_base
+              (type_identifier))))
+        (identifier))
+      (return_statement
+        (binary_expression
+          (identifier)
+          (operator)
+          (identifier)))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (optional_type
+          (scalar_type)))
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (result
+      (scalar_type))
+    (block
+      (return_statement
+        (match_expression
+          (identifier)
+          (match_arm
+            (variant_pattern
+              (identifier)
+              (range_pattern
+                (literal
+                  (integer))
+                (literal
+                  (integer))))
+            (literal
+              (integer)))
+          (match_arm
+            (variant_pattern
+              (identifier)
+              (identifier))
+            (guard
+              (binary_expression
+                (identifier)
+                (operator)
+                (literal
+                  (integer))))
+            (identifier))
+          (match_arm
+            (variant_pattern
+              (identifier)
+              (wildcard_pattern))
+            (literal
+              (integer)))
+          (match_arm
+            (variant_pattern
+              (identifier))
+            (identifier)
+            (literal
+              (integer)))))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (result
+      (scalar_type))
+    (block
+      (return_statement
+        (match_expression
+          (identifier)
+          (match_arm
+            (struct_pattern
+              (path_type
+                (path_base
+                  (type_identifier)))
+              (field_pattern
+                (identifier)
+                (literal
+                  (integer))))
+            (literal
+              (integer)))
+          (match_arm
+            (struct_pattern
+              (path_type
+                (path_base
+                  (type_identifier)))
+              (field_pattern
+                (identifier))
+              (field_pattern
+                (identifier)
+                (literal
+                  (integer))))
+            (identifier))
+          (match_arm
+            (struct_pattern
+              (path_type
+                (path_base
+                  (type_identifier))))
+            (literal
+              (integer)))))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (tuple_type
+          (scalar_type)
+          (scalar_type))))
+    (result
+      (scalar_type))
+    (block
+      (return_statement
+        (match_expression
+          (identifier)
+          (match_arm
+            (tuple_pattern
+              (literal
+                (integer))
+              (literal
+                (boolean)))
+            (literal
+              (integer)))
+          (match_arm
+            (tuple_pattern
+              (identifier)
+              (literal
+                (boolean)))
+            (identifier))
+          (match_arm
+            (wildcard_pattern)
+            (literal
+              (integer))))))))

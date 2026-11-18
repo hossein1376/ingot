@@ -1,0 +1,519 @@
+==================
+expressions and precedence
+==================
+
+fn f(a: i64, b: i64, xs: []i64) -> i64 {
+    let x = a * b + 1 << 2 & 7;
+    let y = a < b && b <= a || a == b;
+    let z = -a + (b as i64) - -1;
+    let p = &mut xs[0];
+    let q = p.*;
+    let r = xs[..];
+    let s = xs[..2];
+    let t = xs[2..];
+    let u = xs[1..3];
+    let v = f(a, b, xs);
+    let w = xs[0].cmp(&xs[1]);
+    return x + y + z + q.* + r.len + s.len + t.len + u.len + v + w;
+}
+
+fn variants() -> Option[i64] {
+    let a = .some(1);
+    let b = .none;
+    let c = Option.some(2);
+    return if true { a } else { b };
+}
+
+fn literals() -> i64 {
+    let a = [3]i64.{ 1, 2, 3 };
+    let b = Point.{ x: 1, y: 2 };
+    let c = .{ x: 3, y: 4 };
+    let d = (1, 2, 3);
+    let e = fn [&mut a, b](x: i64) -> i64 { return x + a; };
+    let f = "text\n";
+    let g = c"bytes";
+    let h = 'x';
+    return 1.5 as i64 + 2e3 as i64 + 0xff;
+}
+
+fn fallible(x: i64) -> i64 ! Error {
+    let a = try might(x);
+    let b = might(x) catch _ => 0;
+    let c = maybe(x) orelse 1;
+    return a + b + c;
+}
+
+fn control(c: bool, x: i64) -> i64 {
+    let a = if c { 1 } else { return 2; };
+    let b = match x {
+        .some(v) => v,
+        .none => { return 0; }
+    };
+    return a + b;
+}
+
+fn unsafe_spawn(x: i64) -> i64 {
+    let p: *i64 = @uninit(*i64);
+    return unsafe("p is live") { p.* };
+}
+
+---
+
+(module
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (scalar_type))
+      (parameter
+        (identifier)
+        (scalar_type))
+      (parameter
+        (identifier)
+        (slice_type
+          (scalar_type))))
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (operator)
+                (identifier))
+              (operator)
+              (literal
+                (integer)))
+            (operator)
+            (literal
+              (integer)))
+          (operator)
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (operator)
+              (identifier))
+            (operator)
+            (binary_expression
+              (identifier)
+              (operator)
+              (identifier)))
+          (operator)
+          (binary_expression
+            (identifier)
+            (operator)
+            (identifier))))
+      (let_statement
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (unary_expression
+              (operator)
+              (identifier))
+            (operator)
+            (parenthesized_expression
+              (cast_expression
+                (identifier)
+                (scalar_type))))
+          (operator)
+          (unary_expression
+            (operator)
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (unary_expression
+          (operator)
+          (operator)
+          (index_expression
+            (identifier)
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (deref_expression
+          (identifier)))
+      (let_statement
+        (identifier)
+        (slice_expression
+          (identifier)))
+      (let_statement
+        (identifier)
+        (slice_expression
+          (identifier)
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (slice_expression
+          (identifier)
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (slice_expression
+          (identifier)
+          (literal
+            (integer))
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier))))
+      (let_statement
+        (identifier)
+        (call_expression
+          (field_expression
+            (index_expression
+              (identifier)
+              (literal
+                (integer)))
+            (identifier))
+          (arguments
+            (unary_expression
+              (operator)
+              (index_expression
+                (identifier)
+                (literal
+                  (integer)))))))
+      (return_statement
+        (binary_expression
+          (binary_expression
+            (binary_expression
+              (binary_expression
+                (binary_expression
+                  (binary_expression
+                    (binary_expression
+                      (binary_expression
+                        (binary_expression
+                          (identifier)
+                          (operator)
+                          (identifier))
+                        (operator)
+                        (identifier))
+                      (operator)
+                      (deref_expression
+                        (identifier)))
+                    (operator)
+                    (field_expression
+                      (identifier)
+                      (identifier)))
+                  (operator)
+                  (field_expression
+                    (identifier)
+                    (identifier)))
+                (operator)
+                (field_expression
+                  (identifier)
+                  (identifier)))
+              (operator)
+              (field_expression
+                (identifier)
+                (identifier)))
+            (operator)
+            (identifier))
+          (operator)
+          (identifier)))))
+  (function_item
+    (identifier)
+    (parameters)
+    (result
+      (generic_type
+        (path_base
+          (type_identifier))
+        (type_arguments
+          (generic_argument
+            (scalar_type)))))
+    (block
+      (let_statement
+        (identifier)
+        (variant_expression
+          (identifier)
+          (arguments
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (variant_expression
+          (identifier)))
+      (let_statement
+        (identifier)
+        (call_expression
+          (variant_expression
+            (path_type
+              (path_base
+                (type_identifier)))
+            (identifier))
+          (arguments
+            (literal
+              (integer)))))
+      (return_statement
+        (if_expression
+          (condition
+            (literal
+              (boolean)))
+          (block
+            (identifier))
+          (block
+            (identifier))))))
+  (function_item
+    (identifier)
+    (parameters)
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (array_expression
+          (literal
+            (integer))
+          (scalar_type)
+          (literal
+            (integer))
+          (literal
+            (integer))
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (struct_expression
+          (path_type
+            (path_base
+              (type_identifier)))
+          (field_initializer
+            (identifier)
+            (literal
+              (integer)))
+          (field_initializer
+            (identifier)
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (struct_expression
+          (field_initializer
+            (identifier)
+            (literal
+              (integer)))
+          (field_initializer
+            (identifier)
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (tuple_expression
+          (literal
+            (integer))
+          (literal
+            (integer))
+          (literal
+            (integer))))
+      (let_statement
+        (identifier)
+        (closure_expression
+          (capture
+            (identifier))
+          (capture
+            (identifier))
+          (parameters
+            (parameter
+              (identifier)
+              (scalar_type)))
+          (result
+            (scalar_type))
+          (block
+            (return_statement
+              (binary_expression
+                (identifier)
+                (operator)
+                (identifier))))))
+      (let_statement
+        (identifier)
+        (literal
+          (string
+            (escape_sequence))))
+      (let_statement
+        (identifier)
+        (literal
+          (cstring)))
+      (let_statement
+        (identifier)
+        (literal
+          (char_literal)))
+      (return_statement
+        (binary_expression
+          (binary_expression
+            (cast_expression
+              (literal
+                (float))
+              (scalar_type))
+            (operator)
+            (cast_expression
+              (literal
+                (float))
+              (scalar_type)))
+          (operator)
+          (literal
+            (integer))))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (scalar_type)))
+    (result
+      (scalar_type)
+      (path_type
+        (path_base
+          (type_identifier))))
+    (block
+      (let_statement
+        (identifier)
+        (try_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (let_statement
+        (identifier)
+        (catch_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))
+          (wildcard_pattern)
+          (handler
+            (literal
+              (integer)))))
+      (let_statement
+        (identifier)
+        (orelse_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))
+          (handler
+            (literal
+              (integer)))))
+      (return_statement
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (operator)
+            (identifier))
+          (operator)
+          (identifier)))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (scalar_type))
+      (parameter
+        (identifier)
+        (scalar_type)))
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (if_expression
+          (condition
+            (identifier))
+          (block
+            (literal
+              (integer)))
+          (block
+            (return_statement
+              (literal
+                (integer))))))
+      (let_statement
+        (identifier)
+        (match_expression
+          (identifier)
+          (match_arm
+            (variant_pattern
+              (identifier)
+              (identifier))
+            (identifier))
+          (match_arm
+            (variant_pattern
+              (identifier))
+            (block
+              (return_statement
+                (literal
+                  (integer)))))))
+      (return_statement
+        (binary_expression
+          (identifier)
+          (operator)
+          (identifier)))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (scalar_type)))
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (pointer_type
+          (scalar_type))
+        (builtin_call
+          (builtin)
+          (builtin_arguments
+            (pointer_type
+              (scalar_type)))))
+      (return_statement
+        (unsafe_expression
+          (string)
+          (block
+            (deref_expression
+              (identifier))))))))
+
+==================
+tuple field indexes
+==================
+
+fn tuple_fields(t: (i64, (i64, i64))) -> i64 {
+    return t.0.1;
+}
+
+---
+
+(module
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (tuple_type
+          (scalar_type)
+          (tuple_type
+            (scalar_type)
+            (scalar_type)))))
+    (result
+      (scalar_type))
+    (block
+      (return_statement
+        (field_expression
+          (field_expression
+            (identifier)
+            (integer))
+          (integer))))))

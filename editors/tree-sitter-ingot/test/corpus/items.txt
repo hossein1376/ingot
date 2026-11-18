@@ -1,0 +1,236 @@
+==================
+visibility and items
+==================
+
+import std.mem.Arena;
+
+pub(pkg) struct Config {
+    pub name: []u8,
+    pub(pkg) size: i64,
+}
+
+pub(pkg) fn build(cfg: Config) -> Config {
+    return cfg;
+}
+
+copy enum Colour: u8 { red, green = 4 }
+
+linear struct Token { id: i64 }
+
+interface Named {
+    type Output;
+    fn name(self: &Self) -> i64;
+}
+
+impl Named for Config {
+    type Output = i64;
+    fn name(self: &Config) -> i64 { return self.size; }
+}
+
+pub const limit: i64 = 8;
+pub(pkg) static count: i64 = 0;
+
+pub type Alias[T] = Config;
+
+extern "c" {
+    fn puts(s: *u8) -> i32;
+    fn va(fmt: *u8, ...) -> i32;
+    fn padded(x: i64,) -> i32;
+    fn fallible() -> i32 ! Error;
+}
+
+test "builds" { }
+
+bench "runs" { }
+
+when @target.os == .linux {
+    pub fn platform() -> i64 { return 1; }
+} else {
+    pub fn platform() -> i64 { return 0; }
+}
+
+---
+
+(module
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)
+      (type_identifier)))
+  (struct_item
+    (visibility)
+    (type_identifier)
+    (field_declaration
+      (visibility)
+      (identifier)
+      (slice_type
+        (scalar_type)))
+    (field_declaration
+      (visibility)
+      (identifier)
+      (scalar_type)))
+  (function_item
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (path_type
+          (path_base
+            (type_identifier)))))
+    (result
+      (path_type
+        (path_base
+          (type_identifier))))
+    (block
+      (return_statement
+        (identifier))))
+  (enum_item
+    (type_identifier)
+    (scalar_type)
+    (variant
+      (identifier))
+    (variant
+      (identifier)
+      (literal
+        (integer))))
+  (struct_item
+    (type_identifier)
+    (field_declaration
+      (identifier)
+      (scalar_type)))
+  (interface_item
+    (type_identifier)
+    (interface_member
+      (associated_type
+        (type_identifier)))
+    (interface_member
+      (function_item
+        (identifier)
+        (parameters
+          (parameter
+            (self)
+            (reference_type
+              (path_type
+                (path_base
+                  (type_identifier))))))
+        (result
+          (scalar_type)))))
+  (impl_item
+    (path_type
+      (path_base
+        (type_identifier)))
+    (path_type
+      (path_base
+        (type_identifier)))
+    (type_item
+      (type_identifier)
+      (scalar_type))
+    (function_item
+      (identifier)
+      (parameters
+        (parameter
+          (self)
+          (reference_type
+            (path_type
+              (path_base
+                (type_identifier))))))
+      (result
+        (scalar_type))
+      (block
+        (return_statement
+          (field_expression
+            (self)
+            (identifier))))))
+  (const_item
+    (visibility)
+    (identifier)
+    (scalar_type)
+    (literal
+      (integer)))
+  (static_item
+    (visibility)
+    (identifier)
+    (scalar_type)
+    (literal
+      (integer)))
+  (type_item
+    (visibility)
+    (type_identifier)
+    (generic_parameters
+      (type_parameter
+        (type_identifier)))
+    (path_type
+      (path_base
+        (type_identifier))))
+  (extern_block
+    (string)
+    (extern_function
+      (identifier)
+      (extern_parameters
+        (parameter
+          (identifier)
+          (pointer_type
+            (scalar_type))))
+      (result
+        (scalar_type)))
+    (extern_function
+      (identifier)
+      (extern_parameters
+        (parameter
+          (identifier)
+          (pointer_type
+            (scalar_type))))
+      (result
+        (scalar_type)))
+    (extern_function
+      (identifier)
+      (extern_parameters
+        (parameter
+          (identifier)
+          (scalar_type)))
+      (result
+        (scalar_type)))
+    (extern_function
+      (identifier)
+      (extern_parameters)
+      (result
+        (scalar_type)
+        (path_type
+          (path_base
+            (type_identifier))))))
+  (test_item
+    (string)
+    (block))
+  (bench_item
+    (string)
+    (block))
+  (when_items
+    (binary_expression
+      (field_expression
+        (builtin_call
+          (builtin))
+        (identifier))
+      (operator)
+      (variant_expression
+        (identifier)))
+    (function_item
+      (visibility)
+      (identifier)
+      (parameters)
+      (result
+        (scalar_type))
+      (block
+        (return_statement
+          (literal
+            (integer)))))
+    (function_item
+      (visibility)
+      (identifier)
+      (parameters)
+      (result
+        (scalar_type))
+      (block
+        (return_statement
+          (literal
+            (integer)))))))

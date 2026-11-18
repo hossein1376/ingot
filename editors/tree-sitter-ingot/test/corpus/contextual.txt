@@ -1,0 +1,87 @@
+==================
+contextual keywords are identifiers
+==================
+
+fn contextual() -> i64 {
+    let step = exec.par;
+    let on = step;
+    let over = on;
+    let grain = over;
+    let reduce = grain;
+    return reduce;
+}
+
+fn positions() -> i64 {
+    let a = for_each.par;
+    par for i in 0..4 step 2 { }
+    par(grain: 2) for i in 0..4 { }
+    select {
+        else => { }
+    }
+    return 0;
+}
+
+---
+
+(module
+  (function_item
+    (identifier)
+    (parameters)
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (field_expression
+          (identifier)
+          (identifier)))
+      (let_statement
+        (identifier)
+        (identifier))
+      (let_statement
+        (identifier)
+        (identifier))
+      (let_statement
+        (identifier)
+        (identifier))
+      (let_statement
+        (identifier)
+        (identifier))
+      (return_statement
+        (identifier))))
+  (function_item
+    (identifier)
+    (parameters)
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (field_expression
+          (identifier)
+          (identifier)))
+      (for_statement
+        (parallel_clause)
+        (identifier)
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (block))
+      (for_statement
+        (parallel_clause
+          (literal
+            (integer)))
+        (identifier)
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (block))
+      (select_statement
+        (block))
+      (return_statement
+        (literal
+          (integer))))))

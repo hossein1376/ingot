@@ -2154,7 +2154,16 @@ impl<'a> Parser<'a> {
             ArmBody::Block(self.block())
         } else {
             let expr = self.expr();
-            self.eat(Comma);
+            // An expression arm ends with `,`, except on the last arm before `}`.
+            if !self.eat(Comma) && !self.at(RBrace) {
+                let span = self.span();
+                let desc = self.kind().describe();
+                self.diag(
+                    "E0201",
+                    format!("expected `,` after an expression arm, found {desc}"),
+                    span,
+                );
+            }
             ArmBody::Expr(expr)
         };
         let end = match &body {

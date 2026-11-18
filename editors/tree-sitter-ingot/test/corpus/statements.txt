@@ -1,0 +1,278 @@
+==================
+statements
+==================
+
+fn statements(x: i64) -> i64 {
+    var y = x;
+    y += 1;
+    _ = y;
+    while y > 0 { y -= 1; }
+    loop { break; }
+    for i in 0..y step 2 { y += i; }
+    for i, n in items { y += i + n; }
+    outer: for i in 0..4 { continue outer; }
+    par for i in 0..4 { y += i; }
+    par(grain: 2) for i in 0..4 { y += i; }
+    match y {
+        .none => { }
+        .some(v) => { y = v; }
+    }
+    y += 1;
+    return y;
+}
+
+fn statements2(s: &Service) -> i64 ! Error {
+    defer { }
+    errdefer { }
+    scope sc { }
+    when @target.os == .linux { } else { }
+    select {
+        v = try s.wait() => { return v; }
+        else => { return 0; }
+    }
+    unsafe("checked by hand") { }
+    return unsafe("checked by hand") { 1 };
+}
+
+fn spawns(s: &Scope) -> i64 {
+    scope s {
+        spawn work(1) in s;
+        let h = spawn work(2) in s;
+    }
+    dispatch work(1) over 0..4 on exec.par;
+    return 0;
+}
+
+---
+
+(module
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (scalar_type)))
+    (result
+      (scalar_type))
+    (block
+      (let_statement
+        (identifier)
+        (identifier))
+      (assignment_statement
+        (identifier)
+        (operator)
+        (literal
+          (integer)))
+      (assignment_statement
+        (wildcard_pattern)
+        (operator)
+        (identifier))
+      (while_statement
+        (condition
+          (binary_expression
+            (identifier)
+            (operator)
+            (literal
+              (integer))))
+        (block
+          (assignment_statement
+            (identifier)
+            (operator)
+            (literal
+              (integer)))))
+      (loop_statement
+        (block
+          (break_statement)))
+      (for_statement
+        (identifier)
+        (literal
+          (integer))
+        (identifier)
+        (literal
+          (integer))
+        (block
+          (assignment_statement
+            (identifier)
+            (operator)
+            (identifier))))
+      (for_statement
+        (identifier)
+        (identifier)
+        (identifier)
+        (block
+          (assignment_statement
+            (identifier)
+            (operator)
+            (binary_expression
+              (identifier)
+              (operator)
+              (identifier)))))
+      (for_statement
+        (label_definition
+          (label
+            (identifier)))
+        (identifier)
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (block
+          (continue_statement
+            (label
+              (identifier)))))
+      (for_statement
+        (parallel_clause)
+        (identifier)
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (block
+          (assignment_statement
+            (identifier)
+            (operator)
+            (identifier))))
+      (for_statement
+        (parallel_clause
+          (literal
+            (integer)))
+        (identifier)
+        (literal
+          (integer))
+        (literal
+          (integer))
+        (block
+          (assignment_statement
+            (identifier)
+            (operator)
+            (identifier))))
+      (match_expression
+        (identifier)
+        (match_arm
+          (variant_pattern
+            (identifier))
+          (block))
+        (match_arm
+          (variant_pattern
+            (identifier)
+            (identifier))
+          (block
+            (assignment_statement
+              (identifier)
+              (operator)
+              (identifier)))))
+      (assignment_statement
+        (identifier)
+        (operator)
+        (literal
+          (integer)))
+      (return_statement
+        (identifier))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (reference_type
+          (path_type
+            (path_base
+              (type_identifier))))))
+    (result
+      (scalar_type)
+      (path_type
+        (path_base
+          (type_identifier))))
+    (block
+      (defer_statement
+        (block))
+      (defer_statement
+        (block))
+      (scope_statement
+        (identifier)
+        (block))
+      (when_statement
+        (binary_expression
+          (field_expression
+            (builtin_call
+              (builtin))
+            (identifier))
+          (operator)
+          (variant_expression
+            (identifier)))
+        (block)
+        (block))
+      (select_statement
+        (select_arm
+          (identifier)
+          (try_expression
+            (call_expression
+              (field_expression
+                (identifier)
+                (identifier))
+              (arguments)))
+          (block
+            (return_statement
+              (identifier))))
+        (block
+          (return_statement
+            (literal
+              (integer)))))
+      (unsafe_expression
+        (string)
+        (block))
+      (return_statement
+        (unsafe_expression
+          (string)
+          (block
+            (literal
+              (integer)))))))
+  (function_item
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (reference_type
+          (path_type
+            (path_base
+              (type_identifier))))))
+    (result
+      (scalar_type))
+    (block
+      (scope_statement
+        (identifier)
+        (block
+          (expression_statement
+            (spawn_expression
+              (call_expression
+                (identifier)
+                (arguments
+                  (literal
+                    (integer))))
+              (identifier)))
+          (let_statement
+            (identifier)
+            (spawn_expression
+              (call_expression
+                (identifier)
+                (arguments
+                  (literal
+                    (integer))))
+              (identifier)))))
+      (expression_statement
+        (dispatch_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (literal
+                (integer))))
+          (domain
+            (literal
+              (integer))
+            (literal
+              (integer)))
+          (field_expression
+            (identifier)
+            (identifier))))
+      (return_statement
+        (literal
+          (integer))))))

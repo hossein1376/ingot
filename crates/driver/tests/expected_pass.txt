@@ -539,6 +539,8 @@ syntax/branch_block_leaves.ingot
 syntax/branch_block_reaches_end.ingot
 syntax/chained_comparison.ingot
 syntax/if_expression.ingot
+syntax/match_arm_last_comma_omitted.ingot
+syntax/match_arm_missing_comma.ingot
 syntax/mixed_operators.fixed.ingot
 syntax/mixed_operators.ingot
 syntax/not_a_statement.ingot

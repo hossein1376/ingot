@@ -7,6 +7,18 @@
       "path": ".",
       "file-types": [
         "ingot"
+      ],
+      "highlights": [
+        "queries/highlights.scm"
+      ],
+      "brackets": [
+        "queries/brackets.scm"
+      ],
+      "indents": [
+        "queries/indents.scm"
+      ],
+      "outline": [
+        "queries/outline.scm"
       ]
     }
   ],

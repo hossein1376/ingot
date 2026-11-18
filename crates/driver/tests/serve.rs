@@ -46,9 +46,16 @@ fn serve_in(script: &str, cwd: Option<&Path>) -> Output {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(script.as_bytes()).unwrap();
-    drop(stdin);
-    child.wait_with_output().unwrap()
+    let script = script.as_bytes().to_vec();
+    // Write the script while `wait_with_output` drains the child's output. Writing the
+    // whole script first deadlocks once both pipes fill: the server blocks writing
+    // responses and we block writing the next request.
+    let writer = std::thread::spawn(move || {
+        stdin.write_all(&script).unwrap();
+    });
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    output
 }
 
 fn stdout(output: &Output) -> String {
