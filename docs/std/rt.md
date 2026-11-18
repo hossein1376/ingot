@@ -73,8 +73,9 @@ returns 1. `start` itself performs no formatting and allocates nothing from an
 allocator. The one memory it needs, the table behind `Env.args` (one `[]u8` per
 argument, pointing into `argv`'s strings), is a single region reserved from the
 operating system through `std.sys` (`mmap` or `VirtualAlloc`), sized for `argc` entries,
-filled once and never freed. The capability values of `Env` are built by their modules'
-`pub(pkg)` constructors (`env.md`).
+filled once and never freed. If the operating system refuses that region, `start` traps
+T12 at `<runtime>:0:0` (diagnostics.md §18) before `entry` runs. The capability values
+of `Env` are built by their modules' `pub(pkg)` constructors (`env.md`).
 
 On Windows there is no C runtime: the entry symbol takes no arguments and `start`
 reads the command line and environment from the system (05-tooling §33.2, review 2

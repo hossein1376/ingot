@@ -141,7 +141,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E0409 | `bad_zero` | `@zero` for a type that does not allow it (§7) | the `@zero` | — |
 | E0410 | `wrong_argument_count` | a call, variant constructor or builtin with the wrong number of arguments, including a variant with a payload named without one (`T.variant` as a value) | the argument list (`callee`) | — |
 | E0411 | `not_callable` | a call on something that is not a function, closure, variant constructor or `fn` value | the callee expression | — |
-| E0412 | `missing_return` | a path through a function with a result reaches the end of the body | the closing brace | — |
+| E0412 | `missing_return` | a path through a function whose result type is not `void` reaches the end of the body; this includes `-> never`, whose body must end in a call or expression of type `never` on every path | the closing brace | — |
 | E0413 | `unused_result` | a call statement whose value is not `void` (and not a result, which is E0701) | the call | insert `_ = ` before it if the type is `Discard` |
 | E0414 | `discard_not_allowed` | `_ = expr`, or a `_` pattern (in a `match`, `let` or `catch _`), where the discarded type is linear | the `_` | — |
 | E0415 | `index_not_i64` | an index or slice bound is not `i64` | the index expression | append ` as i64` if lossless |
@@ -371,7 +371,7 @@ fixed as below, with the bracketed parts filled in.
 | T09 | `panic` | `@panic(msg)` | `{msg}` |
 | T10 | `unreachable` | `@unreachable()` | `entered unreachable code` |
 | T11 | `stack_exhausted` | function entry | `stack exhausted` |
-| T12 | `task_memory_exhausted` | `spawn`, `par for`, parking | `no memory for a task` |
+| T12 | `task_memory_exhausted` | `spawn`, `par for`, parking, and `rt.start` when the operating system refuses the `Env.args` table | `no memory for a task` |
 | T13 | `deadlock` | the scheduler | `deadlock: all {n} tasks are waiting`, followed on the same line by nothing else. The list of tasks follows on further lines |
 | T14 | `vector_access_out_of_bounds` | `@load`, `@store`, `@load_tail`, `@store_tail`, `@gather`, `@scatter` | `vector access at {i} out of bounds for length {len}` |
 | T15 | `scatter_index_repeated` | `@scatter` | `scatter index {i} occurs twice` |

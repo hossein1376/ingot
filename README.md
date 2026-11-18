@@ -45,7 +45,7 @@ pub fn main(env: &Env) -> void ! AppErr {
 
     let total = Atomic[i64].init(0);
     par for chunk in data.chunks(1 << 20) {                // all cores; `data` is shared read-only
-        total.add(count_lines(chunk), .relaxed);
+        _ = total.add(count_lines(chunk), .relaxed);
     }
     @format(env.stdout, "{}\n", total.load(.relaxed)) catch _ => {};
 }

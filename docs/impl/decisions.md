@@ -322,6 +322,18 @@ code alone.
   2026-11-17, asked in B1; `docs/std/rt.md` §1). It is sized for `argc`, filled once, never
   freed; `start` still uses no allocator. *Rejected:* a fixed static table (an arbitrary
   limit) and an empty `args` until B3 (a value that is not true).
+* **A refused `Env.args` mapping is T12 at `<runtime>:0:0`** (*user*, 2026-11-17, found in
+  the B1 review; rt.md §1, diagnostics.md §18). The runtime cannot get memory for the root
+  task, which is T12's meaning; a trap always prints its one line. *Rejected:* a silent
+  exit 101 (a trap with no line).
+* **A `-> never` function whose end is reachable is E0412** (*user*, 2026-11-17, found in
+  the B1 review; diagnostics.md). `never` is a result type with no values, so reaching the
+  end of the body cannot produce one. The runtime's `exit` is declared `-> never`.
+  *Rejected:* a separate code (E0412 already names the condition).
+* **Phase 10 removes the division checks a constant divisor rules out** (*user*,
+  2026-11-17, found in the B1 review; pipeline §6, rule 7). `v / 10` can neither divide by
+  zero nor overflow, and `ingot cost` must not report it. *Rejected:* leaving it to LLVM
+  (the report states what phase 10 guarantees, and both pipelines must agree).
 * **The back end pins upstream LLVM 22** (*user*, 2026-11-17). On macOS that is
   Homebrew's `llvm@22`, found by path; Linux and Windows use the same major version.
   *Why:* one version on all three targets, checked at start-up. *Rejected:* Apple clang,

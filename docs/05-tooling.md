@@ -80,6 +80,8 @@ on them when writing a hot loop.
    time and an overflow is a compile error).
 6. A second identical check on the same values, dominated by the first with no
    assignment to them in between.
+7. No division check on `a / c` or `a % c` where the divisor `c` is a constant other
+   than 0 and, for a signed type, other than -1: neither T04 nor T05 can happen.
 
 The compiler may remove more. `ingot cost` is the source of truth for what is left, and
 the way to remove a remaining check is to restructure the code or add an `@assert` that

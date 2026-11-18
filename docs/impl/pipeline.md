@@ -378,6 +378,7 @@ from:
 | 4 | it is an overflow check on `a op b` and the facts bound the exact result inside the type's range |
 | 5 | both operands are constants: literals, `const` items, or operations on those (not locals, and not constant generic parameters, which are symbols here). For a bounds check the operands are the index and the length. The operation is folded; a trap is E0806, reported by this phase at the operation. A branch on a constant condition is folded first: a block that only such a branch, not taken, leads to is dead, its checks are removed and nothing in it is reported |
 | 6 | an identical check on the same operands dominates it with no assignment to them in between |
+| 7 | it is a division check whose divisor is a constant (as in rule 5) other than 0 and, for a signed type, other than -1 |
 
 The analysis is a forward dataflow; at a join each bound is the weaker of the two, and
 a fact missing on one side is dropped. It does not need widening: bounds are only ever
