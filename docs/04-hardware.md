@@ -95,7 +95,10 @@ object format.
   size. A **mask** `boolxN` in memory is `N` bytes, one per lane holding 0 or 1, aligned
   to its size.
 * **Slices** are `{ ptr, len }`, 16 bytes. **Tuples** are structs with fields `0`, `1`...
-* **`&dyn I`** is `{ data pointer, method table pointer }`.
+* **`&dyn I`** is `{ data pointer, method table pointer }`. `&dyn Fn(A) -> R` and
+  `&mut dyn FnMut(A) -> R` are the same.
+* **Closures** are their capture record: a struct of the captures in capture-list order
+  (01 §5.6).
 * The calling convention between Ingot functions is not specified and may change. Small
   aggregates and slices travel in registers, and a `T ! E` returns its tag in a register
   next to the value so that `try` is one compare-and-branch. Only `export fn` and

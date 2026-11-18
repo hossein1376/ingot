@@ -322,6 +322,14 @@ code alone.
   2026-11-17, asked in B1; `docs/std/rt.md` §1). It is sized for `argc`, filled once, never
   freed; `start` still uses no allocator. *Rejected:* a fixed static table (an arbitrary
   limit) and an empty `args` until B3 (a value that is not true).
+* **`&dyn Fn` converts as `&dyn I` does** (*user*, 2026-11-18, found in P2, settled before
+  B2; 01 §5.6). A `&T` becomes `&dyn Fn(A) -> R` when `T: Fn(A) -> R`, and a `&mut T`
+  becomes `&mut dyn FnMut(A) -> R` when `T: FnMut(A) -> R`. Closures, functions and `fn`
+  pointers all convert. *Rejected:* closures only (a callable taken by `&dyn` would need a
+  second signature for a `fn` pointer, though 01 §5.6 says both satisfy `Fn`).
+* **A closure is laid out as a struct of its captures in capture-list order** (*user*,
+  2026-11-18, before B2; 01 §5.6, 04 §25). Its size is visible through a generic
+  `@sizeof(T)`, so it is not left to the compiler. *Rejected:* an unspecified order.
 * **A refused `Env.args` mapping is T12 at `<runtime>:0:0`** (*user*, 2026-11-17, found in
   the B1 review; rt.md §1, diagnostics.md §18). The runtime cannot get memory for the root
   task, which is T12's meaning; a trap always prints its one line. *Rejected:* a silent
@@ -383,11 +391,6 @@ code alone.
   did not model (a scope; `shared` declared `from self.*`); a check that only one phase
   could make, deferred to nowhere (a length from a constant argument; recursion through
   impl arguments). Look for these first.
-* **Unspecified: what converts to `&dyn Fn`** (found in P2, 2026-11-16). 01 §5.6 says a
-  `fn` pointer satisfies `Fn` and names the forms `&dyn Fn(A) -> R` and `&mut dyn FnMut(A)
-  -> R`, but no rule says which borrows convert to them. Phase 7 accepts a borrowed
-  closure and rejects `&f` for a `fn` pointer `f` (E0401). Decide before B2 lowers
-  `&dyn Fn` tables.
 * **Holes found in P1b and P2, the same pattern:** a waitable call's result lost its
   operation's origins when the lowering changed shape; `AtomicValue` was satisfied by
   types its own implications excluded; a closure type did not carry its owner's

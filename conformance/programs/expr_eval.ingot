@@ -1,0 +1,215 @@
+//! expect: run
+//! section: 4.3, 5.7, 6
+
+// A recursive-descent parser and evaluator for integer arithmetic over byte literals:
+// enums with payloads, `match`, `T ! E` with `from` variants two levels deep, `try`,
+// `catch`, slices and mutual recursion.
+
+import std.Env;
+
+enum Tok { num: i64, plus, minus, star, slash, open, close, end }
+
+enum LexErr { bad_byte: i64 }
+
+enum SyntaxErr { lex: from LexErr, unexpected: i64, unclosed: i64 }
+
+enum EvalErr { syntax: from SyntaxErr, div_by_zero: i64 }
+
+fn is_digit(c: u8) -> bool {
+    return c >= '0' && c <= '9';
+}
+
+/// The token at or after `at`, skipping spaces, and the position after it.
+fn lex(src: []u8, at: i64) -> (Tok, i64) ! LexErr {
+    var i = at;
+    while i < src.len && src[i] == ' ' {
+        i += 1;
+    }
+    if i == src.len {
+        return (.end, i);
+    }
+    let c = src[i];
+    if is_digit(c) {
+        var v: i64 = 0;
+        while i < src.len && is_digit(src[i]) {
+            v = v * 10 + (src[i] - '0') as i64;
+            i += 1;
+        }
+        return (.num(v), i);
+    }
+    if c == '+' {
+        return (.plus, i + 1);
+    }
+    if c == '-' {
+        return (.minus, i + 1);
+    }
+    if c == '*' {
+        return (.star, i + 1);
+    }
+    if c == '/' {
+        return (.slash, i + 1);
+    }
+    if c == '(' {
+        return (.open, i + 1);
+    }
+    if c == ')' {
+        return (.close, i + 1);
+    }
+    fail .bad_byte(i);
+}
+
+/// `lex` at the parser's level: a `LexErr` becomes `SyntaxErr.lex`.
+fn next(src: []u8, at: i64) -> (Tok, i64) ! SyntaxErr {
+    return try lex(src, at);
+}
+
+fn factor(src: []u8, at: &mut i64) -> i64 ! EvalErr {
+    let start = at.*;
+    let t = try next(src, start);
+    at.* = t.1;
+    match t.0 {
+        .num(v) => {
+            return v;
+        }
+        .minus => {
+            let v = try factor(src, at);
+            return -v;
+        }
+        .open => {
+            let v = try expr(src, at);
+            let c = try next(src, at.*);
+            match c.0 {
+                .close => {
+                    at.* = c.1;
+                    return v;
+                }
+                _ => {
+                    fail .syntax(.unclosed(t.1 - 1));
+                }
+            }
+        }
+        _ => {
+            fail .syntax(.unexpected(start));
+        }
+    }
+}
+
+fn term(src: []u8, at: &mut i64) -> i64 ! EvalErr {
+    var acc = try factor(src, at);
+    while true {
+        let t = try next(src, at.*);
+        match t.0 {
+            .star => {
+                at.* = t.1;
+                let r = try factor(src, at);
+                acc = acc * r;
+            }
+            .slash => {
+                at.* = t.1;
+                let d = try factor(src, at);
+                if d == 0 {
+                    fail .div_by_zero(t.1 - 1);
+                }
+                acc = acc / d;
+            }
+            _ => {
+                return acc;
+            }
+        }
+    }
+    @unreachable();
+}
+
+fn expr(src: []u8, at: &mut i64) -> i64 ! EvalErr {
+    var acc = try term(src, at);
+    while true {
+        let t = try next(src, at.*);
+        match t.0 {
+            .plus => {
+                at.* = t.1;
+                let r = try term(src, at);
+                acc = acc + r;
+            }
+            .minus => {
+                at.* = t.1;
+                let r = try term(src, at);
+                acc = acc - r;
+            }
+            _ => {
+                return acc;
+            }
+        }
+    }
+    @unreachable();
+}
+
+fn eval(src: []u8) -> i64 ! EvalErr {
+    var at: i64 = 0;
+    let v = try expr(src, &mut at);
+    let t = try next(src, at);
+    match t.0 {
+        .end => {
+            return v;
+        }
+        _ => {
+            fail .syntax(.unexpected(at));
+        }
+    }
+}
+
+/// 0 for a value, otherwise a code for the error and its byte position: the `/` for a
+/// division by zero, the `(` left open, the bad byte, or where an unexpected token's
+/// scan began.
+fn error_code(src: []u8) -> i64 {
+    match eval(src) {
+        .ok(_) => {
+            return 0;
+        }
+        .err(e) => {
+            match e {
+                .div_by_zero(p) => {
+                    return 100 + p;
+                }
+                .syntax(s) => {
+                    match s {
+                        .lex(l) => {
+                            match l {
+                                .bad_byte(p) => {
+                                    return 200 + p;
+                                }
+                            }
+                        }
+                        .unexpected(p) => {
+                            return 300 + p;
+                        }
+                        .unclosed(p) => {
+                            return 400 + p;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    let a = eval("1 + 2 * 3") catch _ => -1;
+    @assert(a == 7);
+    let b = eval("(1 + 2) * 3") catch _ => -1;
+    @assert(b == 9);
+    let c = eval(" 2 * (3 + 4) - -5 ") catch _ => -1;
+    @assert(c == 19);
+    let d = eval("100 / 7 / 2") catch _ => -1;
+    @assert(d == 7);
+    let e = eval("8 - 3 - 2") catch _ => -1;
+    @assert(e == 3);
+    let f = eval("((((((((((42))))))))))") catch _ => -1;
+    @assert(f == 42);
+    @assert(error_code("1 / (2 - 2)") == 102);
+    @assert(error_code("2 * (3 + 4") == 404);
+    @assert(error_code("1 + x") == 204);
+    @assert(error_code("1 2") == 301);
+    @assert(error_code("*") == 300);
+    @assert(error_code("12345") == 0);
+    return 0;
+}

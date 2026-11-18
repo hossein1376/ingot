@@ -486,7 +486,14 @@ else is a builtin that names what happens to values that do not fit:
   is only `FnMut`, and moves it when it is only `FnOnce`. The exclusive use is allowed on
   a `let` or a parameter: a closure never changes its own bytes, only what its `&mut`
   captures point at. A `&F` is callable when `F: Fn` and a `&mut F` when `F: FnMut`. The
-  dynamic forms are `&dyn Fn(A) -> R` and `&mut dyn FnMut(A) -> R`.
+  dynamic forms are `&dyn Fn(A) -> R` and `&mut dyn FnMut(A) -> R`, and they convert as
+  `&dyn I` does (section 4.4): a `&T` becomes a `&dyn Fn(A) -> R` when `T: Fn(A) -> R`,
+  and a `&mut T` becomes a `&mut dyn FnMut(A) -> R` when `T: FnMut(A) -> R`, wherever the
+  expected type reaches and is one. `T` may be a closure type, a function or a `fn`
+  pointer type.
+* A closure's value is its **capture record**: a struct whose fields are the captures in
+  the order of the capture list, each of its captured type (`T`, `&T` or `&mut T`), laid
+  out as a struct (04 §25). A closure with no captures has size 0 and alignment 1.
 
 ### 5.7 Conditional and match expressions
 

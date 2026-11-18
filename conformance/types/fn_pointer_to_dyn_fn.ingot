@@ -1,0 +1,20 @@
+//! expect: accept
+//! section: 5.6
+
+fn double(x: i64) -> i64 {
+    return x * 2;
+}
+
+fn call(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+fn call_mut(f: &mut dyn FnMut(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+}
+
+fn g(x: i64) -> i64 {
+    let p: fn(i64) -> i64 = double;
+    var q: fn(i64) -> i64 = double;
+    return call(&p, x) + call(&double, x) + call_mut(&mut q, x);
+}
