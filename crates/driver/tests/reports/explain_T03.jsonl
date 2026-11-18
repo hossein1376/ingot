@@ -1,0 +1,2 @@
+{"type":"explain","code":"T03","name":"integer_overflow","condition":"+ - *, unary -, and their assignment forms","sections":["5.2"],"bad":"\nimport std.Env;\n\nfn bump(x: i32) -> i32 {\n    return x + 1; //~ T03\n}\n\npub fn main(env: &Env) -> u8 {\n    let top: i32 = 2147483647;\n    let r = bump(top);\n    @assert(r == 0);\n    return 0;\n}\n"}
+{"type":"summary","command":"explain","ok":true,"protocol":1,"ms":0}

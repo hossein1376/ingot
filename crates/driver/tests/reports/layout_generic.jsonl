@@ -1,0 +1,2 @@
+{"type":"layout","name":"api_app.Point[i64]","size":24,"align":8,"fields":[{"name":"x","type":"i64","offset":0,"size":8},{"name":"y","type":"i64","offset":8,"size":8},{"name":"unit","type":"i64","offset":16,"size":8}],"padding":[]}
+{"type":"summary","command":"layout","ok":true,"protocol":1,"ms":0}

@@ -166,6 +166,21 @@ pub fn analyze_graph_with(graph: LoadedGraph, options: &Options) -> io::Result<A
     })
 }
 
+/// Analyze `std` alone, for a report whose current directory is no package: a dotted
+/// path `std...` still resolves, and the builtin declarations exist (tools.md §4).
+pub fn analyze_std(options: &Options) -> io::Result<Analysis> {
+    let std = loader::load_std(&options.load)?;
+    let graph = LoadedGraph {
+        packages: vec![std],
+        root: Some(0),
+        checked: vec![0],
+        order: vec![0],
+        deps: vec![Vec::new()],
+        ..LoadedGraph::default()
+    };
+    analyze_graph_with(graph, options)
+}
+
 /// `analyze_graph_with` for one package with no dependencies: the fix engine's entry.
 pub fn analyze_with(package: LoadedPackage, options: &Options) -> io::Result<Analysis> {
     let graph = LoadedGraph {

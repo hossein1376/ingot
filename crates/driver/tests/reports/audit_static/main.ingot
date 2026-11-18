@@ -1,0 +1,6 @@
+import std.sync;
+
+static shared: sync.Cell[i64] = @zero(sync.Cell[i64]);
+
+fn f() {
+}

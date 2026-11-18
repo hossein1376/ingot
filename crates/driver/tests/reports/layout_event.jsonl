@@ -1,0 +1,2 @@
+{"type":"layout","name":"layout_app.Event","size":16,"align":8,"tag":{"type":"u8","offset":0,"size":1},"variants":[{"name":"none"},{"name":"number","type":"i64","offset":8,"size":8},{"name":"pair","type":"Pair","offset":8,"size":8}],"padding":[{"offset":1,"size":7}]}
+{"type":"summary","command":"layout","ok":true,"protocol":1,"ms":0}

@@ -1,0 +1,12 @@
+{"type":"audit","kind":"unsafe_fn","span":{"file":"dep/main.ingot","start":{"line":2,"col":15,"offset":62},"end":{"line":2,"col":20,"offset":67}}}
+{"type":"audit","kind":"unsafe_block","fn":"dep.touch","span":{"file":"dep/main.ingot","start":{"line":3,"col":5,"offset":94},"end":{"line":5,"col":6,"offset":166}},"reason":"the dependency checked the pointer"}
+{"type":"audit","kind":"unsafe_impl","span":{"file":"main.ingot","start":{"line":7,"col":1,"offset":50},"end":{"line":7,"col":32,"offset":81}},"interface":"Send","for":"NotSend"}
+{"type":"audit","kind":"unsafe_fn","span":{"file":"main.ingot","start":{"line":10,"col":15,"offset":145},"end":{"line":10,"col":19,"offset":149}}}
+{"type":"audit","kind":"unsafe_block","fn":"audit_app.read","span":{"file":"main.ingot","start":{"line":11,"col":5,"offset":176},"end":{"line":13,"col":6,"offset":244}},"reason":"the caller checked the pointer"}
+{"type":"audit","kind":"export","span":{"file":"main.ingot","start":{"line":16,"col":15,"offset":262},"end":{"line":16,"col":23,"offset":270}},"symbol":"exported"}
+{"type":"audit","kind":"extern","span":{"file":"main.ingot","start":{"line":21,"col":8,"offset":325},"end":{"line":21,"col":12,"offset":329}},"abi":"c","symbol":"puts"}
+{"type":"audit","kind":"unsafe_block","fn":"audit_app.through_dep","span":{"file":"main.ingot","start":{"line":25,"col":5,"offset":390},"end":{"line":27,"col":6,"offset":468}},"reason":"the dependency's contract holds"}
+{"type":"audit","kind":"forget","fn":"audit_app.uses","span":{"file":"main.ingot","start":{"line":32,"col":5,"offset":534},"end":{"line":32,"col":15,"offset":544}}}
+{"type":"audit","kind":"debug","fn":"audit_app.uses","span":{"file":"main.ingot","start":{"line":34,"col":5,"offset":570},"end":{"line":34,"col":24,"offset":589}}}
+{"type":"audit","kind":"forget","fn":"audit_app.uses","span":{"file":"main.ingot","start":{"line":36,"col":5,"offset":625},"end":{"line":36,"col":15,"offset":635}}}
+{"type":"summary","command":"audit","ok":true,"protocol":1,"ms":0}

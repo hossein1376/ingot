@@ -1,0 +1,2 @@
+{"type":"explain","code":"E0312","name":"var_never_mutated","condition":"a var is never assigned and never exclusively borrowed after its initialization","sections":["7"],"bad":"\nfn f() -> i64 {\n    var total: i64 = 2; //~ E0312\n    return total;\n}\n","good":"\nfn f() -> i64 {\n    let total: i64 = 2;\n    return total;\n}\n","fix":"replace with let"}
+{"type":"summary","command":"explain","ok":true,"protocol":1,"ms":0}

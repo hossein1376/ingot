@@ -1,0 +1,4 @@
+name = "audit_app"
+
+[deps]
+dep = { path = "dep" }

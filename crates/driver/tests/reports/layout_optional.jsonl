@@ -1,0 +1,2 @@
+{"type":"layout","name":"?&layout_app.Mixed","size":8,"align":8,"fields":[{"name":"some","type":"&Mixed","offset":0,"size":8}],"padding":[]}
+{"type":"summary","command":"layout","ok":true,"protocol":1,"ms":0}

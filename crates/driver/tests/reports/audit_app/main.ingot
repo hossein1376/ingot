@@ -1,0 +1,45 @@
+import dep;
+
+struct NotSend {
+    p: *mut i64,
+}
+
+unsafe impl Send for NotSend {}
+
+/// Reads through a pointer the caller checked.
+pub unsafe fn read(p: *mut i64) -> i64 {
+    unsafe("the caller checked the pointer") {
+        return p.*;
+    }
+}
+
+pub export fn exported(x: i64) -> i64 {
+    return x;
+}
+
+extern "c" {
+    fn puts(s: *u8) -> i32;
+}
+
+fn through_dep(p: *mut i64) -> i64 {
+    unsafe("the dependency's contract holds") {
+        return dep.touch(p);
+    }
+}
+
+fn uses(p: *mut i64) {
+    let a: [2]u8 = [2]u8.{ 1, 2 };
+    @forget(a);
+    let x: i64 = 3;
+    @debug("x = {}", x);
+    let n = NotSend.{ p: p };
+    @forget(n);
+}
+
+when @target.os == .linux {
+    pub unsafe fn linux_only(p: *mut i64) -> i64 {
+        unsafe("linux only") {
+            return p.*;
+        }
+    }
+}

@@ -1,0 +1,2 @@
+{"type":"explain","code":"E0101","name":"invalid_utf8","condition":"the file is not valid UTF-8","sections":[]}
+{"type":"summary","command":"explain","ok":true,"protocol":1,"ms":0}

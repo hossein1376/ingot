@@ -12,5 +12,6 @@ pub mod loader;
 pub mod manifest;
 pub mod pipeline;
 pub mod query;
+pub mod reports;
 pub mod serve;
 pub mod sha256;

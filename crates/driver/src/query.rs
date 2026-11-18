@@ -1187,7 +1187,7 @@ fn member_end(slice: &str) -> usize {
     slice.len()
 }
 
-fn doc_comment(text: &str, start: usize) -> Option<String> {
+pub(crate) fn doc_comment(text: &str, start: usize) -> Option<String> {
     if start > text.len() {
         return None;
     }

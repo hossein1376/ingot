@@ -1,0 +1,16 @@
+pub struct Mixed {
+    pub a: u8,
+    pub b: i64,
+    pub c: u8,
+}
+
+pub struct Pair {
+    pub x: i32,
+    pub y: i32,
+}
+
+pub enum Event: u8 {
+    none,
+    number: i64,
+    pair: Pair,
+}

@@ -1,0 +1,6 @@
+/// Reads through a pointer the caller checked.
+pub unsafe fn touch(p: *mut i64) -> i64 {
+    unsafe("the dependency checked the pointer") {
+        return p.*;
+    }
+}

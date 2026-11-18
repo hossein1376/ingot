@@ -1,0 +1,2 @@
+{"type":"explain","code":"E0512","name":"initializer_not_constant","condition":"a non-constant initializer is E0807","retired":true,"sections":[]}
+{"type":"summary","command":"explain","ok":true,"protocol":1,"ms":0}

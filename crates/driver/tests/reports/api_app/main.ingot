@@ -1,0 +1,112 @@
+/// A point in the plane.
+pub struct Point[T: Copy] {
+    /// The x coordinate.
+    pub x: T,
+    /// The y coordinate, hidden.
+    y: T,
+    pub(pkg) unit: i64,
+}
+
+impl[T: Copy] Point[T] {
+    /// The x coordinate.
+    pub fn get(self: &Point[T]) -> T {
+        return self.x;
+    }
+
+    pub fn offset(
+        self: &Point[T],
+        // the distance along both axes
+        by: T,
+    ) -> Point[T] {
+        return Point[T].{ x: self.x, y: self.y, unit: 1 };
+    }
+
+    fn secret(self: &Point[T]) -> T {
+        return self.y;
+    }
+
+    pub(pkg) fn hidden(self: &Point[T]) -> T {
+        return self.y;
+    }
+}
+
+/// The shapes.
+pub enum Shape: u8 {
+    empty,
+    circle: i64,
+    square,
+}
+
+pub copy enum Failure: u8 {
+    nothing,
+    bad: from i64,
+}
+
+/// Something that can be drawn.
+pub interface Draw: Copy {
+    /// The colour type.
+    type Color;
+
+    /// Draw it.
+    fn draw(self: &Self, color: Self.Color) -> bool;
+}
+
+pub copy struct Square {}
+
+/// A square draws.
+impl Draw for Square {
+    type Color = i64;
+
+    fn draw(self: &Square, color: i64) -> bool {
+        return color > 0;
+    }
+}
+
+impl Shape {
+    pub fn sides(self: &Shape) -> i64 {
+        return 4;
+    }
+
+    fn secret_sides(self: &Shape) -> i64 {
+        return 0;
+    }
+}
+
+pub const limit: i64 = 4;
+pub const greeting: []u8 = "héllo";
+pub static global: i64 = 2;
+pub fn nothing() {
+}
+
+pub type Alias = Square;
+pub type GenericAlias[T: Copy] = Point[T];
+pub(pkg) fn package_only() -> i64 {
+    return 1;
+}
+
+/// A dangerous operation.
+pub unsafe fn danger(p: *mut i64) -> i64 {
+    unsafe("the caller checked the pointer") {
+        return p.*;
+    }
+}
+
+extern "c" {
+    fn puts(s: *u8) -> i32;
+}
+
+pub export fn exported(x: i64) -> i64 {
+    return x;
+}
+
+when @target.os == .macos {
+    pub fn mac_only() -> i64 {
+        return 1;
+    }
+}
+
+when @target.os == .linux {
+    pub fn linux_only() -> i64 {
+        return 2;
+    }
+}

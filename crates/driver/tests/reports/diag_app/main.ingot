@@ -1,0 +1,13 @@
+pub struct Good {
+    pub a: u8,
+}
+
+pub fn good() -> i64 {
+    return 1;
+}
+
+pub unsafe fn touch(p: *mut i64) -> i64 {
+    unsafe("the caller checked the pointer") {
+        return p.*;
+    }
+}

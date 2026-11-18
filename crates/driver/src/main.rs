@@ -36,7 +36,7 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<u8, String> {
     let Some(command) = args.first().map(String::as_str) else {
         return Err(
-            "usage: ingot <check|fix|query|serve|conformance> [options] [path]".to_string(),
+            "usage: ingot <check|fix|query|api|audit|explain|layout|targets|deps|build|run|serve|conformance> [options] [path]".to_string(),
         );
     };
     let json = has_flag(args, "--json");
@@ -103,6 +103,62 @@ fn run(args: &[String]) -> Result<u8, String> {
                 fix::write_back(&outcome).map_err(|e| e.to_string())?;
             }
             Ok(if ok { 0 } else { 1 })
+        }
+        "explain" => {
+            let started = Instant::now();
+            let all = has_flag(args, "--all");
+            let code = positional_from(args, 1, &[]);
+            if all && code.is_some() {
+                return Err("use either `explain CODE` or `explain --all`".to_string());
+            }
+            let output = match (all, code) {
+                (true, _) => ingot_driver::reports::explain::explain_all(started),
+                (false, Some(code)) => ingot_driver::reports::explain::explain(&code, started),
+                (false, None) => {
+                    return Err("`explain` needs a CODE, or `--all`".to_string());
+                }
+            };
+            print_output(&output, json);
+            Ok(output.exit)
+        }
+        "api" => {
+            let started = Instant::now();
+            let pkg = has_flag(args, "--pkg");
+            let target = flag_value(args, "--target")?;
+            let argument = positional(args, &["--target"]);
+            let (path, dotted) = match &argument {
+                Some(path) if path.exists() => (Some(path.as_path()), None),
+                Some(path) => (None, Some(path.to_string_lossy().into_owned())),
+                None => (None, None),
+            };
+            let dotted = dotted.as_deref();
+            let output =
+                ingot_driver::reports::api::api(path, dotted, pkg, target.as_deref(), started);
+            print_output(&output, json);
+            Ok(output.exit)
+        }
+        "audit" => {
+            let started = Instant::now();
+            let path = positional(args, &[]);
+            let output = ingot_driver::reports::audit::audit(path.as_deref(), started);
+            print_output(&output, json);
+            Ok(output.exit)
+        }
+        "layout" => {
+            let started = Instant::now();
+            let target = flag_value(args, "--target")?;
+            let Some(text) = positional_from(args, 1, &["--target"]) else {
+                return Err("`layout` needs a TYPE".to_string());
+            };
+            let output = ingot_driver::reports::layout::layout(&text, target.as_deref(), started);
+            print_output(&output, json);
+            Ok(output.exit)
+        }
+        "targets" => {
+            let started = Instant::now();
+            let output = ingot_driver::reports::targets::targets(started);
+            print_output(&output, json);
+            Ok(output.exit)
         }
         "query" => {
             let kind = args.get(1).map(String::as_str).unwrap_or("");
@@ -304,6 +360,24 @@ fn run(args: &[String]) -> Result<u8, String> {
             Ok(if report.failed == 0 { 0 } else { 1 })
         }
         other => Err(format!("unknown command `{other}`")),
+    }
+}
+
+/// Print a command's lines, or its text, exactly as the one-shot CLI does for the
+/// commands that share this shape.
+fn print_output(output: &commands::Output, json: bool) {
+    if json {
+        for line in &output.lines {
+            println!("{line}");
+        }
+    } else {
+        print!("{}", output.human);
+        if let Some(message) = &output.error {
+            eprintln!("ingot: {message}");
+        }
+    }
+    for what in &output.not_implemented {
+        eprintln!("ingot: not implemented: {what}");
     }
 }
 

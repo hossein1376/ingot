@@ -1,0 +1,2 @@
+{"type":"explain","code":"T01","name":"index_out_of_bounds","condition":"a[i]","sections":["5.5"],"bad":"\nimport std.Env;\n\nfn pick(xs: []i64, i: i64) -> i64 {\n    return xs[i]; //~ T01\n}\n\npub fn main(env: &Env) -> u8 {\n    let data: [3]i64 = [3]i64.{ 1, 2, 3 };\n    let r = pick(&data[0..3], 3);\n    @assert(r == 0);\n    return 0;\n}\n"}
+{"type":"summary","command":"explain","ok":true,"protocol":1,"ms":0}
