@@ -299,10 +299,158 @@ zstd = { git = "https://example.com/zstd-ingot", rev = "4f1c...", hash = "sha256
 
 ## 34. Formatting
 
-`ingot fmt` produces the one canonical layout: four-space indentation, one statement
-per line, a fixed line-breaking rule for long calls and declarations, imports sorted.
-It never changes a token other than whitespace and trailing commas. `ingot fmt --check`
-is how a repository enforces it.
+`ingot fmt` produces the one canonical layout. The output depends on the tokens, the
+comments, the author's choice of zero or one blank line between statements and between
+items, and the author's grouping of imports; it never depends on where the author broke
+lines. Formatting a formatted file changes nothing. `ingot fmt --check` is how a
+repository enforces it.
+
+* **What may change.** White space, trailing commas (added or removed as below) and the
+  order of imports within a group. No other token is added, removed or reordered, and
+  the text of comments and literals is never changed. A file with a lexical or syntax
+  error is left as it is.
+* **Width.** A line has at most 80 columns, counted in characters (Unicode scalar
+  values), indentation included. A comment at the end of a line does not count. A line
+  that is still longer after every break this section allows (a long string or name) is
+  left long; strings and comments are never wrapped.
+
+### 34.1 Within a line
+
+* Indentation is four spaces per level. A tab never appears outside a literal or a
+  comment. Lines end in `\n`, with no trailing white space, and a file ends with exactly
+  one newline.
+* One space around every binary operator and around `=`, the compound assignments,
+  `=>`, `->`, `as`, `in`, `orelse`, `catch`, `from`, `step`, `over`, `on`, `for` of an
+  `impl`, the `!` of an error type, and the `+` between bounds. No space around `..`
+  and `..=`.
+* No space after a prefix operator (`-x`, `!ok`, `&x`, `&mut x`, `*u8`, `?T`); one space
+  after a prefix keyword (`try f()`).
+* No space before `,` `;` `:`, and one space after `,` and `:` when the line goes on. No
+  space after `(` `[` or before `)` `]`. No space before the `(` of a call or parameter
+  list, or the `[` of generics, indexing or a type argument list. None around `.`, `.*`
+  and `.[`. A closure's capture list follows `fn` after one space, and its parameter
+  list follows the capture list with none: `fn [scale, &mut total](x: i64)`.
+* One space before a block's `{` and inside the braces of a one-line struct literal or
+  pattern: `Point.{ x: 1, y: 2 }`, `Point.{ x, .. }`. An empty block, list or literal is
+  `{}`, `()`, `.{}`.
+* One space before a comment at the end of a line.
+
+### 34.2 Lines and blocks
+
+* One statement per line. A block, function body, `impl`, `interface`, `extern` block,
+  `struct` or `enum` that has any content spans several lines: `{` ends the line that
+  opens it, each statement, member, field or variant is on its own line one level
+  deeper, and `}` is on its own line. Fields and variants each end in `,`. Only an empty
+  one is written `{}`, and 34.2's one-line blocks are the only other exception.
+* **One-line blocks.** The block of a `defer`, `errdefer` or `unsafe` statement, the
+  handler block of `orelse` or `catch`, the block of a `match` or `select` arm and the
+  body of a closure are written
+  on one line, `{ stmt }`, when all of these hold: the block holds exactly one
+  statement; that statement contains no block of its own; no comment is inside the
+  braces; and the whole line fits. Otherwise the block spans several lines as any other.
+  Function bodies and the bodies of `if`, `else`, loops, `scope` and `when` are never
+  one-line: control flow and a named function always show their body on its own lines.
+
+  ```ingot
+  defer { buf.free(); }
+  unsafe("p points at a live i64") { @atomic_store(p, y, s); }
+  let n = parse(text) orelse { return .none; };
+  .less => { return -1; }
+  xs.each(fn [scale, &mut total](x: i64) { total.* += x * scale; });
+  ```
+* `}` and a following `else` share a line: `} else {`, `} else if x {`.
+* Each `match` arm starts its own line. An expression arm ends in `,`, the last one
+  included; a block arm does not.
+* A struct literal, array literal, tuple or `if` expression whose branches are single
+  expressions may stay on one line when it fits.
+* Blank lines: a run of blank lines becomes one, and there is none after a `{` or
+  before a `}`. Between statements (in any block, function bodies included), and
+  between items, members, fields, variants, `match` arms or `select` arms, the author's
+  zero or one is kept. A file
+  starts with its first comment or token.
+* Comments on their own line are indented as the code they precede. Doc comments stay
+  directly above their item.
+
+```ingot
+// before
+impl Point { pub fn norm2(self: &Point)->i64 { let x=self.x*self.x; return x+self.y*self.y; } }
+
+// after
+impl Point {
+    pub fn norm2(self: &Point) -> i64 {
+        let x = self.x * self.x;
+        return x + self.y * self.y;
+    }
+}
+```
+
+### 34.3 Breaking long lines
+
+A statement, header or arm that fits in 80 columns is written on one line, whatever its
+layout in the input. One that does not is broken at its outermost breakable
+construct, and each resulting line is then checked again the same way. There is no
+break after `=` or `=>`. When a line holds several lists or one-line blocks (a
+function's generic parameters and its parameters; a type's generic arguments and a
+struct literal's fields; two calls joined by `orelse`), the last one breaks first, and
+an earlier one only if the line still does not fit:
+
+```ingot
+var heap = MaxHeap[i64, 8].{
+    items: [8]i64.{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    len: 0,
+};
+```
+
+* **Lists** (arguments, parameters, generic parameters and arguments, captures, tuple
+  elements, struct literal fields, array elements, struct pattern fields) break
+  all-or-nothing: the opening bracket ends the line, every item goes on its own line one
+  level deeper and ends in `,`, and the closing bracket starts the next line at the
+  original level, followed by the rest of the construct. Items are never packed several
+  to a line.
+
+  ```ingot
+  pub fn alloc_slice[T: Copy](
+      self: &Arena,
+      n: i64,
+      fill: T,
+  ) -> []mut T ! AllocErr from self {
+  ```
+
+* **Operator chains** break before each operator of the lowest precedence in the
+  expression, every continuation one level deeper than the line it continues:
+
+  ```ingot
+  let total = header.len
+      + payload.len
+      + checksum_bytes(header.kind, payload.len);
+  ```
+
+* **Method chains** of two or more calls break before each `.` that follows the first
+  segment, one level deeper:
+
+  ```ingot
+  let words = text
+      .split(" ")
+      .filter(nonempty)
+      .count();
+  ```
+
+* A construct with a comment inside its brackets, on a line of its own or at the end of
+  a line, is always written broken: a `//` comment runs to the end of its line, so
+  nothing else can follow it, and moving it would change what it is attached to. A
+  one-line list never ends in `,`; a broken one always does.
+* A closure body that spans several lines breaks the list it is an item of, so the body
+  is indented under its own line.
+* **Headers.** A long `if`, `while` or `when` condition breaks as the expression it is
+  (operator or method chain), never after the keyword or before `{`. A long `for`
+  header breaks inside the iterated expression or range, never before `in` or `step`.
+  A long `select` arm breaks the call's argument list; `=>` stays on the header line.
+
+### 34.4 Imports
+
+Imports come first, one per line. Blank lines divide them into groups, which are kept;
+within a group they are sorted by the byte order of their text after `import`. Nothing
+else about them changes: a duplicate import is E0302, not a formatting matter.
 
 ## 35. Standard library outline
 

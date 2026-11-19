@@ -346,6 +346,22 @@ code alone.
   * `ingot audit` covers the build minus `std` by default, so a dependency's `unsafe` is
     visible; `ingot audit std` audits `std`. *Rejected:* the root package only, and the
     whole build with `std`, whose runtime would dominate the list.
+* **`ingot fmt` is canonical, rustfmt-style, 80 columns** (*user*, 2026-11-18; 05 §34).
+  The output ignores the author's line breaks (keeping only their 0-or-1 blank lines and
+  import groups); a list that does not fit breaks one item per line with a trailing
+  comma; operator and method chains break before the operator or `.`; no column
+  alignment; imports sorted within the author's groups. `struct` and `enum`
+  declarations always span several lines (*user*, 2026-11-19, reversing their one-line
+  form after seeing it on `std`). The block of `defer`, `errdefer`, `unsafe`, an `orelse` or
+  `catch` handler, a `match` or `select` arm and a closure body stays on one line when it holds one
+  statement without a block of its own and fits (*user*): cleanup and error handling
+  read better as one line than three. `select` arms follow `match` arms. *Rejected*
+  (*user*): one-line function bodies, and one-line `if` and loop bodies, which stay
+  multi-line as in Go and Rust. Closures are spaced `fn [caps](params)` as in the
+  spec's examples (*user*). *Why:* one layout for any
+  input, and a one-item change is a one-line diff. *Rejected:* gofmt's kept line
+  breaks (two layouts of one program), packing several items per line, and gofmt's
+  aligned columns (renaming one field re-indents its neighbours).
 * **The C ABI** (review 2, U3; 04 §29): `bool` is C's `_Bool`; `copy struct`s cross by
   value by each system's rule; `?extern fn` crosses as a nullable function pointer;
   other optionals, results and enums do not. No unwinding; unwind tables are still

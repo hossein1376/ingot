@@ -515,7 +515,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | P3 | relay | The cost items that need no back end: `indirect_call`, `task_spawn`, `copy`, `alloc` | done (97c0be1, 690c570) |
 | P4a | relay | Packages: loading `[deps]` (path and git, the hash, the cache), `[override]`, workspaces, `check --all-targets`, E0303, E1703, E1708–E1712, `ingot deps` with `update` and `fetch` (05 §33.2, tools.md §4) | done (4501597) |
 | P4b | relay | The report tools that need no back end: `ingot api` with `--pkg`, `audit`, `layout`, `targets`, `explain` (tools.md §2, §4) | done (b3b946f) |
-| F1 | — | `ingot fmt`, after its layout rules are written into 05 §34 | `fmt --check` clean over `std/` and the suite |
+| F1 | — | `ingot fmt` (05 §34, tools.md §2): the canonical layout, `--check`, `--stdin` | `fmt` idempotent and `--check` clean over `std/` and the suite, with the conformance results unchanged |
 | B1 | relay | `ingot-codegen`: 11b, layouts per instance, mangling, IR for scalars, control flow, calls, aggregates, checks and trap sites; `rt` core in Ingot (entry, `trap`, `write`, `exit`); linking on `aarch64-macos-m4` | done (fe9f223) |
 | B2 | relay | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | done (352a45e, 917c624) |
 | B3 | — | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | the gate |
