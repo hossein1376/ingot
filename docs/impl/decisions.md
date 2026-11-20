@@ -59,6 +59,13 @@ code alone.
   fieldless struct as having a private field; destructuring did not, so another module
   could consume a fieldless `linear struct Permit {}` that is meant to come back to its
   own module. *Rejected:* the vacuous reading ("every field is visible").
+* **A linear struct is taken apart wherever all its fields are visible** (*user*,
+  2026-11-20, found reviewing R1c; 02 §10). The module rule exists so that private fields
+  can keep an invariant; a struct any module can build with a literal has none to keep.
+  Without it `AllocFail[T]` (all fields `pub`) could not give a linear value back outside
+  `std.mem`, which is the whole point of the `_or_return` forms. *Rejected:* an
+  `into_parts` method in `std.mem` (every plain-data generic with a linear parameter
+  would need one).
 
 ## 2. Types, interfaces and generics
 

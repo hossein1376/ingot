@@ -247,7 +247,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E1003 | `linear_not_consumed` | a linear value is still owned at an exit of its scope on some path, or a linear temporary is not consumed by the end of its statement. In a generic body, a `T` without `Discard` counts as linear | the binding at its declaration, or the expression that made the temporary (`scope_end`: each exit that leaks it) | if the type has exactly one consuming function with no other parameters and no error type, insert `defer { x.f(); }` after the declaration; otherwise the message lists the candidates. In a generic body, add the bound `Discard` instead, if the value is a `T` |
 | E1004 | `linear_overwritten` | assignment to a place that holds a linear value, other than through a raw pointer | the assignment | — |
 | E1005 | `moved_but_deferred` | a value that a pending deferred block consumes or uses is moved before the block runs | the move (`defer`) | — |
-| E1006 | `partial_move_of_linear` | a field is moved out of a linear struct without destructuring the whole, outside its module | the expression | — |
+| E1006 | `partial_move_of_linear` | a linear struct is taken apart (a field moved out, or destructured) where one of its fields is not visible | the expression | — |
 
 ## 11. Borrows (E11xx)
 

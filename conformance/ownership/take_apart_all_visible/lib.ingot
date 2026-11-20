@@ -1,0 +1,33 @@
+pub linear struct Token {
+    id: i32,
+}
+
+impl Token {
+    pub fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+
+    pub fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+/// Every field is `pub`: any module could write a literal of it.
+pub linear struct Pair {
+    pub t: Token,
+    pub n: i64,
+}
+
+/// `pub(pkg)` fields: visible in every module of this package.
+pub linear struct Inner {
+    pub(pkg) t: Token,
+    pub(pkg) n: i64,
+}
+
+pub fn pair() -> Pair {
+    return Pair.{ t: Token.make(1), n: 2 };
+}
+
+pub fn inner() -> Inner {
+    return Inner.{ t: Token.make(3), n: 4 };
+}

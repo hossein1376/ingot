@@ -529,6 +529,7 @@ ownership/partial_move_use_whole.ingot
 ownership/reborrow_argument_twice.ingot
 ownership/reborrow_binding_moves.ingot
 ownership/static_move.ingot
+ownership/take_apart_all_visible/main.ingot
 ownership/two_consumers_not_consumed.ingot
 ownership/use_after_move.ingot
 ownership/var_reassigned_after_move.ingot

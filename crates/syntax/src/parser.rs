@@ -2359,6 +2359,50 @@ impl<'a> Parser<'a> {
 
     // ------------------------------------------------------------ patterns
 
+    /// Whether the tokens here are `ident . ( ident . )* Type`: a type behind a module
+    /// path, which in a pattern starts a struct or variant pattern, not a binding.
+    fn at_module_path_type(&self) -> bool {
+        let mut k = 0;
+        while matches!(self.peek_at(k).kind, TokenKind::Ident(_))
+            && self.peek_at(k + 1).kind.is_punct(Dot)
+        {
+            k += 2;
+        }
+        k > 0 && matches!(self.peek_at(k).kind, TokenKind::TypeIdent(_))
+    }
+
+    /// A pattern that starts with a type: `Type.variant(..)`, `Type.{ .. }` or a bare
+    /// `Type`, with an optional module path in front.
+    fn path_pattern(&mut self, start: usize) -> Pattern {
+        let path = self.path_ty();
+        if self.eat(Dot) {
+            let (name, name_span) = self.expect_ident();
+            let payload = if self.eat(LParen) {
+                let p = self.pattern();
+                self.expect(RParen);
+                Some(Box::new(p))
+            } else {
+                None
+            };
+            Pattern::Variant {
+                path: Some(path),
+                name,
+                name_span,
+                payload,
+            }
+        } else if self.at(DotLBrace) {
+            self.struct_pattern(start, Some(path))
+        } else {
+            Pattern::Struct {
+                ty: Some(path),
+                fields: Vec::new(),
+                rest: false,
+                rest_span: Span::default(),
+                span: Span::new(start, self.prev_end().max(start)),
+            }
+        }
+    }
+
     fn pattern(&mut self) -> Pattern {
         let start = self.span().start;
         match self.kind().clone() {
@@ -2366,6 +2410,9 @@ impl<'a> Parser<'a> {
                 let span = self.bump().span;
                 Pattern::Wild(span)
             }
+            // `lib.Pair.{ .. }` or `lib.Shape.circle(..)`: a module path in front of a type
+            // (grammar.md `pattern`, `path_type`).
+            TokenKind::Ident(_) if self.at_module_path_type() => self.path_pattern(start),
             TokenKind::Ident(_) => {
                 let (name, span) = self.expect_ident();
                 Pattern::Bind { name, span }
@@ -2400,35 +2447,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            TokenKind::TypeIdent(_) => {
-                let path = self.path_ty();
-                if self.eat(Dot) {
-                    let (name, name_span) = self.expect_ident();
-                    let payload = if self.eat(LParen) {
-                        let p = self.pattern();
-                        self.expect(RParen);
-                        Some(Box::new(p))
-                    } else {
-                        None
-                    };
-                    Pattern::Variant {
-                        path: Some(path),
-                        name,
-                        name_span,
-                        payload,
-                    }
-                } else if self.at(DotLBrace) {
-                    self.struct_pattern(start, Some(path))
-                } else {
-                    Pattern::Struct {
-                        ty: Some(path),
-                        fields: Vec::new(),
-                        rest: false,
-                        rest_span: Span::default(),
-                        span: Span::new(start, self.prev_end().max(start)),
-                    }
-                }
-            }
+            TokenKind::TypeIdent(_) => self.path_pattern(start),
             TokenKind::Punct(Dot) => {
                 self.bump();
                 let (name, name_span) = self.expect_ident();

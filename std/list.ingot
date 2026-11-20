@@ -453,13 +453,11 @@ fn spend(t: Token) -> i64 {
     return n;
 }
 
-/// What the failed allocation gave back. A linear value cannot be taken out of an
-/// `AllocFail` outside `std.mem` (E1006), so it is read through the field and the
-/// failure is forgotten; the token holds a number, so nothing leaks.
+/// What the failed allocation gave back. `AllocFail`'s fields are all `pub`, so it is
+/// taken apart here though it is declared in `std.mem` (02-memory section 10).
 fn take_back(f: AllocFail[Token]) -> i64 {
-    let n = f.value.n;
-    @forget(f);
-    return n;
+    let AllocFail[Token].{ error: _, value } = f;
+    return spend(value);
 }
 
 fn is_none[T: Discard](o: ?T) -> bool {

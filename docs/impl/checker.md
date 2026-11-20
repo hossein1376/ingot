@@ -117,8 +117,10 @@ Notes:
   how a value is moved out from behind a borrow. `p.take()` is `@replace(&mut p, .none)`.
 * A linear temporary (§11) is a local whose storage ends at the end of its statement, so
   E1003 for it is reported at the expression that made it.
-* A struct with a linear field that is partly moved is consumed field by field. Outside
-  the struct's module that is E1006.
+* A struct with a linear field that is partly moved is consumed field by field. Where
+  one of the struct's fields is not visible (outside its module, unless every field is
+  `pub`, or `pub(pkg)` inside its package), that is E1006. A fieldless struct counts as
+  having a private field.
 
 ## 4. Analysis B: origin sets
 

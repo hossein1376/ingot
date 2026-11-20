@@ -875,7 +875,7 @@ impl<'a> Cx<'a> {
                             self.error(
                                 flow,
                                 "E1006",
-                                &format!("cannot move a field of `{ty_name}` outside its module"),
+                                &format!("cannot move a field of `{ty_name}` where one of its fields is not visible"),
                                 span,
                                 &path,
                                 Vec::new(),
@@ -1099,13 +1099,30 @@ impl<'a> Cx<'a> {
         let TyKind::Adt(def, _) = self.kind(ty) else {
             return false;
         };
-        if self.decls.struct_sig(def).is_none() {
+        // A linear struct is taken apart only where every field is visible, which is where
+        // a literal of it could be written (02 section 10): elsewhere a private field is
+        // what lets its module keep an invariant. A fieldless struct counts as having a
+        // private field, as construction counts it (01 section 4.2).
+        let declared = self.sema.def(def).module;
+        let Some(fields) = self.decls.struct_sig(def).map(|sig| {
+            sig.fields
+                .iter()
+                .map(|f| (f.public, f.pkg))
+                .collect::<Vec<_>>()
+        }) else {
             return false;
-        }
+        };
         if !self.counts_linear(ty) {
             return false;
         }
-        self.sema.def(def).module != self.owner_module
+        if declared == self.owner_module {
+            return false;
+        }
+        fields.is_empty()
+            || !fields.iter().all(|&(public, pkg)| {
+                self.sema
+                    .field_visible(declared, self.owner_module, public, pkg)
+            })
     }
 
     fn payload_absent(&mut self, flow: &Flow, place: &Place) -> bool {

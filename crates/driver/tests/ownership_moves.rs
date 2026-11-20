@@ -244,16 +244,20 @@ fn linear_struct_field_by_field_is_only_inside_its_module() {
     let pair = "\
 pub struct M { pub v: i64 }
 
-pub linear struct Box { pub m: M }
+pub linear struct Box { pub m: M, tag: i64 }
+
+pub linear struct Open { pub m: M }
+
+pub fn open(v: i64) -> Open { return Open.{ m: M.{ v: v } }; }
 
 pub linear struct Bit { pub n: i64 }
 
 pub linear struct Two { pub a: M, pub b: Bit }
 
 impl Box {
-    pub fn make(v: i64) -> Box { return Box.{ m: M.{ v: v } }; }
+    pub fn make(v: i64) -> Box { return Box.{ m: M.{ v: v }, tag: 0 }; }
     pub fn consume(self: Box) -> i64 {
-        let Box.{ m } = self;
+        let Box.{ m, tag: _ } = self;
         return m.v;
     }
 }
@@ -264,11 +268,22 @@ fn dropped(t: Two) -> i64 {
 }
 ";
     let main = "\
+import app.pair;
 import app.pair.Box;
+import app.pair.Open;
 
+// `Box` has a private field: a pattern cannot cover it here (E0307), and moving the
+// public field out is E1006.
 fn steal() -> i64 {
     let b = Box.make(1);
-    let Box.{ m } = b;
+    let m = b.m;
+    return m.v;
+}
+
+// Every field of `Open` is visible here, so it may be taken apart (02 section 10).
+fn opened() -> i64 {
+    let o = pair.open(1);
+    let Open.{ m } = o;
     return m.v;
 }
 
@@ -281,7 +296,7 @@ fn whole() -> i64 {
         "module",
         &[("pair.ingot", pair), ("main.ingot", main)],
         &[
-            "E1006 cannot move a field of `Box` outside its module `let Box.{ m } = b;`",
+            "E1006 cannot move a field of `Box` where one of its fields is not visible `let m = b.m;`",
             "E1003 `t` is not consumed; no consuming function `t` scope_end=`return a.v;`",
         ],
     );

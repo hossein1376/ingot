@@ -354,3 +354,45 @@ fn align_without_its_parentheses_is_a_syntax_error() {
     let (_, diagnostics) = parse(&source, tokens);
     assert!(!diagnostics.is_empty());
 }
+
+#[test]
+fn a_pattern_may_name_its_type_through_a_module_path() {
+    // grammar.md `pattern`: `path_type ".{" ...` and `[ path_type ] "." IDENT`, where the
+    // path may start with modules. A lowercase name followed by `.` is that path, not a
+    // binding.
+    let (_, ast) = module(
+        "fn f(p: lib.Pair, s: geo.shapes.Shape) -> i64 {\n\
+         let lib.Pair.{ t, n } = p;\n\
+         let geo.shapes.Shape.circle(r) = s;\n\
+         let x = n;\n\
+         return x + r;\n}\n",
+    );
+    let body = body_of(&ast, "f");
+    let Stmt::Let { pattern, .. } = &body[0] else {
+        panic!("a let");
+    };
+    let Pattern::Struct { ty: Some(ty), .. } = pattern else {
+        panic!("a struct pattern, not {pattern:?}");
+    };
+    let names: Vec<&str> = ty.segments.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["lib", "Pair"]);
+    let Stmt::Let { pattern, .. } = &body[1] else {
+        panic!("a let");
+    };
+    let Pattern::Variant {
+        path: Some(path),
+        name,
+        ..
+    } = pattern
+    else {
+        panic!("a variant pattern, not {pattern:?}");
+    };
+    let names: Vec<&str> = path.segments.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["geo", "shapes", "Shape"]);
+    assert_eq!(name, "circle");
+    // A plain binding is still a binding.
+    let Stmt::Let { pattern, .. } = &body[2] else {
+        panic!("a let");
+    };
+    assert!(matches!(pattern, Pattern::Bind { name, .. } if name == "x"));
+}

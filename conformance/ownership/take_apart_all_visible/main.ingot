@@ -1,0 +1,23 @@
+//! expect: accept
+//! section: 10, 4.2
+
+// A linear struct is taken apart wherever all its fields are visible: here every field
+// of `Pair` is `pub`, and those of `Inner` are `pub(pkg)` in this package.
+
+import take_apart_all_visible.lib;
+
+fn by_pattern(p: lib.Pair) -> i64 {
+    let lib.Pair.{ t, n } = p;
+    t.release();
+    return n;
+}
+
+fn by_field(p: lib.Pair) -> lib.Token {
+    return p.t;
+}
+
+fn inside_the_package(i: lib.Inner) -> i64 {
+    let lib.Inner.{ t, n } = i;
+    t.release();
+    return n;
+}

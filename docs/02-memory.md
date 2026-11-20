@@ -56,7 +56,10 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
   can be borrowed, but not moved. `errdefer` counts for the error exits only, so the
   usual pattern for "hand it to the caller on success, clean up on failure" checks.
 * A linear struct is taken apart, by destructuring or by moving a field out of it, only
-  in its own module. Elsewhere it can only be passed on whole.
+  where all its fields are visible: where a literal of it could be written. Elsewhere it
+  can only be passed on whole, because a private field is how its module keeps an
+  invariant (section 4.2). A struct with no fields counts as having a private field. So
+  `AllocFail[T]`, whose fields are `pub`, gives its value back anywhere.
 * `@forget(x)` consumes any value without running anything. It is safe, because leaking
   is not a memory-safety problem, and `ingot audit` lists every use.
 * The compiler never inserts a call to release anything. If a scope ends and no cleanup
