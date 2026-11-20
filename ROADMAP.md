@@ -2,17 +2,19 @@
 
 The specification in [docs/](docs/README.md) is the definition of the language.
 
-**Where it stands.** The bootstrap compiler in `crates/` covers item 1 steps 1 to 3
-and the check-removal half of step 8: the front end, types and constant evaluation, the
-CFG and the whole ownership checker, and phase-10 check removal with the bounds and
-overflow part of `ingot cost`. `query`, `serve` and an LSP adapter work. Nothing is
-generated or run yet: code generation (step 4) is next, and the backend design is under
-review. [COMPILER.md](COMPILER.md) has the step-by-step record.
+**Where it stands.** The bootstrap compiler in `crates/` covers item 1 steps 1 to 4
+and 8: the front end, types and constant evaluation, the CFG and the whole ownership
+checker, check removal and `ingot cost`, and code generation through LLVM 22 for
+`aarch64-macos-m4`. `ingot build`, `run` and `test` produce byte-identical executables
+under both pipelines; packages with dependencies, `fmt`, the report tools, `query`,
+`serve` and an LSP adapter work. The standard library (step 5) is next.
+[COMPILER.md](COMPILER.md) has the step-by-step record.
 
 The standard library is being designed in [docs/std/](docs/std/) (`rt`, `task`, `sync`,
 `mem`, `env`, `time`), with the language features it needs specified first (raw pointer
-casts, `Cell`, atomics). `std/` holds only the declaration stubs the compiler loads as
-`std` today.
+casts, `Cell`, atomics). In `std/`, the runtime core (`std.sys.rt`: the process entry,
+traps, the test entry) and `Cell` and `Atomic` have bodies; the rest are declaration
+stubs.
 
 ## 0. Before writing the compiler
 
@@ -45,24 +47,23 @@ implemented.
 3. **Done.** A control-flow-graph IR, and on it the ownership checker: moves, linear
    consumption, borrows, origins, scopes and tasks. Everything in the standard library
    depends on this.
-4. **Next.** Code generation through LLVM IR, linking for Mach-O, and the Apple arm64 C ABI for
-   `extern` and `export`.
-5. Standard library core: `sys.macos`, `mem` (arena, heap), `list`, `map`, `str`, `fmt`,
+4. **Done**, except the full C ABI for aggregates (COMPILER.md step B6). Code generation
+   through LLVM IR, linking for Mach-O, `extern` calls of scalars and pointers.
+5. **Next.** Standard library core: `sys.macos`, `mem` (arena, heap), `list`, `map`, `str`, `fmt`,
    `fs`, `text`. The design of `rt`, `task`, `sync`, `mem`, `env` and `time` is drafted
    in [docs/std/](docs/std/); bodies wait for code generation.
 6. SIMD types and builtins.
 7. Runtime: scheduler, task stacks, `scope`/`spawn`, `par for`, `sync`, kqueue I/O.
-8. `ingot cost`, required check removal, `audit`, `layout`, `api`, `query`, `serve`, as
-   [docs/impl/tools.md](docs/impl/tools.md) defines them. Done: check removal, the
-   bounds and overflow items of `cost`, `query` and `serve`. Open: the other `cost`
-   items (allocations, indirect calls, copies, spawns, locks, park points), `audit`,
-   `layout`, `api`. `fmt` needs its layout rules written first.
+8. **Done.** `ingot cost`, required check removal, `audit`, `layout`, `api`, `query`,
+   `serve`, `fmt` and `test`, as [docs/impl/tools.md](docs/impl/tools.md) defines them.
+   Open: the cost items that come from the optimizer (`not_inlined`, `loop`, `frame`,
+   COMPILER.md step B7) and `ingot bench`.
 
 ## 2. Second target: `x86_64-linux-znver4`
 
 1. x86-64 code generation with AVX-512, ELF, the System V AMD64 C ABI.
 2. `sys.linux` with direct system calls, io_uring in the runtime, thread affinity.
-3. `ingot check --all-targets`.
+3. **Done.** `ingot check --all-targets`.
 
 ## 3. Third target: `x86_64-windows-znver4`
 
