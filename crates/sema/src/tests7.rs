@@ -549,6 +549,16 @@ fn a_type_argument_not_determined_by_the_arguments() {
 }
 
 #[test]
+fn a_call_in_a_generic_body_that_passes_a_type_built_from_its_own_parameter() {
+    // The argument type equals the parameter type, so no binder is matched at the top;
+    // `T` must still be bound (to itself), in a method and in a recursive function.
+    let b = build(
+        "struct W[T] { v: T }\nimpl[T] W[T] {\n    fn a(self: &W[T]) -> i64 { return 1; }\n    fn b(self: &W[T]) -> i64 { return self.a(); }\n}\nfn r[T](x: &T, n: i64) -> i64 {\n    if n == 0 { return 0; }\n    return r(x, n - 1);\n}\n",
+    );
+    assert_eq!(b.only_codes(), Vec::<String>::new());
+}
+
+#[test]
 fn a_bound_that_the_argument_does_not_meet_at_a_call() {
     let b = build(
         "struct Buf { n: i64 }\nfn dup[T: Copy](a: T) -> (T, T) { return (a, a); }\nfn f() -> i64 {\n    let p = dup(Buf.{ n: 1 });\n    return p.0.n;\n}\n",

@@ -1,0 +1,325 @@
+// std.str (docs/std/str.md): the owned byte string.
+
+import std.list.List;
+import std.mem;
+import std.mem.AllocErr;
+import std.mem.Allocator;
+import std.mem.Arena;
+import std.mem.Heap;
+
+/// An owned byte string. Linear, like the list it is built on. It makes no promise about
+/// encoding: the bytes are whatever was put in.
+pub linear struct Str[A: Allocator] {
+    buf: List[u8, A],
+}
+
+impl[A: Allocator] Str[A] {
+    /// An empty string. Allocates nothing.
+    pub fn init(a: A) -> Str[A] {
+        return Str[A].{ buf: List[u8, A].init(a) };
+    }
+
+    /// A copy of `text`.
+    pub fn from_bytes(a: A, text: []u8) -> Str[A] ! AllocErr {
+        let buf = try List[u8, A].with_capacity(a, text.len);
+        var s = Str[A].{ buf: buf };
+        errdefer { s.deinit(); }
+        try s.append(text);
+        return s;
+    }
+
+    pub fn len(self: &Str[A]) -> i64 {
+        return self.buf.len();
+    }
+
+    pub fn capacity(self: &Str[A]) -> i64 {
+        return self.buf.capacity();
+    }
+
+    pub fn is_empty(self: &Str[A]) -> bool {
+        return self.buf.is_empty();
+    }
+
+    pub fn reserve(self: &mut Str[A], extra: i64) -> void ! AllocErr {
+        try self.buf.reserve(extra);
+    }
+
+    pub fn push(self: &mut Str[A], byte: u8) -> void ! AllocErr {
+        try self.buf.push(byte);
+    }
+
+    /// Appends a copy of `text`.
+    pub fn append(self: &mut Str[A], text: []u8) -> void ! AllocErr {
+        // One growth up front, then a push per byte that cannot allocate. `List.extend`
+        // does the same in one call, but a function that takes the slice as a parameter
+        // cannot call it without `into self` on the slice (E1204; checker.md section 10,
+        // "Widening through shared origins is too strict").
+        try self.buf.reserve(text.len);
+        var i: i64 = 0;
+        while i < text.len {
+            try self.buf.push(text[i]);
+            i += 1;
+        }
+    }
+
+    pub fn bytes(self: &Str[A]) -> []u8 from self {
+        return self.buf.items();
+    }
+
+    pub fn bytes_mut(self: &mut Str[A]) -> []mut u8 from self {
+        return self.buf.items_mut();
+    }
+
+    /// Byte-wise equality with `text`.
+    pub fn eq(self: &Str[A], text: []u8) -> bool {
+        return mem.eq(self.bytes(), text);
+    }
+
+    /// Keeps the first `len` bytes; a larger `len` does nothing, a negative one clears.
+    pub fn truncate(self: &mut Str[A], len: i64) -> void {
+        self.buf.truncate(len);
+    }
+
+    pub fn clear(self: &mut Str[A]) -> void {
+        self.buf.clear();
+    }
+
+    pub fn deinit(self: Str[A]) -> void {
+        let Str[A].{ buf } = self;
+        buf.deinit();
+    }
+}
+
+const ok: i64 = 0;
+const oom: i64 = 1;
+const bad: i64 = 2;
+
+/// What a result is, for the tests: `ok`, `oom` or `bad`.
+fn code[T: Discard](r: Result[T, AllocErr]) -> i64 {
+    match r {
+        .ok(_) => { return ok; }
+        .err(e) => {
+            if e == .bad_request {
+                return bad;
+            }
+            return oom;
+        }
+    }
+}
+
+/// The same for a `from_bytes`; a string that was made is released.
+fn str_code[A: Allocator](r: Result[Str[A], AllocErr]) -> i64 {
+    match r {
+        .ok(s) => {
+            s.deinit();
+            return ok;
+        }
+        .err(e) => {
+            if e == .bad_request {
+                return bad;
+            }
+            return oom;
+        }
+    }
+}
+
+fn is_send[T: Send](x: &T) -> void {}
+
+fn is_sync[T: Sync](x: &T) -> void {}
+
+fn is_owned[T: Owned](x: &T) -> void {}
+
+/// Every operation of `Str`, on whatever allocator is given.
+fn exercise[A: Allocator](a: A) -> void ! AllocErr {
+    // An empty string allocates nothing and equals the empty text only.
+    let empty = Str[A].init(a);
+    @assert(empty.len() == 0);
+    @assert(empty.capacity() == 0);
+    @assert(empty.is_empty());
+    @assert(empty.bytes().len == 0);
+    @assert(empty.eq(""));
+    @assert(!empty.eq("a"));
+    empty.deinit();
+
+    // A copy of a text, with exactly its length.
+    let dup = try Str[A].from_bytes(a, "hello, ingot");
+    defer { dup.deinit(); }
+    @assert(dup.len() == 12);
+    @assert(dup.capacity() == 12);
+    @assert(!dup.is_empty());
+    @assert(dup.eq("hello, ingot"));
+    @assert(mem.eq(dup.bytes(), "hello, ingot"));
+    @assert(dup.bytes()[7] == 105);
+
+    // `from_bytes` of nothing.
+    let none = try Str[A].from_bytes(a, "");
+    @assert(none.is_empty());
+    @assert(none.eq(""));
+    none.deinit();
+
+    var s = Str[A].init(a);
+    defer { s.deinit(); }
+    try s.push(104);
+    try s.push(105);
+    @assert(s.eq("hi"));
+    @assert(s.len() == 2);
+    @assert(s.capacity() == 4);
+    try s.append(", there");
+    @assert(s.eq("hi, there"));
+    @assert(s.len() == 9);
+    try s.append("");
+    @assert(s.eq("hi, there"));
+    // A text that is part of another string's bytes.
+    try s.append(dup.bytes());
+    @assert(s.eq("hi, thereis hello, ingot") == false);
+    @assert(s.eq("hi, therehello, ingot"));
+    @assert(s.len() == 21);
+
+    // Writing through bytes_mut.
+    s.bytes_mut()[0] = 72;
+    @assert(s.eq("Hi, therehello, ingot"));
+    {
+        let all = s.bytes_mut();
+        var i: i64 = 0;
+        while i < all.len {
+            if all[i] == 101 {
+                all[i] = 69;
+            }
+            i += 1;
+        }
+    }
+    @assert(s.eq("Hi, thErEhEllo, ingot"));
+
+    // eq: a longer text, a shorter one, an equal prefix, another string's bytes.
+    @assert(!s.eq("Hi, thErEhEllo, ingot!"));
+    @assert(!s.eq("Hi, thErEhEllo, ingo"));
+    @assert(!s.eq(""));
+    @assert(s.eq(s.bytes()));
+    @assert(!s.eq(dup.bytes()));
+
+    // truncate: past the end, to the end, inside, to nothing, negative.
+    s.truncate(1000);
+    @assert(s.len() == 21);
+    s.truncate(21);
+    @assert(s.len() == 21);
+    s.truncate(5);
+    @assert(s.eq("Hi, t"));
+    s.truncate(0);
+    @assert(s.is_empty());
+    try s.append("abc");
+    s.truncate(-1);
+    @assert(s.is_empty());
+    try s.append("abc");
+    s.truncate(-9223372036854775807 - 1);
+    @assert(s.is_empty());
+    // clear keeps the room.
+    try s.append("0123456789");
+    let room = s.capacity();
+    s.clear();
+    @assert(s.is_empty());
+    @assert(s.capacity() == room);
+    s.clear();
+    @assert(s.eq(""));
+
+    // reserve, with a negative and a huge request.
+    try s.reserve(-5);
+    try s.reserve(0);
+    @assert(s.capacity() == room);
+    try s.reserve(room + 100);
+    @assert(s.capacity() >= room + 100);
+    @assert(code(s.reserve(9223372036854775807)) == bad);
+    @assert(code(s.reserve((1 << 62) + 1)) == bad);
+
+    // Many appends: several growths, and the content is exact.
+    var i: i64 = 0;
+    while i < 200 {
+        try s.append("ab");
+        try s.push(99);
+        i += 1;
+    }
+    @assert(s.len() == 600);
+    @assert(s.bytes()[0] == 97 && s.bytes()[1] == 98 && s.bytes()[2] == 99);
+    @assert(s.bytes()[597] == 97 && s.bytes()[599] == 99);
+    var ok_all = true;
+    i = 0;
+    while i < 600 {
+        if s.bytes()[i] != @wrap(u8, 97 + i % 3) {
+            ok_all = false;
+        }
+        i += 1;
+    }
+    @assert(ok_all);
+}
+
+test "Str works with Heap" {
+    let heap = @test_env().env.heap;
+    try exercise(heap);
+}
+
+test "Str works with &Arena, and the arena holds what it was given" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 24));
+    defer { arena.deinit(); }
+    try exercise(&arena);
+    let before = arena.used();
+    let s = try Str[&Arena].from_bytes(&arena, "some text");
+    @assert(arena.used() == before + 9);
+    @assert(s.eq("some text"));
+    // `deinit` gives nothing back to a bump allocator.
+    s.deinit();
+    @assert(arena.used() == before + 9);
+}
+
+test "from_bytes and growth report out_of_memory when the arena is full" {
+    let vm = @test_env().env.vm;
+    let big = try Arena.init(vm, (1 << 20));
+    defer { big.deinit(); }
+    let text = try big.alloc_slice(100, @wrap(u8, 120));
+    let small = try Arena.init(vm, 1);
+    defer { small.deinit(); }
+    _ = try small.alloc_slice(small.capacity() - 8, @wrap(u8, 0));
+    @assert(str_code(Str[&Arena].from_bytes(&small, text.shared())) == oom);
+    @assert(small.used() == small.capacity() - 8);
+    // The empty text needs no memory, so it fits a full arena.
+    @assert(str_code(Str[&Arena].from_bytes(&small, "")) == ok);
+    // Eight bytes are left: the first growth takes 4, and the second needs 8.
+    var s = Str[&Arena].init(&small);
+    defer { s.deinit(); }
+    try s.append("abcd");
+    @assert(s.eq("abcd"));
+    @assert(code(s.append("efghi")) == oom);
+    @assert(s.eq("abcd"));
+    @assert(code(s.push(33)) == oom);
+    @assert(s.eq("abcd"));
+    s.truncate(3);
+    @assert(code(s.push(33)) == ok);
+    @assert(s.eq("abc!"));
+}
+
+test "from_bytes copies a million bytes, and a change to the source shows in eq" {
+    let heap = @test_env().env.heap;
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 22));
+    defer { arena.deinit(); }
+    let text = try arena.alloc_slice(1000000, @wrap(u8, 7));
+    text[0] = 1;
+    text[999999] = 2;
+    let s = try Str[Heap].from_bytes(heap, text.shared());
+    defer { s.deinit(); }
+    @assert(s.len() == 1000000);
+    @assert(
+        s.bytes()[0] == 1 && s.bytes()[999999] == 2 && s.bytes()[500000] == 7,
+    );
+    @assert(s.eq(text.shared()));
+    text[500000] = 8;
+    @assert(!s.eq(text.shared()));
+}
+
+test "Str is Send, Sync and Owned exactly as its list is" {
+    let heap = @test_env().env.heap;
+    let s = Str[Heap].init(heap);
+    is_send(&s);
+    is_sync(&s);
+    is_owned(&s);
+    s.deinit();
+}

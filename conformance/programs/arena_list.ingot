@@ -1,0 +1,272 @@
+//! expect: run
+//! section: 4.2, 5.5, 6.2, 6.4, 7.1, 13, 14.2, 14.3
+
+// A word-frequency program that builds everything in one `Arena` and keeps its parts in
+// lists over that arena: the words of a byte literal (slices of it) in a
+// `List[[]u8, &Arena]`, the distinct words with their counts in a `List[Entry, &Arena]`,
+// a ranking of borrows into that list in a `List[&Entry, &Arena]`, and the report in a
+// `Str[&Arena]`. The arena is reset between two texts, and nothing is freed one by one.
+
+import std.Env;
+import std.list.List;
+import std.mem.AllocErr;
+import std.mem.Arena;
+import std.str.Str;
+
+struct Entry {
+    word: []u8,
+    count: i64,
+}
+
+fn is_letter(b: u8) -> bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90);
+}
+
+fn lower(b: u8) -> u8 {
+    if b >= 65 && b <= 90 {
+        return b + 32;
+    }
+    return b;
+}
+
+/// The words of `text`: maximal runs of letters, as slices of the text itself.
+fn tokenize(arena: &Arena, text: []u8) -> List[
+    []u8,
+    &Arena,
+] ! AllocErr from arena, text {
+    var words = List[[]u8, &Arena].init(arena);
+    errdefer { words.deinit(); }
+    var i: i64 = 0;
+    while i < text.len {
+        if !is_letter(text[i]) {
+            i += 1;
+            continue;
+        }
+        var j = i;
+        while j < text.len && is_letter(text[j]) {
+            j += 1;
+        }
+        try words.push(text[i..j]);
+        i = j;
+    }
+    return words;
+}
+
+/// Equality of two words, ignoring the case of ASCII letters.
+fn same_word(a: []u8, b: []u8) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: i64 = 0;
+    while i < a.len {
+        if lower(a[i]) != lower(b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+/// One entry per distinct word, in the order of first appearance.
+fn tally(arena: &Arena, words: &List[[]u8, &Arena]) -> List[
+    Entry,
+    &Arena,
+] ! AllocErr from arena, words.* {
+    var entries = List[Entry, &Arena].init(arena);
+    errdefer { entries.deinit(); }
+    var w: i64 = 0;
+    while w < words.len() {
+        let word = words.get(w).*;
+        var found = false;
+        var e: i64 = 0;
+        while e < entries.len() {
+            if same_word(entries.get(e).word, word) {
+                entries.get_mut(e).count += 1;
+                found = true;
+                break;
+            }
+            e += 1;
+        }
+        if !found {
+            try entries.push(Entry.{ word: word, count: 1 });
+        }
+        w += 1;
+    }
+    return entries;
+}
+
+/// Whether `a` sorts before `b`, ignoring the case of ASCII letters.
+fn bytes_less(a: []u8, b: []u8) -> bool {
+    var i: i64 = 0;
+    while i < a.len && i < b.len {
+        if lower(a[i]) != lower(b[i]) {
+            return lower(a[i]) < lower(b[i]);
+        }
+        i += 1;
+    }
+    return a.len < b.len;
+}
+
+/// More frequent first, and equal counts in alphabetical order.
+fn ranks_before(a: &Entry, b: &Entry) -> bool {
+    if a.count != b.count {
+        return a.count > b.count;
+    }
+    return bytes_less(a.word, b.word);
+}
+
+/// Insertion sort, most frequent first. The elements are shared borrows, so they copy.
+fn sort_by_rank(slots: []mut &Entry) -> void {
+    var i: i64 = 1;
+    while i < slots.len {
+        let moving = slots[i];
+        var j = i;
+        while j > 0 && ranks_before(moving, slots[j - 1]) {
+            slots[j] = slots[j - 1];
+            j -= 1;
+        }
+        slots[j] = moving;
+        i += 1;
+    }
+}
+
+/// Borrows of the entries, most frequent first.
+fn rank(arena: &Arena, entries: &List[Entry, &Arena]) -> List[
+    &Entry,
+    &Arena,
+] ! AllocErr from arena, entries {
+    var order = List[&Entry, &Arena].init(arena);
+    errdefer { order.deinit(); }
+    var i: i64 = 0;
+    while i < entries.len() {
+        try order.push(entries.get(i));
+        i += 1;
+    }
+    sort_by_rank(order.items_mut());
+    return order;
+}
+
+/// Appends the decimal digits of `n`, which is not negative.
+fn push_number(s: &mut Str[&Arena], n: i64) -> void ! AllocErr {
+    var digits: [20]u8 = @zero;
+    var count: i64 = 0;
+    var rest = n;
+    while rest > 0 || count == 0 {
+        digits[count] = @wrap(u8, 48 + rest % 10);
+        count += 1;
+        rest /= 10;
+    }
+    while count > 0 {
+        count -= 1;
+        try s.push(digits[count]);
+    }
+}
+
+/// `word=count` for the first `top` entries, separated by spaces.
+fn summary(arena: &Arena, order: &List[&Entry, &Arena], top: i64) -> Str[
+    &Arena,
+] ! AllocErr from arena {
+    var s = Str[&Arena].init(arena);
+    errdefer { s.deinit(); }
+    var i: i64 = 0;
+    while i < top && i < order.len() {
+        if i > 0 {
+            try s.push(32);
+        }
+        let entry = order.get(i).*;
+        var k: i64 = 0;
+        while k < entry.word.len {
+            try s.push(lower(entry.word[k]));
+            k += 1;
+        }
+        try s.push(61);
+        try push_number(&mut s, entry.count);
+        i += 1;
+    }
+    return s;
+}
+
+/// The sum of the counts.
+fn total_count(entries: &List[Entry, &Arena]) -> i64 {
+    var sum: i64 = 0;
+    for e in 0..entries.len() {
+        sum += entries.get(e).count;
+    }
+    return sum;
+}
+
+/// The length of the longest word.
+fn widest_word(entries: &List[Entry, &Arena]) -> i64 {
+    var widest: i64 = 0;
+    for e in 0..entries.len() {
+        let len = entries.get(e).word.len;
+        if len > widest {
+            widest = len;
+        }
+    }
+    return widest;
+}
+
+/// Whether no entry ranks before the one ahead of it.
+fn is_ranked(order: &List[&Entry, &Arena]) -> bool {
+    for i in 1..order.len() {
+        if ranks_before(order.get(i).*, order.get(i - 1).*) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Runs the whole pipeline over `text` and checks the counts and the report.
+fn analyze(
+    arena: &Arena,
+    text: []u8,
+    total: i64,
+    distinct: i64,
+    longest: i64,
+    top: i64,
+    expect: []u8,
+) -> void ! AllocErr {
+    let words = try tokenize(arena, text);
+    defer { words.deinit(); }
+    @assert(words.len() == total);
+
+    let entries = try tally(arena, &words);
+    defer { entries.deinit(); }
+    @assert(entries.len() == distinct);
+    @assert(total_count(&entries) == total);
+    @assert(widest_word(&entries) == longest);
+
+    let order = try rank(arena, &entries);
+    defer { order.deinit(); }
+    @assert(order.len() == distinct);
+    @assert(is_ranked(&order));
+
+    let report = try summary(arena, &order, top);
+    defer { report.deinit(); }
+    @assert(report.eq(expect));
+}
+
+pub fn main(env: &Env) -> u8 {
+    var arena = Arena.init(env.vm, 1 << 22) catch _ => { return 1; };
+    defer { arena.deinit(); }
+
+    let first = "The quick brown fox jumps over the lazy dog. The dog barks; the fox runs away, and the quick fox returns to the old barn. Over the hill, a dog and a fox meet.";
+    analyze(&arena, first, 34, 19, 7, 4, "the=7 fox=4 dog=3 a=2") catch _ => {
+        return 2;
+    };
+    let used = arena.used();
+    @assert(used > 0);
+
+    // Everything above is dead, so the arena starts over; a second text takes the same
+    // memory, and it needs far less of it.
+    arena.reset();
+    @assert(arena.used() == 0);
+    let second = "One fish, two fish, red fish, blue fish!";
+    analyze(&arena, second, 8, 5, 4, 3, "fish=4 blue=1 one=1") catch _ => {
+        return 3;
+    };
+    @assert(arena.used() > 0);
+    @assert(arena.used() < used);
+    return 0;
+}

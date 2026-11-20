@@ -120,9 +120,6 @@ impl Declarations {
                 }
             };
         }
-        if pattern == ty {
-            return true;
-        }
         let tk = self.types.kind(ty);
         match (pk, tk) {
             (TyKind::Array(a, n), TyKind::Array(b, m)) => {
@@ -154,7 +151,10 @@ impl Declarations {
             (TyKind::Projection(a, d), TyKind::Projection(b, e)) if d == e => {
                 self.match_ty(*a, *b, binders, s)
             }
-            _ => false,
+            // Equal types are walked like any others and not short-circuited, so a
+            // binder inside them is still bound (to itself: a call inside a generic body
+            // passes `&W[T]` where `&W[T]` is expected, and `T` must come out as `T`).
+            _ => pattern == ty,
         }
     }
 

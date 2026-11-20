@@ -558,6 +558,7 @@ packages/reject_pub_pkg_item/main.ingot
 packages/reject_std_dependency/main.ingot
 packages/reject_transitive_import/main.ingot
 packages/run_two_packages/main.ingot
+programs/arena_list.ingot
 programs/expr_eval.ingot
 programs/generic_sort_heap.ingot
 programs/sha256.ingot
