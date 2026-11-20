@@ -447,10 +447,21 @@ Tools on macOS; a C library's development files on Linux; an SDK's import librar
 Windows); `ingot targets` reports what it found.
 
 **Reproducible output** (pipeline §2). No timestamps (`/Brepro` for PE), a content
-build id (ELF build-id, Mach-O UUID), relative input paths (on macOS the debug map of
-object files is the known leak: `-oso_prefix`, or not keeping it), a fixed input
-order. This machine's `ld` documents `-reproducible`, `-no_uuid` and `-oso_prefix`;
-which of them are needed is found by B3's three-build comparison, not decided ahead.
+build id (ELF build-id, Mach-O UUID), a fixed input order, and no absolute path in the
+output. On macOS no linker flag is needed today (B3, `crates/driver/tests/reproducible.rs`):
+with `ld` 27106.1 and clang 22.1.8 the three milestone programs link to the same bytes
+under both pipelines, from two directories at different absolute paths and depths, with
+a different `TMPDIR`, working directory, environment, time zone and source modification
+time. What the build needs is a fixed artifact file name, because `ld` signs an arm64
+executable ad hoc with that name as its identifier (`ingot build -o dir/prog` and
+`-o dir/prog2` differ in size and content, the UUID included). The Mach-O UUID is a hash of the
+output by default (`-random_uuid` makes two links of one object differ), so `-no_uuid`
+is not used. The debug map of object files, the leak the plan expected, exists only
+when the compile has debug information, which B7 adds: clang's one-step driver then
+names a random temporary object in an `OSO` entry, and neither `-oso_prefix` nor
+`-reproducible` removes it (measured on a C file). B7 therefore links from an object file
+at a fixed relative path, or keeps no debug map, and extends the reproducibility test to
+its `-g` build.
 
 **Cost items and debug information.** `indirect_call`, `task_spawn`, `copy` and
 `alloc` need no back end (step P3); `lock` after `std.sync`; `park_point` from 11a's
@@ -470,7 +481,7 @@ platform's.
 | Inline stack probes on aarch64 and on Windows | B1 (aarch64): **confirmed**. LLVM 22 emits inline probes on `arm64-apple-macosx` when a function carries the attribute group `{ "probe-stack"="inline-asm" "stack-probe-size"="16384" }`: at `-O0` a 64 KiB `alloca` gets an inline probe loop, and at `-O2` four `sub sp, #16384; str xzr, [sp]` pairs. Every function the back end defines carries that group, so `rt.stack_probe` is not needed on aarch64. The `-mstack-arg-probe` and `-mstack-probe-size` driver flags are x86/Windows and do nothing here. T3 must settle Windows. |
 | LLVM no longer requiring a compare-exchange failure order no stronger than success | R2 |
 | `minimumNumber`/`maximumNumber` intrinsics in the pinned version; the x86 cost of the float `@min`/`@max` rule | B4 |
-| Which linker flags make a Mach-O byte-identical | B3 |
+| ~~Which linker flags make a Mach-O byte-identical~~ Settled in B3: none today. `-reproducible` changes no byte, `-random_uuid` breaks identity, and the artifact file name must stay fixed (see "Reproducible output"). The debug map's temporary object path is B7's to avoid | done |
 
 **The first milestone** (B1 to B3) is the twelve `run`/`trap` tests that need no
 vectors and no tasks (six `arith`, two `types`, three `errors`,

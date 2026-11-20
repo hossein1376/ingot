@@ -21,7 +21,7 @@ use ingot_cfg::model::{
     Const, Operand, Place, PlaceBase, Projection, Rvalue, StmtKind, Terminator, Trap, ValueKind,
 };
 use ingot_diag::source::{Sources, Span};
-use ingot_sema::defs::{DefId, DefKind, Sema};
+use ingot_sema::defs::{DefId, DefKind, ModuleId, Sema};
 use ingot_sema::sigs::{Declarations, FnSig, ItemSig, Layout, LayoutKind, ParamSig, Tri};
 use ingot_sema::ty::{
     ConstArg, ConstValue, FloatTy, GenericArg, IntTy, Mutability, Subst, TyKind, TypeId,
@@ -33,6 +33,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub mod llvm;
+mod show;
 
 /// A reason the back end cannot produce an executable.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -268,6 +269,8 @@ struct Codegen<'p> {
     builtin_requests: BTreeSet<(DefId, TypeId)>,
     /// The `&dyn` tables emitted so far, by table symbol.
     tables: BTreeMap<String, String>,
+    /// The structural-form printers (05 section 35).
+    show: show::ShowState,
 }
 
 impl<'p> Codegen<'p> {
@@ -296,6 +299,7 @@ impl<'p> Codegen<'p> {
             builtin_symbols: BTreeMap::new(),
             builtin_requests: BTreeSet::new(),
             tables: BTreeMap::new(),
+            show: show::ShowState::default(),
         }
     }
 
@@ -375,7 +379,29 @@ impl<'p> Codegen<'p> {
             body: InstanceBody::Item,
             subst: Subst::new(),
         };
-        for key in [start, trap] {
+        let mut roots = vec![start, trap];
+        // A fallible `main` prints its error through the structural form's helpers
+        // (`show.rs`), which `std.sys.rt` provides.
+        let main_fallible = match self.main_def() {
+            Ok(main) => self
+                .program
+                .decls
+                .fn_sig(main)
+                .is_some_and(|sig| sig.error.is_some()),
+            Err(_) => false,
+        };
+        if main_fallible {
+            for name in ["write_bytes", "print_i64", "print_u64", "print_str"] {
+                let owner = find_module_item(self.program.sema, "std.sys.rt", name)
+                    .ok_or_else(|| BuildError::Internal(format!("std.sys.rt.{name} is missing")))?;
+                roots.push(InstanceKey {
+                    owner,
+                    body: InstanceBody::Item,
+                    subst: Subst::new(),
+                });
+            }
+        }
+        for key in roots {
             if seen.insert(key.clone()) {
                 let symbol = self.symbol_for_key(&key);
                 self.symbols.insert(key.clone(), symbol);
@@ -680,7 +706,8 @@ impl<'p> Codegen<'p> {
         Ok(None)
     }
 
-    fn find_main(&mut self) -> Result<(), BuildError> {
+    /// `main` of the root package.
+    fn main_def(&self) -> Result<DefId, BuildError> {
         let package = self
             .program
             .sema
@@ -690,14 +717,17 @@ impl<'p> Codegen<'p> {
         let root = package.root.ok_or_else(|| {
             BuildError::NotImplemented("a package with no root module".to_string())
         })?;
-        let main = self
-            .program
+        self.program
             .sema
             .module(root)
             .values
             .get("main")
             .copied()
-            .ok_or(BuildError::NoEntryPoint)?;
+            .ok_or(BuildError::NoEntryPoint)
+    }
+
+    fn find_main(&mut self) -> Result<(), BuildError> {
+        let main = self.main_def()?;
         let key = InstanceKey {
             owner: main,
             body: InstanceBody::Item,
@@ -2333,6 +2363,14 @@ impl<'a, 'p> FnGen<'a, 'p> {
     fn assign(&mut self, place: &Place, value: &Rvalue) -> Result<(), BuildError> {
         let ty = self.place_type(place)?;
         if let Rvalue::Use(Operand::Const(Const::Uninit { .. })) = value {
+            return Ok(());
+        }
+        // A `void` or `never` place holds no bytes, and a local of either type has no
+        // storage (`emit_locals`): the ok value of `try` on a `void ! E` call is one.
+        let resolved = self.cg.resolve_ty(ty);
+        if resolved == self.cg.program.decls.types.void
+            || resolved == self.cg.program.decls.types.never
+        {
             return Ok(());
         }
         let (v, ll) = self.rvalue(value, ty)?;
@@ -7352,6 +7390,11 @@ impl<'p> Codegen<'p> {
             .get(&symbol)
             .cloned()
             .ok_or_else(|| BuildError::Internal("the main body was not emitted".to_string()))?;
+        if let Some(error) = body.sig.error {
+            let main = self.main_def()?;
+            let from = self.program.sema.def(main).module;
+            return self.emit_fallible_entry(&symbol, &body, error, from);
+        }
         let ret = body.sig.ret;
         let call = if body.sig.params.is_empty() {
             format!("call {} {}()", self.fn_ret_ll(&body)?, global_ref(&symbol))

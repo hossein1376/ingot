@@ -1,0 +1,7 @@
+pub struct Rec {
+    key: i64,
+}
+
+pub fn make() -> Rec {
+    return Rec.{ key: 9 };
+}

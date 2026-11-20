@@ -1,0 +1,4 @@
+name = "run_error_other_package"
+
+[deps]
+lib = { path = "lib" }

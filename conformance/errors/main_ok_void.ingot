@@ -1,0 +1,20 @@
+//! expect: run
+//! section: 33.1
+
+import std.Env;
+
+enum Err {
+    refused,
+}
+
+fn check(refuse: bool) -> i64 ! Err {
+    if refuse {
+        fail .refused;
+    }
+    return 1;
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    let one = try check(false);
+    @assert(one == 1);
+}

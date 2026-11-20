@@ -1,0 +1,9 @@
+pub struct Rec {
+    pub id: i64,
+    secret: i64,
+    pub(pkg) shared: bool,
+}
+
+pub fn make() -> Rec {
+    return Rec.{ id: 1, secret: 2, shared: true };
+}

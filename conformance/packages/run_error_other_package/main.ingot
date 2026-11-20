@@ -1,0 +1,16 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.rec(Rec.{ id: 1, .. })
+//! section: 33.1, 35
+
+import lib.Rec;
+import lib.make;
+import std.Env;
+
+enum Err {
+    rec: Rec,
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    fail .rec(make());
+}

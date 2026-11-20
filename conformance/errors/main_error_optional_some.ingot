@@ -1,0 +1,14 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.limit(.some(7))
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Err {
+    limit: ?i64,
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    fail .limit(.some(7));
+}

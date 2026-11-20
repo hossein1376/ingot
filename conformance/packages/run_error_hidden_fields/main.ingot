@@ -1,0 +1,15 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.rec(Rec.{ id: 1, shared: true, .. })
+//! section: 33.1, 35
+
+import run_error_hidden_fields.records;
+import std.Env;
+
+enum Err {
+    rec: records.Rec,
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    fail .rec(records.make());
+}

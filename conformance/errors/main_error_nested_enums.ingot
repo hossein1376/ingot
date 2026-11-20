@@ -1,0 +1,29 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: AppErr.parse(ParseErr.bad_digit(Digit.hex(15)))
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Digit {
+    dec: i64,
+    hex: u8,
+}
+
+enum ParseErr {
+    empty,
+    bad_digit: Digit,
+}
+
+enum AppErr {
+    parse: from ParseErr,
+    other,
+}
+
+fn digit(n: u8) -> u8 ! ParseErr {
+    fail .bad_digit(.hex(n));
+}
+
+pub fn main(env: &Env) -> void ! AppErr {
+    _ = try digit(15);
+}

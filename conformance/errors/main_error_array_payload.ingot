@@ -1,0 +1,14 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.codes([1, 2, 3])
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Err {
+    codes: [3]i64,
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    fail .codes([3]i64.{ 1, 2, 3 });
+}

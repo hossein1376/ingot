@@ -1,0 +1,15 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: ParseErr.empty
+//! section: 33.1, 35
+
+import std.Env;
+
+enum ParseErr {
+    empty,
+    bad_digit: u8,
+}
+
+pub fn main(env: &Env) -> void ! ParseErr {
+    fail .empty;
+}

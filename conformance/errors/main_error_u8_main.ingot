@@ -1,0 +1,14 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.refused
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Err {
+    refused,
+}
+
+pub fn main(env: &Env) -> u8 ! Err {
+    fail .refused;
+}

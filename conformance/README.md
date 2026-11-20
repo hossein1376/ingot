@@ -91,8 +91,8 @@ expects `accept`.
 
 ## What is covered
 
-697 test files: 163 `accept` (44 of them `.fixed.ingot` tests; 44 fix results in
-all), 426 `reject`, 45 `run`, 6 `trap`, 57 `cost`.
+716 test files: 163 `accept` (44 of them `.fixed.ingot` tests; 44 fix results in
+all), 426 `reject`, 64 `run`, 6 `trap`, 57 `cost`.
 
 | Group | Codes with a test | Codes without one |
 |---|---|---|

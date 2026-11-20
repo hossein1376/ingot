@@ -1,0 +1,14 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.msg("a\n\t\"q\" \\ \x01 \x7f \xc3")
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Err {
+    msg: []u8,
+}
+
+pub fn main(env: &Env) -> void ! Err from static {
+    fail .msg("a\n\t\"q\" \\ \x01 \x7f \xc3");
+}

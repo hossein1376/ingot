@@ -1,0 +1,14 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Err.at((3, -4, true))
+//! section: 33.1, 35
+
+import std.Env;
+
+enum Err {
+    at: (i64, i8, bool),
+}
+
+pub fn main(env: &Env) -> void ! Err {
+    fail .at((3, -4, true));
+}

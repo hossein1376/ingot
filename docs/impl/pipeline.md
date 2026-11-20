@@ -83,9 +83,11 @@ and the manifest.
   It must not be observable.
 * Paths in debug information and trap messages are relative to the package root.
 * The output files are reproducible too: no timestamps (`/Brepro` for PE), a build
-  identifier computed from content (ELF build-id, Mach-O UUID), no absolute paths
-  (inputs are passed to the assembler and linker by relative path; on macOS the debug
-  map of object files is the known leak), and a fixed order of inputs.
+  identifier computed from content (ELF build-id, Mach-O UUID), no path of an input
+  or a temporary file in the output (on macOS the debug map of object files is the
+  known leak, once there is debug information: COMPILER.md, "Reproducible output"),
+  and a fixed order of inputs. The output file's own name may be part of it: `ld`
+  signs an arm64 executable with that name.
 
 ## 3. Error recovery and poisoning
 

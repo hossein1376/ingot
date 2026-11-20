@@ -1,0 +1,32 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Widths.{ a: -128, b: -32768, c: -2147483648, d: -9223372036854775808, e: 255, f: 65535, g: 4294967295, h: 18446744073709551615, ok: false }
+//! section: 33.1, 35
+
+import std.Env;
+
+struct Widths {
+    a: i8,
+    b: i16,
+    c: i32,
+    d: i64,
+    e: u8,
+    f: u16,
+    g: u32,
+    h: u64,
+    ok: bool,
+}
+
+pub fn main(env: &Env) -> void ! Widths {
+    fail Widths.{
+        a: -128,
+        b: -32768,
+        c: -2147483648,
+        d: -9223372036854775808,
+        e: 255,
+        f: 65535,
+        g: 4294967295,
+        h: 18446744073709551615,
+        ok: false,
+    };
+}

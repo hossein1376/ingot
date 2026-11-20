@@ -290,3 +290,43 @@ pub fn start(
     let status = entry(&env);
     os_exit(status);
 }
+
+fn print_hex_byte(b: u8) -> void {
+    let digits: []u8 = "0123456789abcdef";
+    let hi: i64 = (b >> 4) as i64;
+    let lo: i64 = (b & 15) as i64;
+    write_bytes("\\x");
+    putc(digits[hi]);
+    putc(digits[lo]);
+}
+
+/// A `[]u8` as a string literal with the escapes the lexer accepts: `\n`, `\t`,
+/// `\r`, `\0`, `\\` and `\"`, and `\xNN` for every other byte outside printable
+/// ASCII. Part of the structural form (05 §35); the compiler's generated printers
+/// call it.
+fn print_str(bytes: []u8) -> void {
+    putc(34);
+    var i: i64 = 0;
+    while i < bytes.len {
+        let b = bytes[i];
+        if b == 10 {
+            write_bytes("\\n");
+        } else if b == 9 {
+            write_bytes("\\t");
+        } else if b == 13 {
+            write_bytes("\\r");
+        } else if b == 0 {
+            write_bytes("\\0");
+        } else if b == 92 {
+            write_bytes("\\\\");
+        } else if b == 34 {
+            write_bytes("\\\"");
+        } else if b < 32 || b > 126 {
+            print_hex_byte(b);
+        } else {
+            putc(b);
+        }
+        i += 1;
+    }
+    putc(34);
+}

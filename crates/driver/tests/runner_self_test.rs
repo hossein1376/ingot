@@ -243,3 +243,50 @@ fn other_target_is_skipped_and_this_target_runs() {
     replace(&case, "some-other-target", "aarch64-macos-m4");
     assert_passes(&dir);
 }
+
+const ERROR_LINE: &str = "errors/main_error_enum_payload.ingot";
+
+#[test]
+fn changed_stderr_line_fails_and_an_absent_one_is_not_compared() {
+    let dir = scratch("stderr-line");
+    let case = dir.join("case.ingot");
+    copy_test(ERROR_LINE, &case);
+    assert_passes(&dir);
+    replace(
+        &case,
+        "//! stderr: error: ParseErr.bad_digit(120)",
+        "//! stderr: error: ParseErr.bad_digit(121)",
+    );
+    assert_fails(&dir, "a changed stderr line");
+    // A line too many or too few is a difference as well.
+    replace(
+        &case,
+        "//! stderr: error: ParseErr.bad_digit(121)",
+        "//! stderr: error: ParseErr.bad_digit(120)\n//! stderr: another line",
+    );
+    assert_fails(&dir, "an extra stderr line");
+    replace(
+        &case,
+        "//! stderr: error: ParseErr.bad_digit(120)\n//! stderr: another line\n",
+        "",
+    );
+    assert_passes(&dir);
+}
+
+#[test]
+fn stderr_directive_outside_a_run_test_is_malformed() {
+    let dir = scratch("stderr-reject");
+    let case = dir.join("case.ingot");
+    copy_test(REJECT, &case);
+    assert_passes(&dir);
+    replace(&case, "//! section: 7", "//! section: 7\n//! stderr: text");
+    let report = conformance::run(&dir);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.message.contains("fits only a `run` test")),
+        "{:?}",
+        report.failures
+    );
+}

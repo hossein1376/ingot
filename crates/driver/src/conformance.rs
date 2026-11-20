@@ -4,9 +4,13 @@
 //! `accept`, `reject`, `cost`, `run` and `trap`, and checks every `.fixed.ingot`
 //! against the fix engine. A `cost` test compares the surviving check markers from
 //! phase 10. A `run` test builds and runs the program without a `--fast` and with
-//! `--fast`, compares its exit status; a `trap` test compares the one trap line's
-//! file, line and code with its markers. A malformed test is a failure rather than
-//! a skip; a test for another target, or one that needs an unavailable pinned
+//! `--fast`, compares its exit status, and, when the test has `//! stderr:` lines,
+//! its standard error, which must equal those lines exactly under both pipelines
+//! (without them standard error is not compared). A `trap` test compares the one
+//! trap line's file, line and code with its markers, and the line the optimized
+//! build prints must equal the `--fast` build's, byte for byte. A malformed test
+//! (a `stderr` directive outside a `run` test included) is a failure rather than a
+//! skip; a test for another target, or one that needs an unavailable pinned
 //! toolchain, is skipped with the reason recorded.
 
 use crate::build;
@@ -51,6 +55,9 @@ pub struct Case {
     pub markers: BTreeSet<Marker>,
     pub related: BTreeSet<RelatedMarker>,
     pub exit: i32,
+    /// The `//! stderr:` lines of a `run` test, in order. `None`: standard error is
+    /// not compared.
+    pub stderr: Option<Vec<String>>,
     pub target: Option<String>,
     /// Malformed directives or markers. A non-empty list fails the case.
     pub errors: Vec<String>,
@@ -110,6 +117,7 @@ pub fn read_case(path: &Path) -> Case {
         markers: BTreeSet::new(),
         related: BTreeSet::new(),
         exit: 0,
+        stderr: None,
         target: None,
         errors: Vec::new(),
         has_fix: false,
@@ -147,6 +155,12 @@ pub fn read_case(path: &Path) -> Case {
                         .errors
                         .push(format!("line {line_no}: exit is not an integer")),
                 }
+            } else if let Some(v) = rest.strip_prefix("stderr:") {
+                // One line of text; a single space after the colon is the separator.
+                let text = v.strip_prefix(' ').unwrap_or(v);
+                case.stderr
+                    .get_or_insert_with(Vec::new)
+                    .push(text.to_string());
             } else if let Some(v) = rest.strip_prefix("target:") {
                 let v = v.trim();
                 if v.is_empty() {
@@ -165,6 +179,10 @@ pub fn read_case(path: &Path) -> Case {
             .push("missing `//! expect:` directive".to_string());
         Expect::Accept
     });
+    if case.stderr.is_some() && case.expect != Expect::Run {
+        case.errors
+            .push("a `stderr` directive fits only a `run` test".to_string());
+    }
     match test_sources(path, &text) {
         Ok(files) => {
             for (file, file_text) in &files {
@@ -460,6 +478,8 @@ fn run_program_case(case: &Case, report: &mut Report) -> Result<(), String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let outcome = (|| {
+        // The trap line of the optimized build, to compare with the `--fast` one.
+        let mut trap_line: Option<String> = None;
         for fast in [false, true] {
             let out = dir.join(format!("{stem}-{}", if fast { "fast" } else { "opt" }));
             let built = match build::build_analysis(&mut analysis, &root, Some(&out), fast) {
@@ -489,6 +509,20 @@ fn run_program_case(case: &Case, report: &mut Report) -> Result<(), String> {
                         status,
                         if fast { "--fast" } else { "optimized" }
                     ));
+                }
+                if let Some(lines) = &case.stderr {
+                    let expected: Vec<u8> = lines
+                        .iter()
+                        .flat_map(|line| line.bytes().chain(std::iter::once(b'\n')))
+                        .collect();
+                    if output.stderr != expected {
+                        return Err(format!(
+                            "expected standard error {:?}, got {:?} ({})",
+                            String::from_utf8_lossy(&expected),
+                            String::from_utf8_lossy(&output.stderr),
+                            if fast { "--fast" } else { "optimized" }
+                        ));
+                    }
                 }
             } else {
                 let status = output.status.code().unwrap_or(-1);
@@ -525,6 +559,16 @@ fn run_program_case(case: &Case, report: &mut Report) -> Result<(), String> {
                 }
                 if case.markers.is_empty() {
                     return Err("a trap test has no trap marker".to_string());
+                }
+                match &trap_line {
+                    None => trap_line = Some(lines[0].to_string()),
+                    Some(optimized) if optimized != lines[0] => {
+                        return Err(format!(
+                            "the trap lines differ between the pipelines: optimized {optimized:?}, --fast {:?}",
+                            lines[0]
+                        ));
+                    }
+                    Some(_) => {}
                 }
             }
         }

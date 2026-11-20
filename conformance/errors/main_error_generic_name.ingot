@@ -1,0 +1,15 @@
+//! expect: run
+//! exit: 1
+//! stderr: error: Pair[i64, bool].{ a: 1, b: true }
+//! section: 33.1, 35
+
+import std.Env;
+
+struct Pair[A, B] {
+    a: A,
+    b: B,
+}
+
+pub fn main(env: &Env) -> void ! Pair[i64, bool] {
+    fail Pair[i64, bool].{ a: 1, b: true };
+}
