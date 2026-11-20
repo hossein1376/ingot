@@ -1,6 +1,17 @@
-// std.mem (spec section 35): the general allocator and address-space reservation.
-// Capability types: they have no public field, so safe code outside `std` cannot make
-// one (spec section 4.2).
+// std.mem (docs/std/mem.md): allocators, arenas, owning pointers and bulk operations.
+// `Heap` and `Vm` are capability types: they have no public field, so safe code outside
+// `std` cannot make one (spec section 4.2).
+
+import std.sync.Cell;
+import std.sys.macos.os_commit;
+import std.sys.macos.os_decommit;
+import std.sys.macos.os_free;
+import std.sys.macos.os_malloc;
+import std.sys.macos.os_malloc_size;
+import std.sys.macos.os_memalign;
+import std.sys.macos.os_page_size;
+import std.sys.macos.os_reserve;
+import std.sys.macos.os_unmap;
 
 /// Allocation failed, or the request was invalid.
 pub copy enum AllocErr: u8 {
@@ -30,6 +41,26 @@ pub interface Allocator: Copy {
     ) -> bool;
 }
 
+/// The largest size or alignment of a valid request (mem.md section 2).
+const max_request: i64 = 4611686018427387904;
+
+/// A valid request has `size >= 0`, `align` a power of two, and both at most `2^62`.
+fn valid_request(size: i64, align: i64) -> bool {
+    if size < 0 || size > max_request {
+        return false;
+    }
+    if align < 1 || align > max_request {
+        return false;
+    }
+    return (align & (align - 1)) == 0;
+}
+
+/// The pointer a request of size 0 gets: the address `align` itself. It is non-null and
+/// aligned, and nothing ever reads or writes through it.
+fn dangling(align: i64) -> *mut u8 {
+    return @wrap(u64, align) as *mut u8;
+}
+
 /// The general allocator. `Allocator` is `Copy` (section 14.1) and `Heap` is one, and
 /// `env.heap` is copied out of a `&Env`, so the type is `Copy`.
 pub copy struct Heap {}
@@ -44,8 +75,1416 @@ impl Heap {
     }
 }
 
+/// The system allocator (D8): `malloc` up to its own 16-byte alignment, `posix_memalign`
+/// above it. A block of size 0 is the pointer `align`, which is never handed to the
+/// system.
+impl Allocator for Heap {
+    fn alloc(self: Heap, size: i64, align: i64) -> *mut u8 ! AllocErr {
+        if !valid_request(size, align) {
+            fail .bad_request;
+        }
+        if size == 0 {
+            return dangling(align);
+        }
+        if align <= 16 {
+            return os_malloc(size) orelse { fail .out_of_memory; };
+        }
+        return os_memalign(align, size) orelse { fail .out_of_memory; };
+    }
+
+    /// `ptr` came from `Heap.alloc` with this `size` and `align`.
+    unsafe fn free(self: Heap, ptr: *mut u8, size: i64, align: i64) {
+        if size == 0 {
+            return;
+        }
+        unsafe("Allocator.free's precondition: ptr is a live Heap block of this size and align, freed once; size 0 was returned above") {
+            os_free(ptr);
+        }
+    }
+
+    /// `ptr` came from `Heap.alloc` with this `old` and `align`. True when the block's
+    /// usable size already covers `new`; nothing changes either way.
+    unsafe fn resize(
+        self: Heap,
+        ptr: *mut u8,
+        old: i64,
+        new: i64,
+        align: i64,
+    ) -> bool {
+        if old <= 0 || new <= 0 {
+            return false;
+        }
+        unsafe("Allocator.resize's precondition: ptr is a live Heap block; old > 0, so it is not the pointer `align`") {
+            return os_malloc_size(ptr) >= new;
+        }
+    }
+}
+
 impl Vm {
     pub(pkg) fn init() -> Vm {
         return Vm.{};
     }
+
+    /// Reserves `size` bytes of address space, aligned to a page. No pages are
+    /// committed. `size` is rounded up to a page (a size of 0 is one page); a negative
+    /// size or one above `2^62` is `.bad_request`.
+    pub fn reserve(self: Vm, size: i64) -> *mut u8 ! AllocErr {
+        if size < 0 || size > max_request {
+            fail .bad_request;
+        }
+        return os_reserve(round_up_page(size)) orelse { fail .out_of_memory; };
+    }
+
+    /// Releases a reservation from `reserve`. The whole range must still be reserved.
+    pub unsafe fn release(self: Vm, base: *mut u8, size: i64) -> void {
+        unsafe("Vm.release's precondition: base and size are the whole reservation vm.reserve gave, still mapped, and nothing refers into it") {
+            os_unmap(base, round_up_page(size));
+        }
+    }
+
+    /// Commits `size` bytes inside a reservation, rounded up to whole pages, from `base`,
+    /// which is page-aligned. `false` means the OS refused. A `size` of 0 commits
+    /// nothing and is `true`.
+    pub unsafe fn commit(self: Vm, base: *mut u8, size: i64) -> bool {
+        if size <= 0 {
+            return true;
+        }
+        unsafe("Vm.commit's precondition: base is page-aligned and base..base + size lies inside a reservation of vm") {
+            return os_commit(base, round_up_page(size));
+        }
+    }
+
+    /// Returns committed pages to the OS; the address space stays reserved. `size` is
+    /// rounded up to whole pages, and a `size` of 0 does nothing.
+    pub unsafe fn decommit(self: Vm, base: *mut u8, size: i64) -> void {
+        if size <= 0 {
+            return;
+        }
+        unsafe("Vm.decommit's precondition: base is page-aligned, the range lies inside a reservation of vm, and its contents are no longer read") {
+            os_decommit(base, round_up_page(size));
+        }
+    }
+
+    pub fn page_size(self: Vm) -> i64 {
+        return os_page_size();
+    }
+}
+
+/// `size` rounded up to a whole page, and never less than one page: the system refuses
+/// an empty mapping. `size` is in `0..=max_request`, so nothing here overflows.
+fn round_up_page(size: i64) -> i64 {
+    let page = os_page_size();
+    if size <= 0 {
+        return page;
+    }
+    return (size + page - 1) / page * page;
+}
+
+/// The smallest amount `Arena` commits at once: the 64 KiB of the design, rounded up to
+/// a page when the page is larger.
+const arena_chunk: i64 = 65536;
+
+fn cell_load(c: &Cell[i64]) -> i64 {
+    unsafe("the cell holds a live, aligned i64 for the whole borrow, and one task at a time uses an arena") {
+        return c.get().*;
+    }
+}
+
+fn cell_store(c: &Cell[i64], v: i64) -> void {
+    unsafe("the cell holds a live, aligned i64 for the whole borrow, and one task at a time uses an arena") {
+        c.get().* = v;
+    }
+}
+
+/// The offset from `base` at which a block of `size` bytes aligned to `align` starts,
+/// when the bump offset is `top` and the region has `cap` bytes. It aligns the address
+/// and not only the offset, so `base` may be any address and `align` any power of two.
+/// The request is valid, and `0 <= top <= cap`. Every comparison is made before the
+/// addition it guards, so no input overflows.
+fn bump_offset(
+    base: *mut u8,
+    top: i64,
+    cap: i64,
+    size: i64,
+    align: i64,
+) -> i64 ! AllocErr {
+    let address = @wrap(i64, @offset(base, top) as u64);
+    let low = address & (align - 1);
+    let pad = if low == 0 { 0 } else { align - low };
+    if pad > cap - top {
+        fail .out_of_memory;
+    }
+    let start = top + pad;
+    if size > cap - start {
+        fail .out_of_memory;
+    }
+    return start;
+}
+
+/// Writes `value` into the fresh block `p` and returns the typed pointer to it.
+///
+/// Precondition: `p` is a block of at least `@sizeof(T)` bytes, aligned for `T`, that
+/// nothing else refers to and that holds no live value (the old contents are not
+/// dropped).
+unsafe fn write_value[T](p: *mut u8, value: T) -> *mut T {
+    let q = p as *mut T;
+    unsafe("p is a fresh block of @sizeof(T) bytes aligned for T, no borrow of it exists, and it is never read as another type") {
+        q.* = value;
+    }
+    return q;
+}
+
+/// Moves the value out of `q`.
+///
+/// Precondition: `q` is aligned and holds a live `T` that nothing refers to, and the
+/// caller never reads or drops that value again.
+unsafe fn read_value[T](q: *mut T) -> T {
+    unsafe("q holds a T written by write_value, and the caller never reads it again") {
+        return q.*;
+    }
+}
+
+/// The exclusive borrow of the `T` at `q`.
+///
+/// Precondition: `q` is aligned and holds a live `T`, and for as long as the borrow lives
+/// nothing else reads or writes it (a raw pointer has no origins, so `from q` names
+/// nothing and the caller's own borrow of the block's owner is what bounds the use).
+unsafe fn borrow_mut[T](q: *mut T) -> &mut T from q {
+    unsafe("q holds a live T, and the caller's own borrow of its owner is what keeps others away") {
+        return @borrow_from_raw(q);
+    }
+}
+
+/// The shared borrow of the `T` at `q`.
+///
+/// Precondition: `q` is aligned and holds a live `T`, and for as long as the borrow lives
+/// nothing writes it.
+unsafe fn borrow_ref[T](q: *T) -> &T from q {
+    unsafe("q holds a live T, and the caller's own borrow of its owner keeps writers away") {
+        return @borrow_from_raw(q);
+    }
+}
+
+/// `n` copies of `value` in the fresh block `p` of `n` elements.
+///
+/// Precondition: `p` is a block of at least `n` elements of `T`, aligned for `T`, that
+/// nothing else refers to; `0 <= n <= 2^62`.
+unsafe fn store_slice[T: Copy](p: *mut u8, n: i64, value: T) -> []mut T from p {
+    let q = p as *mut T;
+    unsafe("p is a fresh block of n elements of T, aligned for T, no borrow of it exists, and each element is written before the slice is made") {
+        // A zero-sized element has nothing to write, however many there are.
+        if @sizeof(T) != 0 {
+            var i: i64 = 0;
+            while i < n {
+                @offset(q, i).* = value;
+                i += 1;
+            }
+        }
+        return @slice_from_raw(q, n);
+    }
+}
+
+/// The byte size of `n` elements of `T`: `.bad_request` for a negative `n` or one whose
+/// total is above `2^62`. It compares before it multiplies.
+fn slice_bytes[T](n: i64) -> i64 ! AllocErr {
+    let elem = @sizeof(T);
+    if n < 0 || n > max_request {
+        fail .bad_request;
+    }
+    if elem != 0 && n > max_request / elem {
+        fail .bad_request;
+    }
+    return n * elem;
+}
+
+/// A bump allocator over a reserved address range. Linear: `deinit` releases the
+/// reservation. `Send`, not `Sync`: one task allocates from it at a time. The bump
+/// offset and the committed size are in cells, so `&Arena` may allocate.
+pub linear struct Arena {
+    base: *mut u8,
+    /// The reservation, a whole number of pages.
+    size: i64,
+    vm: Vm,
+    page: i64,
+    top: Cell[i64],
+    done: Cell[i64],
+}
+
+impl Arena {
+    /// Reserves and starts committing from `vm`. `bytes` is the reservation size,
+    /// rounded up to a page; a negative or too-large size is `.bad_request`.
+    pub fn init(vm: Vm, bytes: i64) -> Arena ! AllocErr {
+        let base = try vm.reserve(bytes);
+        return Arena.{
+            base: base,
+            size: round_up_page(bytes),
+            vm: vm,
+            page: vm.page_size(),
+            top: Cell[i64].init(0),
+            done: Cell[i64].init(0),
+        };
+    }
+
+    /// A new `T` in arena memory. The result is an ordinary borrow of the arena.
+    pub fn alloc[T: Discard](
+        self: &Arena,
+        value: T,
+    ) -> &mut T ! AllocErr from self {
+        let p = try self.take(@sizeof(T), @alignof(T));
+        unsafe("p is the fresh block take just reserved for one T, aligned for it, and nothing else refers to it") {
+            return borrow_mut(write_value(p, value));
+        }
+    }
+
+    pub fn alloc_or_return[T](self: &Arena, value: T) -> &mut T ! AllocFail[
+        T,
+    ] from self {
+        let p = self.take(@sizeof(T), @alignof(T)) catch e => {
+            fail AllocFail[T].{ error: e, value: value };
+        };
+        unsafe("p is the fresh block take just reserved for one T, aligned for it, and nothing else refers to it") {
+            return borrow_mut(write_value(p, value));
+        }
+    }
+
+    /// `n` copies of `fill`. For non-`Copy` types use `alloc` in a loop or an unsafe
+    /// uninitialized-slice function in a later revision.
+    pub fn alloc_slice[T: Copy](
+        self: &Arena,
+        n: i64,
+        fill: T,
+    ) -> []mut T ! AllocErr from self {
+        let bytes = try slice_bytes.[T](n);
+        let p = try self.take(bytes, @alignof(T));
+        unsafe("p is the fresh block take just reserved for n elements of T, aligned for T, and nothing else refers to it") {
+            return store_slice(p, n, fill);
+        }
+    }
+
+    /// Invalidates every borrow of the arena. Rejects while any is live by the ordinary
+    /// borrow rules. The committed pages stay committed for reuse.
+    pub fn reset(self: &mut Arena) -> void {
+        cell_store(&self.top, 0);
+    }
+
+    /// Consumes the arena and releases the whole reservation.
+    pub fn deinit(self: Arena) -> void {
+        let Arena.{ base, size, vm, page: _, top: _, done: _ } = self;
+        unsafe("base and size are the one reservation of vm.reserve, released here exactly once") {
+            vm.release(base, size);
+        }
+    }
+
+    /// Bytes handed out so far, padding for alignment included.
+    pub fn used(self: &Arena) -> i64 {
+        return cell_load(&self.top);
+    }
+
+    /// The reservation, in bytes: what the arena can hold in all.
+    pub fn capacity(self: &Arena) -> i64 {
+        return self.size;
+    }
+
+    /// The block behind every allocation: `size` bytes aligned to `align`, committed.
+    fn take(self: &Arena, size: i64, align: i64) -> *mut u8 ! AllocErr {
+        if !valid_request(size, align) {
+            fail .bad_request;
+        }
+        if size == 0 {
+            return dangling(align);
+        }
+        let top = cell_load(&self.top);
+        let start = try bump_offset(self.base, top, self.size, size, align);
+        let end = start + size;
+        try self.commit_to(end);
+        cell_store(&self.top, end);
+        return @offset(self.base, start);
+    }
+
+    /// Makes the first `end` bytes of the reservation usable, committing a chunk of at
+    /// least 64 KiB and at least as much as is already committed (so the commits grow
+    /// geometrically), never past the reservation. `end` is at most `size`.
+    fn commit_to(self: &Arena, end: i64) -> void ! AllocErr {
+        let have = cell_load(&self.done);
+        if end <= have {
+            return;
+        }
+        let page = self.page;
+        var step = (end - have + page - 1) / page * page;
+        var chunk = (arena_chunk + page - 1) / page * page;
+        if chunk < have {
+            chunk = have;
+        }
+        if step < chunk {
+            step = chunk;
+        }
+        if step > self.size - have {
+            step = self.size - have;
+        }
+        let committed = unsafe("the range lies inside this arena's reservation, past what is committed") {
+            self.vm.commit(@offset(self.base, have), step)
+        };
+        if !committed {
+            fail .out_of_memory;
+        }
+        cell_store(&self.done, have + step);
+    }
+}
+
+/// `free` does nothing and `resize` always refuses: an arena releases everything at
+/// once.
+impl Allocator for &Arena {
+    fn alloc(self: &Arena, size: i64, align: i64) -> *mut u8 ! AllocErr {
+        return try self.take(size, align);
+    }
+
+    unsafe fn free(self: &Arena, ptr: *mut u8, size: i64, align: i64) {}
+
+    unsafe fn resize(
+        self: &Arena,
+        ptr: *mut u8,
+        old: i64,
+        new: i64,
+        align: i64,
+    ) -> bool {
+        return false;
+    }
+}
+
+/// The base pointer is raw, so `Send` is not derived (02-memory section 15); one task at
+/// a time owns the reservation, so it may move between tasks.
+unsafe impl Send for Arena {}
+
+/// A bump allocator inside a caller-provided buffer, usually on the stack. A view of
+/// that buffer; it does not own it. `Send`, not `Sync`. The buffer may start at any
+/// address: the address is aligned, not only the offset.
+pub struct FixedBuf {
+    buf: []mut u8,
+    at: Cell[i64],
+}
+
+impl FixedBuf {
+    pub fn init(buf: []mut u8) -> FixedBuf from buf {
+        return FixedBuf.{ buf: buf, at: Cell[i64].init(0) };
+    }
+
+    /// A new `T` in the buffer. The result is an ordinary borrow of the `FixedBuf`.
+    pub fn alloc[T: Discard](
+        self: &FixedBuf,
+        value: T,
+    ) -> &mut T ! AllocErr from self {
+        let p = try self.take(@sizeof(T), @alignof(T));
+        unsafe("p is the fresh block take just reserved for one T, aligned for it, and nothing else refers to it") {
+            return borrow_mut(write_value(p, value));
+        }
+    }
+
+    pub fn alloc_or_return[T](self: &FixedBuf, value: T) -> &mut T ! AllocFail[
+        T,
+    ] from self {
+        let p = self.take(@sizeof(T), @alignof(T)) catch e => {
+            fail AllocFail[T].{ error: e, value: value };
+        };
+        unsafe("p is the fresh block take just reserved for one T, aligned for it, and nothing else refers to it") {
+            return borrow_mut(write_value(p, value));
+        }
+    }
+
+    /// `n` copies of `fill`.
+    pub fn alloc_slice[T: Copy](
+        self: &FixedBuf,
+        n: i64,
+        fill: T,
+    ) -> []mut T ! AllocErr from self {
+        let bytes = try slice_bytes.[T](n);
+        let p = try self.take(bytes, @alignof(T));
+        unsafe("p is the fresh block take just reserved for n elements of T, aligned for T, and nothing else refers to it") {
+            return store_slice(p, n, fill);
+        }
+    }
+
+    /// Invalidates every borrow of the buffer's allocations, by the ordinary borrow
+    /// rules.
+    pub fn reset(self: &mut FixedBuf) -> void {
+        cell_store(&self.at, 0);
+    }
+
+    /// Bytes handed out so far, padding for alignment included.
+    pub fn used(self: &FixedBuf) -> i64 {
+        return cell_load(&self.at);
+    }
+
+    /// The length of the buffer. Alignment padding counts against it, so a buffer that
+    /// starts at an odd address holds less than this.
+    pub fn capacity(self: &FixedBuf) -> i64 {
+        return self.buf.len;
+    }
+
+    fn take(self: &FixedBuf, size: i64, align: i64) -> *mut u8 ! AllocErr {
+        if !valid_request(size, align) {
+            fail .bad_request;
+        }
+        if size == 0 {
+            return dangling(align);
+        }
+        let top = cell_load(&self.at);
+        let start = try bump_offset(
+            self.buf.ptr,
+            top,
+            self.buf.len,
+            size,
+            align,
+        );
+        cell_store(&self.at, start + size);
+        return @offset(self.buf.ptr, start);
+    }
+}
+
+/// `free` does nothing and `resize` always refuses.
+impl Allocator for &FixedBuf {
+    fn alloc(self: &FixedBuf, size: i64, align: i64) -> *mut u8 ! AllocErr {
+        return try self.take(size, align);
+    }
+
+    unsafe fn free(self: &FixedBuf, ptr: *mut u8, size: i64, align: i64) {}
+
+    unsafe fn resize(
+        self: &FixedBuf,
+        ptr: *mut u8,
+        old: i64,
+        new: i64,
+        align: i64,
+    ) -> bool {
+        return false;
+    }
+}
+
+/// Gives the block of the value at `q` back to the allocator that made it.
+///
+/// Precondition: `q` is the block `a.alloc(@sizeof(T), @alignof(T))` gave, freed once,
+/// and the value in it has been moved out or is `Discard`.
+unsafe fn release_block[T, A: Allocator](a: A, q: *mut T) -> void {
+    unsafe("q is the block a.alloc(@sizeof(T), @alignof(T)) gave, freed once, and the value in it has been moved out or is Discard") {
+        a.free(q as *mut u8, @sizeof(T), @alignof(T));
+    }
+}
+
+/// One value in allocator memory. Linear: `deinit` or `into_inner` is required.
+pub linear struct Box[T, A: Allocator] {
+    ptr: *mut T,
+    a: A,
+}
+
+impl[T: Discard, A: Allocator] Box[T, A] {
+    /// On failure the value is dropped.
+    pub fn init(a: A, value: T) -> Box[T, A] ! AllocErr {
+        let p = try a.alloc(@sizeof(T), @alignof(T));
+        let ptr = unsafe("p is the fresh block a.alloc just gave for one T, aligned for it, and nothing else refers to it") {
+            write_value(p, value)
+        };
+        return Box[T, A].{ ptr: ptr, a: a };
+    }
+
+    /// Frees the allocation and drops the value.
+    pub fn deinit(self: Box[T, A]) -> void {
+        let Box[T, A].{ ptr, a } = self;
+        unsafe("ptr is the block a.alloc gave this box, which owns it; the value is Discard, and the box is consumed here") {
+            release_block(a, ptr);
+        }
+    }
+}
+
+impl[T, A: Allocator] Box[T, A] {
+    /// On failure the value is returned in `AllocFail`.
+    pub fn init_or_return(a: A, value: T) -> Box[T, A] ! AllocFail[T] {
+        let p = a.alloc(@sizeof(T), @alignof(T)) catch e => {
+            fail AllocFail[T].{ error: e, value: value };
+        };
+        let ptr = unsafe("p is the fresh block a.alloc just gave for one T, aligned for it, and nothing else refers to it") {
+            write_value(p, value)
+        };
+        return Box[T, A].{ ptr: ptr, a: a };
+    }
+
+    pub fn get(self: &Box[T, A]) -> &T from self {
+        unsafe("self.ptr is the block this box owns, holding a live T, and the borrow of self keeps writers away") {
+            return borrow_ref(self.ptr as *T);
+        }
+    }
+
+    pub fn get_mut(self: &mut Box[T, A]) -> &mut T from self {
+        unsafe("self.ptr is the block this box owns, holding a live T, and the exclusive borrow of self keeps everyone else away") {
+            return borrow_mut(self.ptr);
+        }
+    }
+
+    /// Frees the allocation and returns the value. The caller then owns `T` directly.
+    pub fn into_inner(self: Box[T, A]) -> T {
+        let Box[T, A].{ ptr, a } = self;
+        unsafe("ptr is the block a.alloc gave this box, which owns it and is consumed here, so the live T is read once and the block freed once") {
+            let value = read_value(ptr);
+            release_block(a, ptr);
+            return value;
+        }
+    }
+}
+
+/// The value is behind a raw pointer, so neither property is derived; the box owns it
+/// as a field would.
+unsafe impl[T: Send, A: Allocator + Send] Send for Box[T, A] {}
+
+unsafe impl[T: Sync, A: Allocator + Sync] Sync for Box[T, A] {}
+
+/// Copies `src.len` elements. `dst.len` must be at least `src.len`; a short destination
+/// is a caller bug and traps (T02).
+pub fn copy[T: Copy](dst: []mut T, src: []T) -> void {
+    let part = dst[0..src.len];
+    var i: i64 = 0;
+    while i < src.len {
+        part[i] = src[i];
+        i += 1;
+    }
+}
+
+/// Fills every element with `value`.
+pub fn fill[T: Copy](dst: []mut T, value: T) -> void {
+    var i: i64 = 0;
+    while i < dst.len {
+        dst[i] = value;
+        i += 1;
+    }
+}
+
+/// Element-wise equality. Different lengths are `false`, not an error.
+pub fn eq[T: Eq](a: []T, b: []T) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: i64 = 0;
+    while i < a.len {
+        if !a[i].eq(&b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+const ok: i64 = 0;
+const oom: i64 = 1;
+const bad: i64 = 2;
+
+/// What a result is, for the tests: `ok`, `oom` or `bad`.
+fn code[T: Discard](r: Result[T, AllocErr]) -> i64 {
+    match r {
+        .ok(_) => { return ok; }
+        .err(e) => {
+            if e == .bad_request {
+                return bad;
+            }
+            return oom;
+        }
+    }
+}
+
+/// The address a `Heap.alloc` gave, 0 for `.out_of_memory` and -1 for `.bad_request`. The
+/// address is returned and not checked here: the optimizer may remove an allocation
+/// whose result is only compared with null and let it "succeed" however large it is.
+fn heap_addr(h: Heap, size: i64, align: i64) -> i64 {
+    match h.alloc(size, align) {
+        .ok(p) => { return address(p); }
+        .err(e) => {
+            if e == .bad_request {
+                return -1;
+            }
+            return 0;
+        }
+    }
+}
+
+fn address(p: *mut u8) -> i64 {
+    return @wrap(i64, p as u64);
+}
+
+test "Heap rejects each bad request" {
+    let h = @test_env().env.heap;
+    @assert(code(h.alloc(-1, 8)) == bad);
+    @assert(code(h.alloc(8, 0)) == bad);
+    @assert(code(h.alloc(8, -8)) == bad);
+    @assert(code(h.alloc(8, 3)) == bad);
+    @assert(code(h.alloc(8, 24)) == bad);
+    @assert(code(h.alloc(max_request + 1, 8)) == bad);
+    @assert(code(h.alloc(8, max_request + 1)) == bad);
+    @assert(code(h.alloc(9223372036854775807, 8)) == bad);
+    @assert(code(h.alloc(8, 9223372036854775807)) == bad);
+    @assert(code(h.alloc(-9223372036854775807 - 1, 8)) == bad);
+}
+
+/// Writes byte `v` at `p + i`.
+///
+/// Precondition: `p + i` is inside a live block the test owns, and nothing else refers
+/// to that byte.
+unsafe fn poke(p: *mut u8, i: i64, v: u8) -> void {
+    unsafe("the caller guarantees p + i is inside a live block the test owns") {
+        @offset(p, i).* = v;
+    }
+}
+
+/// Reads the byte at `p + i`.
+///
+/// Precondition: `p + i` is inside a live block the test owns, and the byte was written.
+unsafe fn peek(p: *mut u8, i: i64) -> u8 {
+    unsafe("the caller guarantees p + i is inside a live block the test owns and was written") {
+        return @offset(p, i).*;
+    }
+}
+
+test "Heap gives a pointer aligned to `align` for every alignment up to 4096" {
+    let h = @test_env().env.heap;
+    var align: i64 = 1;
+    while align <= 4096 {
+        // 40 bytes takes the `malloc` path up to 16 and `posix_memalign` above it.
+        let p = try h.alloc(40, align);
+        @assert(address(p) != 0);
+        @assert(address(p) % align == 0);
+        unsafe("p is a live block of 40 bytes from h.alloc(40, align), written inside its bounds, and freed once") {
+            var i: i64 = 0;
+            while i < 40 {
+                poke(p, i, @wrap(u8, i + align));
+                i += 1;
+            }
+            i = 0;
+            while i < 40 {
+                @assert(peek(p, i) == @wrap(u8, i + align));
+                i += 1;
+            }
+            h.free(p, 40, align);
+        }
+        align *= 2;
+    }
+}
+
+test "Heap serves a large alignment and a large size" {
+    let h = @test_env().env.heap;
+    let p = try h.alloc(1 << 20, 1 << 16);
+    @assert(address(p) % (1 << 16) == 0);
+    unsafe("p is a live block of 1 << 20 bytes from h.alloc(1 << 20, 1 << 16), written inside its bounds, and freed once") {
+        poke(p, (1 << 20) - 1, 7);
+        @assert(peek(p, (1 << 20) - 1) == 7);
+        h.free(p, 1 << 20, 1 << 16);
+    }
+}
+
+test "Heap gives the pointer `align` for size 0 and frees it as a no-op" {
+    let h = @test_env().env.heap;
+    var align: i64 = 1;
+    while align <= 4096 {
+        let p = try h.alloc(0, align);
+        @assert(address(p) == align);
+        unsafe("a size-0 block is never handed to the system, so freeing it does nothing") {
+            h.free(p, 0, align);
+            @assert(!h.resize(p, 0, 8, align));
+            @assert(!h.resize(p, 0, 0, align));
+        }
+        align *= 2;
+    }
+}
+
+test "Heap.resize is true only when the block's usable size covers the new size" {
+    let h = @test_env().env.heap;
+    let p = try h.alloc(100, 8);
+    unsafe("p is a live block of 100 bytes from h.alloc(100, 8)") {
+        // The block is at least 100 bytes, so shrinking stays in place.
+        @assert(h.resize(p, 100, 50, 8));
+        @assert(h.resize(p, 50, 100, 8));
+        @assert(h.resize(p, 100, 1, 8));
+        // Nothing sized 1 GiB fits a block that came from a 100-byte request.
+        @assert(!h.resize(p, 100, 1 << 30, 8));
+        @assert(!h.resize(p, 100, 0, 8));
+        @assert(!h.resize(p, 100, -1, 8));
+        @assert(h.resize(p, 100, 100, 8));
+    }
+    unsafe("p is a live block of 100 bytes from h.alloc(100, 8), written inside its bounds, and freed once") {
+        poke(p, 99, 9);
+        @assert(peek(p, 99) == 9);
+        h.free(p, 100, 8);
+    }
+
+    let q = try h.alloc(100, 64);
+    unsafe("q is a live block of 100 bytes from h.alloc(100, 64)") {
+        @assert(h.resize(q, 100, 90, 64));
+        @assert(!h.resize(q, 100, 1 << 30, 64));
+        h.free(q, 100, 64);
+    }
+}
+
+test "Heap reports a request the system cannot serve as out_of_memory" {
+    let h = @test_env().env.heap;
+    // Valid (below 2^62) but far beyond any address space.
+    @assert(heap_addr(h, 1 << 61, 8) == 0);
+    @assert(heap_addr(h, 1 << 61, 64) == 0);
+}
+
+test "Vm reports a bad size as bad_request and an impossible one as out_of_memory" {
+    let vm = @test_env().env.vm;
+    @assert(code(vm.reserve(-1)) == bad);
+    @assert(code(vm.reserve(max_request + 1)) == bad);
+    @assert(code(vm.reserve(9223372036854775807)) == bad);
+    @assert(code(vm.reserve(-9223372036854775807 - 1)) == bad);
+    // Valid, but larger than the address space.
+    @assert(code(vm.reserve(1 << 61)) == oom);
+}
+
+test "Vm.page_size is a power of two, and a reservation starts on a page" {
+    let vm = @test_env().env.vm;
+    let page = vm.page_size();
+    @assert(page >= 4096);
+    @assert((page & (page - 1)) == 0);
+    let base = try vm.reserve(1);
+    @assert(address(base) % page == 0);
+    unsafe("base is the whole reservation of vm.reserve(1), released once") {
+        vm.release(base, 1);
+    }
+    // A size of 0 is one page.
+    let zero = try vm.reserve(0);
+    @assert(address(zero) % page == 0);
+    unsafe("zero is the whole reservation of vm.reserve(0), released once") {
+        vm.release(zero, 0);
+    }
+}
+
+test "Vm reserves, commits, writes, decommits, commits again and releases" {
+    let vm = @test_env().env.vm;
+    let page = vm.page_size();
+    let size = 16 * page;
+    let base = try vm.reserve(size);
+    unsafe("base is a reservation of `size` bytes, released once at the end; the commits stay inside it and every poke and peek is inside committed pages") {
+        @assert(vm.commit(base, 3 * page));
+        poke(base, 0, 11);
+        poke(base, 3 * page - 1, 22);
+        @assert(peek(base, 0) == 11);
+        @assert(peek(base, 3 * page - 1) == 22);
+        // Commit a little more at the page after, and use all of it.
+        @assert(vm.commit(@offset(base, 3 * page), page));
+        poke(base, 4 * page - 1, 33);
+        @assert(peek(base, 4 * page - 1) == 33);
+        // A size that is not a page rounds up.
+        @assert(vm.commit(@offset(base, 4 * page), 1));
+        poke(base, 5 * page - 1, 44);
+        @assert(peek(base, 5 * page - 1) == 44);
+        vm.decommit(base, 5 * page);
+        @assert(vm.commit(base, 5 * page));
+        // The contents after a decommit are not promised; the pages must be usable.
+        poke(base, 0, 55);
+        poke(base, 5 * page - 1, 66);
+        @assert(peek(base, 0) == 55);
+        @assert(peek(base, 5 * page - 1) == 66);
+        // A size of 0 touches nothing, not even the page after the committed part.
+        @assert(vm.commit(@offset(base, 5 * page), 0));
+        vm.decommit(@offset(base, 5 * page), 0);
+        poke(base, 5 * page - 1, 67);
+        @assert(peek(base, 5 * page - 1) == 67);
+        vm.release(base, size);
+    }
+}
+
+fn where_is[T](r: &T) -> i64 {
+    return @wrap(i64, r as *T as u64);
+}
+
+/// `ok`, `oom` or `bad` for the result of `Arena.init`; an arena that was made is
+/// released.
+fn arena_code(r: Result[Arena, AllocErr]) -> i64 {
+    match r {
+        .ok(a) => {
+            a.deinit();
+            return ok;
+        }
+        .err(e) => {
+            if e == .bad_request {
+                return bad;
+            }
+            return oom;
+        }
+    }
+}
+
+/// `ok`, `oom` or `bad` for the result of a `Box.init`; a box that was made is released.
+fn box_code[T: Discard, A: Allocator](r: Result[Box[T, A], AllocErr]) -> i64 {
+    match r {
+        .ok(b) => {
+            b.deinit();
+            return ok;
+        }
+        .err(e) => {
+            if e == .bad_request {
+                return bad;
+            }
+            return oom;
+        }
+    }
+}
+
+fn is_send[T: Send](x: &T) -> void {}
+
+fn is_sync[T: Sync](x: &T) -> void {}
+
+fn is_owned[T: Owned](x: &T) -> void {}
+
+fn alloc_via[A: Allocator](a: A, size: i64, align: i64) -> *mut u8 ! AllocErr {
+    return try a.alloc(size, align);
+}
+
+struct Pair {
+    a: u8,
+    b: i64,
+}
+
+linear struct Token {
+    n: i64,
+}
+
+test "Arena.init rejects a bad size, and Arena is Send and Owned" {
+    let vm = @test_env().env.vm;
+    @assert(arena_code(Arena.init(vm, -1)) == bad);
+    @assert(arena_code(Arena.init(vm, max_request + 1)) == bad);
+    @assert(arena_code(Arena.init(vm, 9223372036854775807)) == bad);
+    @assert(arena_code(Arena.init(vm, (1 << 61))) == oom);
+    let arena = try Arena.init(vm, 100);
+    defer { arena.deinit(); }
+    is_send(&arena);
+    is_owned(&arena);
+}
+
+test "Arena reports capacity and used, and reset starts over" {
+    let vm = @test_env().env.vm;
+    var arena = try Arena.init(vm, (1 << 20));
+    defer { arena.deinit(); }
+    @assert(arena.capacity() == (1 << 20));
+    @assert(arena.used() == 0);
+    // The reservation rounds up to a page.
+    let small = try Arena.init(vm, 100);
+    defer { small.deinit(); }
+    @assert(small.capacity() == vm.page_size());
+    {
+        let a = try arena.alloc(5);
+        @assert(a.* == 5);
+        a.* = 6;
+        @assert(a.* == 6);
+        @assert(where_is(&a.*) % 8 == 0);
+    }
+    @assert(arena.used() == 8);
+    arena.reset();
+    @assert(arena.used() == 0);
+    {
+        let b = try arena.alloc(@wrap(u8, 9));
+        @assert(b.* == 9);
+    }
+    @assert(arena.used() == 1);
+}
+
+test "Arena allocates values of several types, each at its own alignment" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 20));
+    defer { arena.deinit(); }
+    let a = try arena.alloc(@wrap(u8, 1));
+    let b = try arena.alloc(-2);
+    let c = try arena.alloc(@wrap(u16, 3));
+    let d = try arena.alloc(4.5);
+    let e = try arena.alloc(@wrap(u32, 5));
+    let f = try arena.alloc(Pair.{ a: 6, b: 7 });
+    let g = try arena.alloc([3]u8.{ 8, 9, 10 });
+    let u = try arena.alloc(unit());
+    @assert(a.* == 1);
+    @assert(b.* == -2);
+    @assert(c.* == 3);
+    @assert(d.* == 4.5);
+    @assert(e.* == 5);
+    @assert(f.a == 6 && f.b == 7);
+    @assert(g[0] == 8 && g[1] == 9 && g[2] == 10);
+    @assert(where_is(&b.*) % 8 == 0);
+    @assert(where_is(&c.*) % 2 == 0);
+    @assert(where_is(&d.*) % 8 == 0);
+    @assert(where_is(&e.*) % 4 == 0);
+    @assert(where_is(&f.*) % @alignof(Pair) == 0);
+    // The values do not overlap.
+    @assert(a.* == 1 && b.* == -2 && c.* == 3 && e.* == 5);
+    // A zero-sized value takes no space and is at its alignment, the pointer `align`.
+    @assert(where_is(&u.*) == @alignof(void));
+    @assert(arena.used() < 128);
+}
+
+test "Arena serves every alignment up to 1 MiB, and the address is what is aligned" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 26));
+    defer { arena.deinit(); }
+    var align: i64 = 1;
+    while align <= (1 << 20) {
+        // A byte first, so the bump offset is never already aligned.
+        _ = try arena.alloc(@wrap(u8, 1));
+        let p = try alloc_via(&arena, 24, align);
+        @assert(address(p) % align == 0);
+        unsafe("p is a block of 24 bytes this arena just gave, and both writes are inside it") {
+            poke(p, 0, 1);
+            poke(p, 23, 2);
+        }
+        align *= 2;
+    }
+}
+
+test "Arena reports an impossible alignment or size as an error, never a trap" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 20));
+    defer { arena.deinit(); }
+    let a = &arena;
+    @assert(code(alloc_via(a, -1, 8)) == bad);
+    @assert(code(alloc_via(a, 8, 0)) == bad);
+    @assert(code(alloc_via(a, 8, 3)) == bad);
+    @assert(code(alloc_via(a, max_request + 1, 8)) == bad);
+    @assert(code(alloc_via(a, 8, max_request + 1)) == bad);
+    @assert(code(alloc_via(a, 9223372036854775807, 8)) == bad);
+    // Valid requests that do not fit.
+    @assert(code(alloc_via(a, max_request, 8)) == oom);
+    @assert(code(alloc_via(a, 8, max_request)) == oom);
+    @assert(code(alloc_via(a, (1 << 21), 1)) == oom);
+    @assert(code(alloc_via(a, (1 << 20), 1)) == ok);
+    // Nothing was taken by the failures, and nothing more fits.
+    @assert(arena.used() == (1 << 20));
+    @assert(code(alloc_via(a, 1, 1)) == oom);
+    @assert(code(alloc_via(a, 0, 1)) == ok);
+}
+
+test "Arena runs out and says out_of_memory, then recovers after reset" {
+    let vm = @test_env().env.vm;
+    var arena = try Arena.init(vm, 1);
+    defer { arena.deinit(); }
+    let page = arena.capacity();
+    @assert(page == vm.page_size());
+    {
+        let s = try arena.alloc_slice(page, @wrap(u8, 3));
+        @assert(s.len == page);
+        @assert(s[0] == 3 && s[page - 1] == 3);
+    }
+    @assert(arena.used() == page);
+    @assert(code(arena.alloc(@wrap(u8, 1))) == oom);
+    @assert(code(arena.alloc_slice(1, @wrap(u8, 0))) == oom);
+    @assert(arena.used() == page);
+    arena.reset();
+    {
+        let x = try arena.alloc(1);
+        x.* = 2;
+    }
+}
+
+test "Arena.alloc_or_return gives a linear value back when the arena is full" {
+    let vm = @test_env().env.vm;
+    var arena = try Arena.init(vm, 1);
+    defer { arena.deinit(); }
+    _ = try arena.alloc_slice(arena.capacity(), @wrap(u8, 0));
+    let t = Token.{ n: 41 };
+    match arena.alloc_or_return(t) {
+        .ok(_) => { @panic("the arena is full"); }
+        .err(f) => {
+            @assert(f.error == .out_of_memory);
+            @assert(take_back(f) == 41);
+        }
+    }
+    arena.reset();
+    let u = Token.{ n: 7 };
+    match arena.alloc_or_return(u) {
+        .ok(r) => {
+            @assert(r.n == 7);
+            r.n = 8;
+            @assert(r.n == 8);
+        }
+        .err(f) => {
+            _ = take_back(f);
+            @panic("the arena was reset");
+        }
+    }
+    @assert(arena.used() == 8);
+}
+
+test "Arena.alloc_slice fills, checks its size, and does not overflow" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 20));
+    defer { arena.deinit(); }
+    let xs = try arena.alloc_slice(10, @wrap(i32, 7));
+    @assert(xs.len == 10);
+    var i: i64 = 0;
+    while i < 10 {
+        @assert(xs[i] == 7);
+        xs[i] = @wrap(i32, i);
+        i += 1;
+    }
+    @assert(xs[9] == 9);
+    @assert(where_is(&xs[0]) % 4 == 0);
+    let empty = try arena.alloc_slice(0, 1);
+    @assert(empty.len == 0);
+    // Zero-sized elements: any count, no bytes.
+    let many = try arena.alloc_slice((1 << 40), unit());
+    @assert(many.len == (1 << 40));
+    @assert(code(arena.alloc_slice(-1, 0)) == bad);
+    @assert(code(arena.alloc_slice(max_request, 0)) == bad);
+    @assert(code(arena.alloc_slice(max_request / 8 + 1, 0)) == bad);
+    @assert(code(arena.alloc_slice(max_request + 1, unit())) == bad);
+    @assert(code(arena.alloc_slice(9223372036854775807, @wrap(u8, 0))) == bad);
+    @assert(code(arena.alloc_slice(max_request / 8, 0)) == oom);
+    @assert(code(arena.alloc_slice((1 << 40), @wrap(u8, 0))) == oom);
+    @assert(arena.used() == 40);
+}
+
+test "Arena commits a chunk at a time, growing geometrically, and never past the reservation" {
+    let vm = @test_env().env.vm;
+    let page = vm.page_size();
+    let chunk = (arena_chunk + page - 1) / page * page;
+    let arena = try Arena.init(vm, (1 << 30));
+    defer { arena.deinit(); }
+    @assert(cell_load(&arena.done) == 0);
+    _ = try arena.alloc(@wrap(u8, 1));
+    @assert(cell_load(&arena.done) == chunk);
+    // Inside the committed part: no new commit.
+    _ = try arena.alloc_slice(chunk - 1, @wrap(u8, 0));
+    @assert(cell_load(&arena.done) == chunk);
+    // Past it: at least what was committed again.
+    _ = try arena.alloc(@wrap(u8, 1));
+    @assert(cell_load(&arena.done) == 2 * chunk);
+    // A large request commits what it needs.
+    let big = try arena.alloc_slice((10 << 20), @wrap(u8, 1));
+    @assert(big[((10 << 20)) - 1] == 1);
+    @assert(cell_load(&arena.done) >= arena.used());
+    @assert(cell_load(&arena.done) % page == 0);
+    @assert(cell_load(&arena.done) <= arena.capacity());
+
+    // A reservation of one page commits that page and no more.
+    let tiny = try Arena.init(vm, 1);
+    defer { tiny.deinit(); }
+    _ = try tiny.alloc(@wrap(u8, 1));
+    @assert(cell_load(&tiny.done) == page);
+}
+
+test "Arena says out_of_memory when the system refuses a commit" {
+    let vm = @test_env().env.vm;
+    let page = vm.page_size();
+    // An arena over a range that is no longer mapped: `mprotect` refuses it.
+    let base = try vm.reserve(4 * page);
+    unsafe("base is the whole reservation of vm.reserve(4 * page), released once") {
+        vm.release(base, 4 * page);
+    }
+    let gone = Arena.{
+        base: base,
+        size: 4 * page,
+        vm: vm,
+        page: page,
+        top: Cell[i64].init(0),
+        done: Cell[i64].init(0),
+    };
+    @assert(code(gone.alloc(@wrap(u8, 1))) == oom);
+    @assert(gone.used() == 0);
+    // Not `deinit`: that would unmap the range a second time, and by now something else
+    // could be mapped there. The reservation was released above, so nothing is leaked.
+    @forget(gone);
+}
+
+test "&Arena is an Allocator: free does nothing and resize refuses" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, (1 << 20));
+    defer { arena.deinit(); }
+    let p = try alloc_via(&arena, 100, 16);
+    @assert(address(p) % 16 == 0);
+    unsafe("p is a block of 100 bytes this arena gave and still owns; the accesses are inside it") {
+        poke(p, 99, 5);
+        @assert(peek(p, 99) == 5);
+        @assert(!Allocator.resize(&arena, p, 100, 50, 16));
+        @assert(!Allocator.resize(&arena, p, 100, 200, 16));
+        Allocator.free(&arena, p, 100, 16);
+        // `free` released nothing: the block is still there.
+        @assert(peek(p, 99) == 5);
+    }
+    @assert(arena.used() == 100);
+    let z = try alloc_via(&arena, 0, 64);
+    @assert(address(z) == 64);
+}
+
+fn unit() -> void {}
+
+/// Takes the token back out of a failed allocation and consumes it.
+fn take_back(f: AllocFail[Token]) -> i64 {
+    let AllocFail[Token].{ error: _, value } = f;
+    let Token.{ n } = value;
+    return n;
+}
+
+struct Empty {}
+
+test "FixedBuf over a stack array allocates values and slices, and reports used and capacity" {
+    var store: [256]u8 = @zero;
+    var fb = FixedBuf.init(&mut store[0..256]);
+    @assert(fb.capacity() == 256);
+    @assert(fb.used() == 0);
+    is_send(&fb);
+    {
+        let a = try fb.alloc(@wrap(u8, 1));
+        let b = try fb.alloc(@wrap(i64, -2));
+        let c = try fb.alloc(Pair.{ a: 3, b: 4 });
+        let u = try fb.alloc(unit());
+        let e = try fb.alloc(Empty.{});
+        @assert(a.* == 1);
+        @assert(b.* == -2);
+        @assert(c.a == 3 && c.b == 4);
+        @assert(where_is(&b.*) % 8 == 0);
+        @assert(where_is(&c.*) % @alignof(Pair) == 0);
+        @assert(where_is(&u.*) == 1);
+        _ = e;
+    }
+    let before = fb.used();
+    @assert(before >= 1 + 8 + 16);
+    {
+        let xs = try fb.alloc_slice(5, @wrap(u16, 9));
+        @assert(xs.len == 5);
+        @assert(xs[4] == 9);
+        @assert(where_is(&xs[0]) % 2 == 0);
+    }
+    @assert(fb.used() >= before + 10);
+    fb.reset();
+    @assert(fb.used() == 0);
+    // The whole buffer, in one slice.
+    {
+        let all = try fb.alloc_slice(256, @wrap(u8, 7));
+        @assert(all.len == 256);
+        @assert(all[255] == 7);
+    }
+    @assert(fb.used() == 256);
+    @assert(code(fb.alloc(@wrap(u8, 1))) == oom);
+    @assert(code(fb.alloc_slice(1, @wrap(u8, 1))) == oom);
+    @assert(fb.used() == 256);
+    fb.reset();
+    @assert(code(fb.alloc_slice(257, @wrap(u8, 1))) == oom);
+    @assert(fb.used() == 0);
+}
+
+test "FixedBuf aligns the address, so a buffer that starts at an odd address works" {
+    var store: [64]u8 = @zero;
+    // Find a start whose address is 1 past a multiple of 8.
+    var k: i64 = 0;
+    while where_is(&store[k]) % 8 != 1 {
+        k += 1;
+    }
+    @assert(k < 8);
+    {
+        // 8 bytes starting at address = 1 mod 8: an i64 needs 7 bytes of padding first.
+        let tight = FixedBuf.init(&mut store[k..k + 8]);
+        @assert(code(tight.alloc(5)) == oom);
+        @assert(tight.used() == 0);
+    }
+    {
+        let fb = FixedBuf.init(&mut store[k..k + 15]);
+        let x = try fb.alloc(5);
+        @assert(x.* == 5);
+        @assert(where_is(&x.*) % 8 == 0);
+        @assert(fb.used() == 15);
+        @assert(code(fb.alloc(@wrap(u8, 1))) == oom);
+    }
+    {
+        // Every alignment up to 16, from every offset of a small prefix.
+        var fb = FixedBuf.init(&mut store[1..64]);
+        var align: i64 = 1;
+        while align <= 16 {
+            fb.reset();
+            _ = try fb.alloc(@wrap(u8, 1));
+            let p = try alloc_via(&fb, 3, align);
+            @assert(address(p) % align == 0);
+            align *= 2;
+        }
+    }
+}
+
+test "FixedBuf reports a bad or impossible request as an error, never a trap" {
+    var store: [128]u8 = @zero;
+    let fb = FixedBuf.init(&mut store[0..128]);
+    let a = &fb;
+    @assert(code(alloc_via(a, -1, 8)) == bad);
+    @assert(code(alloc_via(a, 8, 0)) == bad);
+    @assert(code(alloc_via(a, 8, 12)) == bad);
+    @assert(code(alloc_via(a, max_request + 1, 8)) == bad);
+    @assert(code(alloc_via(a, 8, max_request + 1)) == bad);
+    @assert(code(alloc_via(a, max_request, 8)) == oom);
+    @assert(code(alloc_via(a, 8, max_request)) == oom);
+    @assert(code(fb.alloc_slice(-1, @wrap(u8, 0))) == bad);
+    @assert(code(fb.alloc_slice(max_request, 1)) == bad);
+    @assert(code(fb.alloc_slice(max_request / 8, 1)) == oom);
+    @assert(fb.used() == 0);
+    let z = try alloc_via(a, 0, 32);
+    @assert(address(z) == 32);
+    @assert(fb.used() == 0);
+}
+
+test "&FixedBuf is an Allocator: free does nothing and resize refuses" {
+    var store: [128]u8 = @zero;
+    let fb = FixedBuf.init(&mut store[0..128]);
+    let p = try alloc_via(&fb, 24, 8);
+    unsafe("p is a block of 24 bytes this buffer gave and still owns; the accesses are inside it") {
+        poke(p, 23, 6);
+        @assert(!Allocator.resize(&fb, p, 24, 8, 8));
+        @assert(!Allocator.resize(&fb, p, 24, 48, 8));
+        Allocator.free(&fb, p, 24, 8);
+        // `free` released nothing: the block is still there.
+        @assert(peek(p, 23) == 6);
+    }
+    @assert(fb.used() >= 24);
+}
+
+test "FixedBuf.alloc_or_return gives a linear value back when the buffer is full" {
+    var store: [16]u8 = @zero;
+    var fb = FixedBuf.init(&mut store[0..16]);
+    _ = try fb.alloc_slice(16, @wrap(u8, 0));
+    match fb.alloc_or_return(Token.{ n: 12 }) {
+        .ok(_) => { @panic("the buffer is full"); }
+        .err(f) => {
+            @assert(f.error == .out_of_memory);
+            @assert(take_back(f) == 12);
+        }
+    }
+    fb.reset();
+    match fb.alloc_or_return(Token.{ n: 13 }) {
+        .ok(r) => { @assert(r.n == 13); }
+        .err(f) => {
+            _ = take_back(f);
+            @panic("the buffer was reset");
+        }
+    }
+}
+
+test "Box with Heap: get, get_mut, into_inner and deinit" {
+    let heap = @test_env().env.heap;
+    var b = try Box[i64, Heap].init(heap, 5);
+    is_send(&b);
+    is_sync(&b);
+    is_owned(&b);
+    @assert(b.get().* == 5);
+    b.get_mut().* = 6;
+    @assert(b.get().* == 6);
+    @assert(b.into_inner() == 6);
+
+    let p = try Box[Pair, Heap].init(heap, Pair.{ a: 1, b: 2 });
+    @assert(p.get().a == 1 && p.get().b == 2);
+    p.deinit();
+
+    // A large value, and a type of a large alignment through its fields.
+    let big = try Box[[1024]i64, Heap].init(heap, @zero);
+    @assert(big.get()[1023] == 0);
+    big.deinit();
+}
+
+test "Box with a linear value: init_or_return and into_inner" {
+    let heap = @test_env().env.heap;
+    let b = Box[Token, Heap].init_or_return(heap, Token.{ n: 21 }) catch f => {
+        _ = take_back(f);
+        @panic("the heap has memory");
+    };
+    @assert(b.get().n == 21);
+    let t = b.into_inner();
+    let Token.{ n } = t;
+    @assert(n == 21);
+}
+
+test "Box with &Arena is a view of the arena, and fails when the arena is full" {
+    let vm = @test_env().env.vm;
+    var arena = try Arena.init(vm, 1);
+    defer { arena.deinit(); }
+    {
+        let b = try Box[i64, &Arena].init(&arena, 9);
+        @assert(b.get().* == 9);
+        @assert(arena.used() == 8);
+        b.deinit();
+        let c = try Box[i64, &Arena].init(&arena, 10);
+        @assert(c.into_inner() == 10);
+    }
+    // `deinit` gives nothing back to a bump allocator.
+    @assert(arena.used() == 16);
+    arena.reset();
+    _ = try arena.alloc_slice(arena.capacity(), @wrap(u8, 0));
+    @assert(box_code(Box[i64, &Arena].init(&arena, 1)) == oom);
+    match Box[Token, &Arena].init_or_return(&arena, Token.{ n: 30 }) {
+        .ok(b) => {
+            let t = b.into_inner();
+            let Token.{ n: _ } = t;
+            @panic("the arena is full");
+        }
+        .err(f) => {
+            @assert(f.error == .out_of_memory);
+            @assert(take_back(f) == 30);
+        }
+    }
+}
+
+test "Box with a zero-sized value allocates a zero-sized block" {
+    let vm = @test_env().env.vm;
+    let arena = try Arena.init(vm, 1);
+    defer { arena.deinit(); }
+    let b = try Box[Empty, &Arena].init(&arena, Empty.{});
+    @assert(arena.used() == 0);
+    let e = b.get();
+    _ = e;
+    let v = b.into_inner();
+    _ = v;
+    let heap = @test_env().env.heap;
+    let h = try Box[void, Heap].init(heap, unit());
+    h.deinit();
+    let g = try Box[Empty, Heap].init(heap, Empty.{});
+    let w = g.into_inner();
+    _ = w;
+}
+
+test "Box with Heap holds values of several sizes" {
+    let heap = @test_env().env.heap;
+    let a = try Box[u8, Heap].init(heap, @wrap(u8, 1));
+    @assert(a.into_inner() == 1);
+    let b = try Box[u64, Heap].init(heap, @wrap(u64, 2));
+    @assert(b.into_inner() == 2);
+}
+
+test "copy copies a prefix of a longer destination and leaves the rest" {
+    var dst: [6]i64 = [6]i64.{ 9, 9, 9, 9, 9, 9 };
+    let src: [3]i64 = [3]i64.{ 1, 2, 3 };
+    copy(&mut dst[0..6], &src[0..3]);
+    @assert(dst[0] == 1 && dst[1] == 2 && dst[2] == 3);
+    @assert(dst[3] == 9 && dst[5] == 9);
+    // An empty source copies nothing, even into an empty destination.
+    copy(&mut dst[0..0], &src[0..0]);
+    copy(&mut dst[2..4], &src[0..0]);
+    @assert(dst[2] == 3 && dst[3] == 9);
+    // Equal lengths.
+    var same: [3]u8 = [3]u8.{ 0, 0, 0 };
+    let source: [3]u8 = [3]u8.{ 7, 8, 9 };
+    copy(&mut same[0..3], &source[0..3]);
+    @assert(same[0] == 7 && same[1] == 8 && same[2] == 9);
+}
+
+test "fill sets every element" {
+    var xs: [5]i32 = [5]i32.{ 1, 2, 3, 4, 5 };
+    fill(&mut xs[1..4], -1);
+    @assert(
+        xs[0] == 1 && xs[1] == -1 && xs[2] == -1 && xs[3] == -1 && xs[4] == 5,
+    );
+    fill(&mut xs[0..0], 0);
+    @assert(xs[0] == 1);
+    fill(&mut xs[0..5], 7);
+    @assert(xs[0] == 7 && xs[4] == 7);
+}
+
+test "eq compares element by element, and different lengths are false" {
+    let a: [3]i64 = [3]i64.{ 1, 2, 3 };
+    let b: [3]i64 = [3]i64.{ 1, 2, 3 };
+    let c: [3]i64 = [3]i64.{ 1, 2, 4 };
+    @assert(eq(&a[0..3], &b[0..3]));
+    @assert(!eq(&a[0..3], &c[0..3]));
+    @assert(!eq(&a[0..3], &b[0..2]));
+    @assert(!eq(&a[0..2], &b[0..3]));
+    @assert(eq(&a[0..0], &c[3..3]));
+    @assert(eq(&a[0..2], &c[0..2]));
+    @assert(eq("ingot", "ingot"));
+    @assert(!eq("ingot", "ingots"));
+    @assert(!eq("ingot", "ingox"));
+    @assert(eq("", ""));
 }

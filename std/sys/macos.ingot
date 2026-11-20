@@ -14,7 +14,27 @@ extern "c" {
         fd: i32,
         offset: i64,
     ) -> *mut u8;
+    fn munmap(addr: *mut u8, len: i64) -> i32;
+    fn mprotect(addr: *mut u8, len: i64, prot: i32) -> i32;
+    fn madvise(addr: *mut u8, len: i64, advice: i32) -> i32;
+    fn malloc(size: i64) -> *mut u8;
+    fn posix_memalign(out: *mut *mut u8, align: i64, size: i64) -> i32;
+    fn free(ptr: *mut u8) -> void;
+    fn malloc_size(ptr: *u8) -> i64;
+    fn sysconf(name: i32) -> i64;
 }
+
+// The constants below are the macOS SDK's own (`xcrun --show-sdk-path`, then
+// `usr/include`), for the one target this file is for.
+//
+// `sys/mman.h`: `PROT_NONE 0x00`, `PROT_READ 0x01`, `PROT_WRITE 0x02`,
+// `MAP_PRIVATE 0x0002`, `MAP_ANON 0x1000`, `MAP_FAILED ((void *)-1)`, `MADV_FREE 5`.
+// `unistd.h`: `_SC_PAGESIZE 29`.
+const prot_none: i32 = 0;
+const prot_read_write: i32 = 3;
+const map_private_anon: i32 = 0x1002;
+const madv_free: i32 = 5;
+const sc_pagesize: i32 = 29;
 
 pub(pkg) fn os_write(fd: i32, buf: *u8, len: i64) -> i64 {
     unsafe("the runtime writes its own diagnostic to the system's stderr") {
@@ -32,5 +52,107 @@ pub(pkg) fn os_exit(status: i32) -> never {
 pub(pkg) fn os_map(len: i64) -> *mut u8 {
     unsafe("the runtime reserves its one argument table from the operating system") {
         return mmap(@wrap(u64, 0) as *mut u8, len, 3, 0x1002, -1, 0);
+    }
+}
+
+/// An address-space reservation: `len` bytes, no access, private and anonymous.
+/// `MAP_FAILED` is `.none`.
+pub(pkg) fn os_reserve(len: i64) -> ?*mut u8 {
+    var p: *mut u8 = @wrap(u64, 0) as *mut u8;
+    unsafe("an anonymous PROT_NONE mapping of a fresh address range touches no memory") {
+        p = mmap(
+            @wrap(u64, 0) as *mut u8,
+            len,
+            prot_none,
+            map_private_anon,
+            -1,
+            0,
+        );
+    }
+    // MAP_FAILED is the all-ones address (sys/mman.h).
+    if p as u64 == @wrap(u64, -1) {
+        return .none;
+    }
+    return .some(p);
+}
+
+/// Unmaps a range that `os_reserve` returned.
+///
+/// Precondition: `base` and `len` are the range `os_reserve` gave, still mapped, and
+/// nothing refers into it any more.
+pub(pkg) unsafe fn os_unmap(base: *mut u8, len: i64) -> void {
+    unsafe("the caller guarantees the range is one os_reserve gave, still mapped, and unreferenced") {
+        _ = munmap(base, len);
+    }
+}
+
+/// Makes a page-aligned range readable and writable. True when the system agreed.
+///
+/// Precondition: `base` is page-aligned and `base..base + len` lies inside a reservation
+/// the caller owns; the call changes the protection of those pages.
+pub(pkg) unsafe fn os_commit(base: *mut u8, len: i64) -> bool {
+    unsafe("the caller guarantees a page-aligned range inside a reservation it owns") {
+        return mprotect(base, len, prot_read_write) == 0;
+    }
+}
+
+/// Tells the system the pages' contents are not needed, then removes access.
+///
+/// Precondition: `base` is page-aligned, `base..base + len` lies inside a reservation the
+/// caller owns, and nothing reads the pages' contents afterwards.
+pub(pkg) unsafe fn os_decommit(base: *mut u8, len: i64) -> void {
+    unsafe("the caller guarantees a page-aligned range inside a reservation it owns, no longer read") {
+        _ = madvise(base, len, madv_free);
+        _ = mprotect(base, len, prot_none);
+    }
+}
+
+pub(pkg) fn os_page_size() -> i64 {
+    unsafe("sysconf with _sc_pagesize reads a constant of the system") {
+        return sysconf(sc_pagesize);
+    }
+}
+
+/// `malloc`; a null result is `.none`.
+pub(pkg) fn os_malloc(size: i64) -> ?*mut u8 {
+    var p: *mut u8 = @wrap(u64, 0) as *mut u8;
+    unsafe("malloc of a non-negative size has no precondition") {
+        p = malloc(size);
+    }
+    if p as u64 == 0 {
+        return .none;
+    }
+    return .some(p);
+}
+
+/// `posix_memalign`; the alignment is a power of two and a multiple of the pointer size.
+/// Any failure is `.none`.
+pub(pkg) fn os_memalign(align: i64, size: i64) -> ?*mut u8 {
+    var p: *mut u8 = @wrap(u64, 0) as *mut u8;
+    var status: i32 = 0;
+    unsafe("the out-pointer is a live local and the caller checked the alignment") {
+        status = posix_memalign(&mut p as *mut *mut u8, align, size);
+    }
+    if status != 0 || p as u64 == 0 {
+        return .none;
+    }
+    return .some(p);
+}
+
+/// Frees a block of `os_malloc` or `os_memalign`.
+///
+/// Precondition: `ptr` is such a block and has not been freed; nothing uses it afterwards.
+pub(pkg) unsafe fn os_free(ptr: *mut u8) -> void {
+    unsafe("the caller guarantees a live block from malloc or posix_memalign, freed once") {
+        free(ptr);
+    }
+}
+
+/// The usable size of a block that `os_malloc` or `os_memalign` returned.
+///
+/// Precondition: `ptr` is such a block and has not been freed.
+pub(pkg) unsafe fn os_malloc_size(ptr: *mut u8) -> i64 {
+    unsafe("the caller guarantees a live block from malloc or posix_memalign") {
+        return malloc_size(ptr as *u8);
     }
 }

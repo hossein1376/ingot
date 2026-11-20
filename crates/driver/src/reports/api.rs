@@ -926,6 +926,18 @@ fn def_path(ctx: &Ctx<'_>, def: DefId) -> Option<String> {
 fn target_path(ctx: &Ctx<'_>, target: ingot_sema::TypeId) -> Option<String> {
     match ctx.declarations.types.kind(target) {
         ingot_sema::TyKind::Adt(def, _) => def_path(ctx, *def),
+        // `impl I for &T`: the module path of `T` and then `&T`, so the path still names
+        // its module (and does not collide with `T`'s own members).
+        ingot_sema::TyKind::Ref(_, inner) => match ctx.declarations.types.kind(*inner) {
+            ingot_sema::TyKind::Adt(def, _) => {
+                let path = def_path(ctx, *def)?;
+                Some(match path.rsplit_once('.') {
+                    Some((module, name)) => format!("{module}.&{name}"),
+                    None => format!("&{path}"),
+                })
+            }
+            _ => Some(ctx.declarations.types.display(ctx.sema, target)),
+        },
         _ => Some(ctx.declarations.types.display(ctx.sema, target)),
     }
 }

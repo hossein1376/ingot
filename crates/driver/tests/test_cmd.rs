@@ -779,13 +779,20 @@ fn a_package_with_no_tests_succeeds_with_none() {
 }
 
 #[test]
-fn the_standard_library_has_no_tests() {
+fn the_standard_library_tests_pass_under_both_pipelines() {
     let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std");
-    let run = ingot_test(&std, &[], false);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.tests().is_empty());
-    assert_eq!(run.summary().get("ok"), Some(&Json::Bool(true)));
-    assert_eq!(int(run.summary(), "passed"), 0);
+    for opt in BOTH {
+        let run = ingot_test(&std, &[], opt);
+        assert_eq!(run.code, 0, "opt={opt}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.summary().get("ok"),
+            Some(&Json::Bool(true)),
+            "opt={opt}"
+        );
+        assert_eq!(int(run.summary(), "failed"), 0, "opt={opt}");
+        assert!(int(run.summary(), "passed") > 0, "opt={opt}");
+        assert!(!run.tests().is_empty(), "opt={opt}");
+    }
 }
 
 #[test]

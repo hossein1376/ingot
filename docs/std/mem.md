@@ -85,8 +85,8 @@ pub copy struct Vm {}
 
 impl Vm {
     /// Reserves `size` bytes of address space, aligned to a page. No pages are
-    /// committed. `size` is rounded up to a page; a negative or too-large size is
-    /// `.bad_request`.
+    /// committed. `size` is rounded up to a page, and 0 is one page; a negative size,
+    /// or one above 2^62, is `.bad_request`.
     pub fn reserve(self: Vm, size: i64) -> *mut u8 ! AllocErr
 
     /// Releases a reservation from `reserve`. The whole range must still be reserved.
@@ -123,8 +123,8 @@ container then allocates and copies. `Vm` uses `mmap` with `PROT_NONE` to reserv
 pub linear struct Arena { ... }
 
 impl Arena {
-    /// Reserves and starts committing from `vm`. `bytes` is the reservation size; a
-    /// negative or too-large size is `.bad_request`.
+    /// Reserves from `vm` and commits on demand. `bytes` is the reservation size, rounded
+    /// up to a page; a negative size, or one above 2^62, is `.bad_request`.
     pub fn init(vm: Vm, bytes: i64) -> Arena ! AllocErr
 
     /// A new `T` in arena memory. The result is an ordinary borrow of the arena.
@@ -140,13 +140,15 @@ impl Arena {
     ) -> []mut T ! AllocErr from self
 
     /// Invalidates every borrow of the arena. Rejects while any is live by the ordinary
-    /// borrow rules.
+    /// borrow rules. The committed pages stay committed; their contents are unspecified.
     pub fn reset(self: &mut Arena) -> void
 
     /// Consumes the arena and releases the whole reservation.
     pub fn deinit(self: Arena) -> void
 
+    /// Bytes handed out since `init` or the last `reset`, alignment padding included.
     pub fn used(self: &Arena) -> i64
+    /// The reservation in bytes, a whole number of pages.
     pub fn capacity(self: &Arena) -> i64
 }
 
@@ -163,7 +165,11 @@ pointer is interior mutable. The arena contains its bump pointer in a `Cell` (02
 §13.6), so `&Arena` is not marked read-only by the optimizer. The `&mut Arena` of
 `reset` and `deinit` is what ends the borrows. `impl Allocator for &Arena` is the form
 that makes `Arena` usable where an allocator is expected; its `free` does nothing and
-its `resize` always returns `false`.
+its `resize` always returns `false`. Pages are committed as the bump offset passes the
+committed part, in chunks of at least 64 KiB that grow with what is already committed,
+never past the reservation; a refused commit is `.out_of_memory`. A method call
+`arena.alloc(...)` finds the inherent `alloc[T]`; the `Allocator` form is reached
+through a bound or as `Allocator.alloc(&arena, size, align)`.
 
 ## 5. `FixedBuf`
 

@@ -200,6 +200,11 @@ impl<'a> Discovery<'a> {
                 }
             }
         }
+        // The generated entry of a build calls `std.sys.rt` (`start`, `trap`,
+        // `test_start`, the printers), and no function of the program calls them. When
+        // `std` is itself the root package it is a checked package, so phase 11a must
+        // report those functions: they are roots too.
+        let rt_module = self.sema.module_paths.get("std.sys.rt").copied();
         for (_, cfg) in self.cfgs.iter() {
             if cfg.key.body != BodyKey::Item {
                 continue;
@@ -209,6 +214,12 @@ impl<'a> Discovery<'a> {
                 continue;
             }
             let kind = self.sema.def(owner).kind;
+            let runtime = roots != Roots::Check
+                && matches!(kind, DefKind::Fn)
+                && rt_module == Some(self.sema.def(owner).module)
+                && self.root.is_some_and(|root| {
+                    root == self.sema.module(self.sema.def(owner).module).package.0 as usize
+                });
             let sig = self.decls.fn_sig(owner);
             let yes = match roots {
                 Roots::Check => matches!(kind, DefKind::Fn | DefKind::Test { .. }),
@@ -230,7 +241,7 @@ impl<'a> Discovery<'a> {
                         && self.test_module.is_none_or(|only| only == module)
                 }
             };
-            if yes {
+            if yes || runtime {
                 let key = InstanceKey {
                     owner,
                     body: InstanceBody::Item,

@@ -13,7 +13,7 @@ use ingot_syntax::ast::{BinOp, UnOp};
 use ingot_syntax::lexer::lex;
 use ingot_syntax::parser::parse;
 
-const STD: [(&str, &str); 14] = [
+const STD: [(&str, &str); 15] = [
     ("", include_str!("../../../std/main.ingot")),
     ("core", include_str!("../../../std/core.ingot")),
     ("exec", include_str!("../../../std/exec.ingot")),
@@ -26,6 +26,7 @@ const STD: [(&str, &str); 14] = [
     ("net", include_str!("../../../std/net.ingot")),
     ("rand", include_str!("../../../std/rand.ingot")),
     ("sync", include_str!("../../../std/sync.ingot")),
+    ("sys.macos", include_str!("../../../std/sys/macos.ingot")),
     ("task", include_str!("../../../std/task.ingot")),
     ("time", include_str!("../../../std/time.ingot")),
 ];
