@@ -1,0 +1,10 @@
+//! expect: accept
+//! section: 32
+
+// The way to use the test environment in a closure: capture it.
+
+test "the environment, captured" {
+    let t = @test_env();
+    let f = fn [t](x: i64) -> i64 { return x + t.env.args.len; };
+    @assert(f(1) == 2);
+}

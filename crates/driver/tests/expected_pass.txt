@@ -435,6 +435,8 @@ names/pub_pkg/main.ingot
 names/qualify_name/main.ingot
 names/shadowing.ingot
 names/shadowing_nested.ingot
+names/test_env_captured.ingot
+names/test_env_in_closure.ingot
 names/test_env_wrong_type.ingot
 names/test_only.ingot
 names/testing_env.ingot

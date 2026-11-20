@@ -1,8 +1,8 @@
 // std.sys.rt: the runtime boundary (docs/std/rt.md §1).
 //
 // B1 needs the core: the trap record, `trap`, the generated process entry, and
-// the decimal integer printing a trap line uses. The scheduler and the test
-// environment arrive in later steps.
+// the decimal integer printing a trap line uses. B3 adds `test_start`, the entry of
+// a test executable. The scheduler arrives in a later step.
 
 import std.Env;
 import std.Vars;
@@ -16,6 +16,7 @@ import std.rand.Rand;
 import std.sys.macos.os_exit;
 import std.sys.macos.os_map;
 import std.sys.macos.os_write;
+import std.testing;
 import std.time.Clock;
 
 /// The traps of the catalog (diagnostics.md §18).
@@ -289,6 +290,59 @@ pub fn start(
     };
     let status = entry(&env);
     os_exit(status);
+}
+
+/// The decimal number `text` spells, or -1 when it is empty, holds another byte, or is
+/// too large to index a table of tests.
+fn parse_index(text: []u8) -> i64 {
+    if text.len == 0 {
+        return -1;
+    }
+    var n: i64 = 0;
+    var i: i64 = 0;
+    while i < text.len {
+        let b = text[i];
+        if b < 48 || b > 57 || n > 99999999 {
+            return -1;
+        }
+        n = n * 10 + (b - 48) as i64;
+        i += 1;
+    }
+    return n;
+}
+
+/// Runs the one test the harness named (rt.md §1): `env.args[1]` is its index in
+/// `tests`, in decimal, and `env.args[2]` its temporary directory. The test gets an
+/// `Env` with the same capabilities and `args` holding `argv[0]` only, and a
+/// `TestEnv` that lives on this frame. Returns the test's status, or 2 for arguments
+/// the harness did not write: a count other than 3, a non-decimal or out-of-range
+/// index.
+pub fn test_start(env: &Env, tests: []fn(&testing.TestEnv) -> i32) -> i32 {
+    if env.args.len != 3 {
+        return 2;
+    }
+    let index = parse_index(env.args[1]);
+    if index < 0 || index >= tests.len {
+        return 2;
+    }
+    let own = Env.{
+        args: env.args[0..1],
+        vars: env.vars,
+        heap: env.heap,
+        vm: env.vm,
+        fs: env.fs,
+        net: env.net,
+        clock: env.clock,
+        rand: env.rand,
+        stdin: env.stdin,
+        stdout: env.stdout,
+        stderr: env.stderr,
+        gpu: .none,
+    };
+    let clock = testing.ManualClock.init();
+    let t = testing.TestEnv.init(&own, &clock, env.args[2]);
+    let run = tests[index];
+    return run(&t);
 }
 
 fn print_hex_byte(b: u8) -> void {

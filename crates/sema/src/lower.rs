@@ -1626,6 +1626,13 @@ impl<'r, 'a> Lowerer<'r, 'a> {
                         "`@test_env()` is available only inside a `test` or `bench` block",
                         span,
                     );
+                } else if name == "test_env" && !self.closures.is_empty() {
+                    // A closure reaches only what it captures (05 section 32).
+                    self.diag(
+                        "E1706",
+                        "`@test_env()` inside a closure: call it in the test block and capture the result",
+                        span,
+                    );
                 }
                 hir::ExprKind::Builtin {
                     name: name.clone(),

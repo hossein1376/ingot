@@ -38,6 +38,7 @@ fn small_program_has_pinned_ir() {
         checked: front.checked,
         checked_packages: &front.checked_packages,
         target: &analysis.target,
+        test_build: false,
     };
     let ir = ingot_codegen::emit(program).expect("emit IR");
     let expected = dir().join("small.ll");
@@ -71,6 +72,7 @@ fn the_same_program_gives_byte_identical_ir() {
             checked: front.checked,
             checked_packages: &front.checked_packages,
             target: &first.target,
+            test_build: false,
         })
         .expect("emit IR")
     };
@@ -86,6 +88,7 @@ fn the_same_program_gives_byte_identical_ir() {
             checked: front.checked,
             checked_packages: &front.checked_packages,
             target: &second.target,
+            test_build: false,
         })
         .expect("emit IR")
     };

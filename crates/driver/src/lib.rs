@@ -16,3 +16,4 @@ pub mod query;
 pub mod reports;
 pub mod serve;
 pub mod sha256;
+pub mod test_cmd;

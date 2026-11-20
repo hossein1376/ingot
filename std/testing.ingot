@@ -2,7 +2,7 @@
 
 import std.Env;
 
-/// The test harness's environment. Only `std.sys.rt.test_env` builds one.
+/// The test harness's environment. Only `std.sys.rt.test_start` builds one.
 pub struct TestEnv {
     pub env: &Env,
     /// The clock that `env.clock` reads; it moves only when the test steps it.
@@ -14,3 +14,24 @@ pub struct TestEnv {
 
 /// The manual clock of a `TestEnv` (spec time.md §4).
 pub struct ManualClock {}
+
+impl TestEnv {
+    /// Not public API: the constructor `std.sys.rt.test_start` calls (rt.md §1).
+    pub(pkg) fn init(
+        env: &Env,
+        clock: &ManualClock,
+        dir: []u8,
+    ) -> TestEnv from env, clock, dir {
+        return TestEnv.{ env: env, clock: clock, dir: dir, _private: unit() };
+    }
+}
+
+impl ManualClock {
+    /// Not public API: the constructor `std.sys.rt.test_start` calls (rt.md §1).
+    pub(pkg) fn init() -> ManualClock {
+        return ManualClock.{};
+    }
+}
+
+/// The one value of `void`, for the private field of `TestEnv`.
+fn unit() -> void {}

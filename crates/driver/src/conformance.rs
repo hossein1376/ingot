@@ -579,16 +579,41 @@ fn run_program_case(case: &Case, report: &mut Report) -> Result<(), String> {
 }
 
 fn parse_trap_line(line: &str) -> Option<(String, u32, String)> {
+    let trap = parse_trap(line)?;
+    Some((trap.file, trap.line, trap.code))
+}
+
+/// A trap line, `FILE:LINE:COL: trap Tnn: TEXT` (rt.md section 1), taken apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrapLine {
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+    pub code: String,
+    /// Everything after `trap Tnn: `.
+    pub text: String,
+}
+
+/// Parse a trap line, or `None` when `line` is not one.
+pub fn parse_trap(line: &str) -> Option<TrapLine> {
     let at = line.find(": trap ")?;
     let before = &line[..at];
     let after = &line[at + ": trap ".len()..];
-    let code = after.split(':').next()?.trim().to_string();
+    let (code, text) = match after.split_once(':') {
+        Some((code, text)) => (code.trim(), text.strip_prefix(' ').unwrap_or(text)),
+        None => (after.trim(), ""),
+    };
     let mut parts = before.rsplitn(3, ':');
-    let col = parts.next()?;
+    let col = parts.next()?.parse::<u32>().ok()?;
     let line_no = parts.next()?.parse().ok()?;
-    let _col = col.parse::<u32>().ok()?;
     let file = parts.next()?.to_string();
-    Some((file, line_no, code))
+    Some(TrapLine {
+        file,
+        line: line_no,
+        col,
+        code: code.to_string(),
+        text: text.to_string(),
+    })
 }
 
 fn run_expectation(case: &Case) -> Result<(), String> {

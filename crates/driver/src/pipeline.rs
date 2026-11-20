@@ -36,6 +36,10 @@ pub struct Options {
     pub load: LoadOptions,
     /// The roots phase 11a uses (pipeline §6a).
     pub roots: ingot_cfg::instances::Roots,
+    /// With `Roots::Test`: the display path of the one file whose tests are the roots
+    /// (`ingot test FILE`, tools.md §3). `analyze_path_with` fills it when `PATH` is a
+    /// file of a package; `None` selects every test of the root package.
+    pub test_file: Option<String>,
 }
 
 impl Default for Options {
@@ -44,6 +48,7 @@ impl Default for Options {
             target: DEFAULT_TARGET.to_string(),
             load: LoadOptions::default(),
             roots: ingot_cfg::instances::Roots::Check,
+            test_file: None,
         }
     }
 }
@@ -346,7 +351,7 @@ fn analyze_here(graph: LoadedGraph, options: &Options) -> io::Result<Analysis> {
         // checked package's. Type them here and lower every body phase 7 accepted
         // for the back end; reachability picks what is emitted. `ingot check` does
         // not need them.
-        if options.roots == ingot_cfg::instances::Roots::Build
+        if options.roots != ingot_cfg::instances::Roots::Check
             && let Some(std_feed) = std_feed
         {
             let std_checked = ingot_sema::check_bodies(
@@ -445,6 +450,13 @@ fn analyze_here(graph: LoadedGraph, options: &Options) -> io::Result<Analysis> {
                 b.kind,
             ))
         });
+        // `ingot test FILE`: the module of that file, whose tests are the roots.
+        let test_module = options.test_file.as_deref().and_then(|file| {
+            output.sema.modules.iter().find_map(|module| {
+                let source = all.files.get(module.file?)?;
+                (source.path == file).then_some(module.id)
+            })
+        });
         // Phase 11a: instance discovery, depth (E0809) and mangled names. Later
         // per-instance checks run on this set (part 2).
         let discovered = ingot_cfg::instances::discover(
@@ -456,6 +468,7 @@ fn analyze_here(graph: LoadedGraph, options: &Options) -> io::Result<Analysis> {
             &cfgs,
             options.roots,
             graph.root.map(|index| feed_of[&index]),
+            test_module,
         );
         for d in &discovered.diagnostics {
             let duplicate = diagnostics.iter().any(|e| {
@@ -576,11 +589,22 @@ pub fn analyze_path_with(path: &Path, options: &Options) -> io::Result<Analysis>
     } else {
         None
     };
+    let mut scoped;
+    let options = if only.is_some() && options.roots == ingot_cfg::instances::Roots::Test {
+        scoped = options.clone();
+        scoped.test_file = only.clone();
+        &scoped
+    } else {
+        options
+    };
     let mut analysis = analyze_graph_with(graph, options)?;
     analysis.only_file = only.clone();
     // Only that file's source diagnostics: a manifest or command-line diagnostic is
-    // about the whole package and is always printed.
-    if let Some(file) = only {
+    // about the whole package and is always printed. `build` and `test` keep every
+    // diagnostic: an error anywhere in the package stops them (tools.md section 1).
+    if let Some(file) = only
+        && options.roots == ingot_cfg::instances::Roots::Check
+    {
         analysis
             .diagnostics
             .retain(|d| d.file == file || !d.file.ends_with(".ingot"));

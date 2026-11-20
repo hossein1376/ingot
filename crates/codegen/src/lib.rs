@@ -84,6 +84,9 @@ pub struct Program<'a> {
     pub checked_packages: &'a [usize],
     /// The target name, `aarch64-macos-m4` and so on.
     pub target: &'a str,
+    /// `ingot test`: the executable runs the `test` blocks among `instances`, through
+    /// `std.sys.rt.test_start`, instead of `main` (pipeline §8, tools.md §3).
+    pub test_build: bool,
 }
 
 /// What to emit and where.
@@ -232,6 +235,25 @@ fn find_cfg(cfgs: &Cfgs, extra: &[Cfg], key: &InstanceKey) -> Option<Cfg> {
         })
 }
 
+/// The `test` blocks of a test build, in the order of the executable's table: modules
+/// by path, then tests by position in the source (tools.md §3). The driver numbers the
+/// tests it runs with the same list.
+pub fn test_items(sema: &Sema, instances: &[Instance]) -> Vec<DefId> {
+    let mut found: Vec<(String, usize, DefId)> = instances
+        .iter()
+        .filter(|i| i.key.body == InstanceBody::Item)
+        .map(|i| i.key.owner)
+        .filter(|def| matches!(sema.def(*def).kind, DefKind::Test { bench: false }))
+        .map(|def| {
+            let d = sema.def(def);
+            (sema.module(d.module).path.clone(), d.span.start, def)
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found.into_iter().map(|(_, _, def)| def).collect()
+}
+
 fn find_module_item(sema: &Sema, module: &str, name: &str) -> Option<DefId> {
     let id = *sema.module_paths.get(module)?;
     sema.module(id).values.get(name).copied()
@@ -248,6 +270,8 @@ struct Codegen<'p> {
     main_symbol: Option<String>,
     rt_start: DefId,
     rt_trap: DefId,
+    /// `std.sys.rt.test_start`, in a test build.
+    rt_test_start: DefId,
     symbols: BTreeMap<InstanceKey, String>,
     types: BTreeMap<TypeId, TypeInfo>,
     type_defs: Vec<(usize, String)>,
@@ -283,6 +307,7 @@ impl<'p> Codegen<'p> {
             main_symbol: None,
             rt_start: DefId(0),
             rt_trap: DefId(0),
+            rt_test_start: DefId(0),
             symbols: BTreeMap::new(),
             types: BTreeMap::new(),
             type_defs: Vec::new(),
@@ -318,8 +343,16 @@ impl<'p> Codegen<'p> {
             .ok_or_else(|| BuildError::Internal("std.sys.rt.start is missing".to_string()))?;
         self.rt_trap = find_module_item(self.program.sema, "std.sys.rt", "trap")
             .ok_or_else(|| BuildError::Internal("std.sys.rt.trap is missing".to_string()))?;
+        if self.program.test_build {
+            self.rt_test_start = find_module_item(self.program.sema, "std.sys.rt", "test_start")
+                .ok_or_else(|| {
+                    BuildError::Internal("std.sys.rt.test_start is missing".to_string())
+                })?;
+        }
         self.collect_instances()?;
-        self.find_main()?;
+        if !self.program.test_build {
+            self.find_main()?;
+        }
         // Register every type before emitting, so the type section is self-contained.
         let mut bodies: Vec<Body> = self.bodies.values().cloned().collect();
         for body in &bodies {
@@ -330,7 +363,11 @@ impl<'p> Codegen<'p> {
         for body in bodies.drain(..) {
             self.emit_body(&body)?;
         }
-        self.emit_entry()?;
+        if self.program.test_build {
+            self.emit_test_entry()?;
+        } else {
+            self.emit_entry()?;
+        }
         self.emit_process_main()?;
         Ok(())
     }
@@ -381,14 +418,24 @@ impl<'p> Codegen<'p> {
         };
         let mut roots = vec![start, trap];
         // A fallible `main` prints its error through the structural form's helpers
-        // (`show.rs`), which `std.sys.rt` provides.
-        let main_fallible = match self.main_def() {
-            Ok(main) => self
-                .program
-                .decls
-                .fn_sig(main)
-                .is_some_and(|sig| sig.error.is_some()),
-            Err(_) => false,
+        // (`show.rs`), which `std.sys.rt` provides. So does a `try` that leaves a
+        // test; and a test build has no `main`, its entry calls `test_start`.
+        let main_fallible = if self.program.test_build {
+            roots.push(InstanceKey {
+                owner: self.rt_test_start,
+                body: InstanceBody::Item,
+                subst: Subst::new(),
+            });
+            true
+        } else {
+            match self.main_def() {
+                Ok(main) => self
+                    .program
+                    .decls
+                    .fn_sig(main)
+                    .is_some_and(|sig| sig.error.is_some()),
+                Err(_) => false,
+            }
         };
         if main_fallible {
             for name in ["write_bytes", "print_i64", "print_u64", "print_str"] {
@@ -480,7 +527,10 @@ impl<'p> Codegen<'p> {
     /// The signature of a body. A closure has no item signature: its parameters are
     /// the captured-record parameter and the closure's own, from its CFG.
     fn body_sig(&self, key: &InstanceKey, cfg: &Cfg) -> Result<FnSig, BuildError> {
-        if key.body == InstanceBody::Item {
+        // A `test` block has no signature; its CFG says `void`, no error, no parameters.
+        // `emit_body` gives it the `fn(&TestEnv) -> i32` shape (`is_test_body`).
+        let is_test = matches!(self.program.sema.def(key.owner).kind, DefKind::Test { .. });
+        if key.body == InstanceBody::Item && !is_test {
             return self
                 .program
                 .decls
@@ -1473,9 +1523,19 @@ impl<'p> Codegen<'p> {
             self.check_c_abi(&body.sig)?;
         }
         self.subst = body.subst.clone();
-        let ret_abi = self.ret_abi(&body.sig)?;
+        // A `test` block is `fn(&TestEnv) -> i32` (tools.md §3): 0 when it ends
+        // normally, 1 after a `try` printed its error (`emit_test_return`).
+        let (ret_abi, abi_params) = if self.is_test_body(body) {
+            (
+                RetAbi::Plain {
+                    ll: "i32".to_string(),
+                },
+                vec!["ptr".to_string()],
+            )
+        } else {
+            (self.ret_abi(&body.sig)?, self.abi_params(&body.sig)?)
+        };
         let ret_ll = ret_abi.ret_ll();
-        let abi_params = self.abi_params(&body.sig)?;
         let mut generator = FnGen {
             cg: self,
             body,
@@ -1495,6 +1555,15 @@ impl<'p> Codegen<'p> {
         self.subst = Subst::new();
         self.functions.push(text);
         Ok(())
+    }
+
+    /// Whether a body is a `test` block.
+    fn is_test_body(&self, body: &Body) -> bool {
+        body.cfg.key.body == ingot_cfg::BodyKey::Item
+            && matches!(
+                self.program.sema.def(body.cfg.key.owner).kind,
+                DefKind::Test { .. }
+            )
     }
 
     fn fn_ret_ll(&mut self, body: &Body) -> Result<String, BuildError> {
@@ -2075,7 +2144,45 @@ impl<'a, 'p> FnGen<'a, 'p> {
         Ok(())
     }
 
+    /// The end of a `test` block: status 0, or, for the error a `try` carries out of
+    /// the block, the line `error: <structural form>` on standard error (as the test's
+    /// module sees the value) and status 1. The block's defers have already run: phase
+    /// 8 puts them before the `Return`. Each site prints the type of its own value,
+    /// because a `try` in a test accepts any error type (01 section 4.6).
+    fn emit_test_return(
+        &mut self,
+        value: Option<&Operand>,
+        is_error: bool,
+    ) -> Result<(), BuildError> {
+        if !is_error {
+            self.emit("ret i32 0");
+            return Ok(());
+        }
+        let op = value.ok_or_else(|| {
+            BuildError::Internal("a test's error return has no value".to_string())
+        })?;
+        let ty = self.operand_ty(op)?;
+        let ptr = match op {
+            Operand::Place(place, _) => self.place_addr(place)?,
+            Operand::Const(_) => {
+                let (v, ll) = self.value(op)?;
+                let align = self.cg.layout(ty)?.align;
+                let slot = self.alloca(&ll, align);
+                self.emit(format!("store {ll} {v}, ptr {slot}"));
+                slot
+            }
+        };
+        let from = self.cg.program.sema.def(self.body.cfg.key.owner).module;
+        let print = global_ref(&self.cg.error_line_symbol(ty, from));
+        self.emit(format!("call void {print}(ptr {ptr})"));
+        self.emit("ret i32 1");
+        Ok(())
+    }
+
     fn emit_return(&mut self, value: Option<&Operand>, is_error: bool) -> Result<(), BuildError> {
+        if self.cg.is_test_body(self.body) {
+            return self.emit_test_return(value, is_error);
+        }
         let abi = self.ret_abi.clone();
         match abi {
             RetAbi::Plain { ll } => {
@@ -4647,6 +4754,16 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 let op = arg(0)
                     .ok_or_else(|| BuildError::Internal(format!("`@{name}` without a value")))?;
                 self.convert_builtin(name, op, target)
+            }
+            "test_env" => {
+                // The test's one parameter (`render` names it `%arg0`): repeated calls
+                // give the same pointer, and no global holds it (rt.md §1).
+                if !self.cg.is_test_body(self.body) {
+                    return Err(BuildError::Internal(
+                        "`@test_env()` outside a test body".to_string(),
+                    ));
+                }
+                Ok(("%arg0".to_string(), "ptr".to_string()))
             }
             "debug" => self.cg.ni("`@debug` (R5)"),
             other => self.cg.ni(format!("the builtin `@{other}` (B2)")),
@@ -7433,6 +7550,64 @@ impl<'p> Codegen<'p> {
         out.push_str("}\n");
         self.functions.push(out);
         Ok(())
+    }
+
+    /// `_I.entry` of a test build: `rt.test_start(env, tests)`, where `tests` is the
+    /// static table of the test functions in `test_items` order (tools.md §3).
+    fn emit_test_entry(&mut self) -> Result<(), BuildError> {
+        let items = test_items(self.program.sema, self.program.instances);
+        let mut symbols = Vec::new();
+        for def in &items {
+            let key = InstanceKey {
+                owner: *def,
+                body: InstanceBody::Item,
+                subst: Subst::new(),
+            };
+            let symbol = self.symbols.get(&key).ok_or_else(|| {
+                BuildError::Internal("a test has no symbol in a test build".to_string())
+            })?;
+            symbols.push(format!("ptr {}", global_ref(symbol)));
+        }
+        let count = symbols.len();
+        let init = if symbols.is_empty() {
+            "zeroinitializer".to_string()
+        } else {
+            format!("[{}]", symbols.join(", "))
+        };
+        self.globals.push(format!(
+            "@_I.tests = private unnamed_addr constant [{count} x ptr] {init}"
+        ));
+        let key = InstanceKey {
+            owner: self.rt_test_start,
+            body: InstanceBody::Item,
+            subst: Subst::new(),
+        };
+        let test_start = self
+            .symbols
+            .get(&key)
+            .map(|s| global_ref(s))
+            .ok_or_else(|| BuildError::Internal("rt.test_start was not rooted".to_string()))?;
+        let sig = self
+            .program
+            .decls
+            .fn_sig(self.rt_test_start)
+            .cloned()
+            .ok_or_else(|| BuildError::Internal("no signature for rt.test_start".to_string()))?;
+        if self.abi_params(&sig)? != ["ptr", "ptr", "i64"] || self.plain_ret_ll(&sig)? != "i32" {
+            return Err(BuildError::Internal(
+                "rt.test_start is not `fn(&Env, []fn(&TestEnv) -> i32) -> i32`".to_string(),
+            ));
+        }
+        let mut out = String::new();
+        out.push_str("define internal i32 @_I.entry(ptr %env) nounwind #0 {\n");
+        out.push_str("entry:\n");
+        out.push_str(&format!(
+            "  %status = call i32 {test_start}(ptr %env, ptr @_I.tests, i64 {count})\n"
+        ));
+        out.push_str("  ret i32 %status\n");
+        out.push_str("}\n");
+        self.functions.push(out);
+        self.generate_printers()
     }
 
     fn emit_process_main(&mut self) -> Result<(), BuildError> {

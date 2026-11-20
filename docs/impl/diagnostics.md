@@ -343,7 +343,7 @@ Their `file` is `ingot.toml` or the file concerned.
 | E1703 | `dependency_hash_mismatch` | a dependency's content does not match its pinned hash | the hash | — |
 | E1704 | `no_entry_point` | `build` or `run` of a package with no `main.ingot` or no `main` in it | 1:1 of `main.ingot`, or of `ingot.toml` | — |
 | E1705 | `bad_module_name` | a file or directory name that is not a value identifier | 1:1 of the file | — |
-| E1706 | `test_only` | `@test_env()` outside a `test` block | the builtin | — |
+| E1706 | `test_only` | `@test_env()` outside a `test` block, or in a closure inside one | the builtin | — |
 | E1707 | `duplicate_test_name` | two `test` blocks, or two `bench` blocks, with one name in a module | the second (`previous`) | — |
 | E1708 | `conflicting_package` | the dependency graph reaches two different contents under one package name, and the root's `[override]` does not pick one (§33.2) | the second `[deps]` entry (`previous`: the first chain) | — |
 | E1709 | `dependency_lacks_target` | a dependency does not list the target being built (§33.2) | the `[deps]` entry | — |

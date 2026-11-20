@@ -436,6 +436,11 @@ code alone.
   borrows the harness's storage for the block. `rt.test_start(env, tests)` builds the
   `TestEnv` on its frame and calls the selected test. The harness passes the index and
   the temporary directory as arguments and owns the directory.
+* **`@test_env()` in a closure inside a test is E1706** (*user*, 2026-11-19, found in the
+  B3 review; 05 §32). A closure reaches only what its capture list names, and the test
+  environment is the test's parameter, so `let t = @test_env();` and capture `t`.
+  *Rejected:* an implicit capture (the only one in the language). `par for` and `spawn`
+  bodies are lowered to functions too and need the same answer when R2 builds them.
 * **A test process that ends other than by 0, 1 or 101 is `crashed`** (B3,
   2026-11-19; tools.md §3), with its `exit` or `signal`. A fourth status rather than
   folding it into `trapped`, which promises a trap line.

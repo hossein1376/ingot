@@ -351,7 +351,24 @@ fn run(args: &[String]) -> Result<u8, String> {
                 .map_err(|e| format!("could not run {}: {e}", built.artifact.display()))?;
             Ok(process_status(status))
         }
-        "test" => Err(format!("`{command}` is not implemented yet")),
+        "test" => {
+            let filter = flag_value(args, "--filter")?;
+            let seed =
+                match flag_value(args, "--seed")? {
+                    Some(text) => Some(text.parse::<u64>().map_err(|_| {
+                        format!("`--seed` needs a non-negative integer, not `{text}`")
+                    })?),
+                    None => None,
+                };
+            let path = path_arg(args, &["--filter", "--seed"])?;
+            ingot_driver::test_cmd::run(&ingot_driver::test_cmd::Options {
+                path,
+                filter,
+                seed,
+                opt: has_flag(args, "--opt"),
+                json,
+            })
+        }
         "conformance" => {
             let root = args
                 .iter()
@@ -411,15 +428,7 @@ fn process_status(status: std::process::ExitStatus) -> u8 {
 }
 
 fn package_root(path: &std::path::Path) -> PathBuf {
-    if path.is_dir() {
-        return path.to_path_buf();
-    }
-    let files = ingot_driver::files::Files::default();
-    ingot_driver::loader::manifest_dir(path, &files).unwrap_or_else(|| {
-        path.parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf()
-    })
+    build::package_root(path)
 }
 
 fn print_no_entry(analysis: &pipeline::Analysis, json: bool) {

@@ -11,7 +11,7 @@ use crate::model::{
 };
 use ingot_diag::diagnostic::Diagnostic;
 use ingot_diag::source::{Sources, Span};
-use ingot_sema::defs::{DefId, DefKind, Sema};
+use ingot_sema::defs::{DefId, DefKind, ModuleId, Sema};
 use ingot_sema::sigs::{Bound, Declarations, ItemSig};
 use ingot_sema::ty::{ConstArg, ConstValue, GenericArg, Subst, TyKind, TypeId};
 use ingot_sema::typed::{Bodies, ExprRes, FnDynCoercion, FnRef, FnSource, InterfaceVia};
@@ -26,7 +26,9 @@ pub enum Roots {
     Check,
     /// `main` and every `export fn` of the root package.
     Build,
-    /// Every `test` block.
+    /// Every `test` block of the root package (a `bench` block is `ingot bench`'s), or
+    /// of one module of it when `discover` is given `test_module`. Tests of a
+    /// dependency are never roots.
     Test,
 }
 
@@ -94,6 +96,7 @@ pub fn discover(
     cfgs: &Cfgs,
     roots: Roots,
     root: Option<usize>,
+    test_module: Option<ModuleId>,
 ) -> Instances {
     let mut d = Discovery {
         sources,
@@ -103,6 +106,7 @@ pub fn discover(
         packages,
         cfgs,
         root,
+        test_module,
         index: cfgs.iter().map(|(id, cfg)| (cfg.key, id)).collect(),
         depth: BTreeMap::new(),
         parent: BTreeMap::new(),
@@ -132,6 +136,8 @@ struct Discovery<'a> {
     packages: &'a [ingot_sema::hir::Package],
     /// The root package of the build (`Roots::Build`).
     root: Option<usize>,
+    /// `Roots::Test`: only the tests of this module.
+    test_module: Option<ModuleId>,
     index: BTreeMap<crate::model::CfgKey, CfgId>,
     depth: BTreeMap<InstanceKey, usize>,
     /// The use that gave an instance its depth: (parent, span in the parent).
@@ -212,7 +218,13 @@ impl<'a> Discovery<'a> {
                         && (sig.is_some_and(|s| s.mods.export)
                             || (self.sema.def(owner).name == "main" && self.root == Some(package)))
                 }
-                Roots::Test => matches!(kind, DefKind::Test { .. }),
+                Roots::Test => {
+                    let module = self.sema.def(owner).module;
+                    let package = self.sema.module(module).package.0 as usize;
+                    matches!(kind, DefKind::Test { bench: false })
+                        && self.root.is_none_or(|root| root == package)
+                        && self.test_module.is_none_or(|only| only == module)
+                }
             };
             if yes {
                 let key = InstanceKey {

@@ -100,7 +100,8 @@ with interior mutability.
 * `test "name" { ... }` blocks live next to the code. `ingot test` compiles and runs
   them and prints one JSON line per test: name, `ok` or the failure with its span.
 * A test body may use `try`. The test fails on a trap or if an error reaches the end.
-* `@test_env()` is available only inside `test` blocks (E1706). It gives a
+* `@test_env()` is available only inside `test` blocks, and not in a closure there,
+  which reaches only what it captures: capture its result instead (E1706). It gives a
   `&testing.TestEnv`: `env`, a `&Env` whose file system is a fresh temporary directory
   and whose network is loopback only; `clock`, the `&ManualClock` that `env.clock`
   reads, which only advances when the test calls `clock.step(d)`; and `dir`, the

@@ -1,0 +1,13 @@
+//! expect: reject
+//! section: 32
+
+// A closure reaches only what it captures: `@test_env()` is called in the test block
+// and its result captured.
+
+test "the environment in a closure" {
+    let f = fn [](x: i64) -> i64 {
+        let t = @test_env(); //~ E1706
+        return x + t.env.args.len;
+    };
+    @assert(f(1) == 2);
+}

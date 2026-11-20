@@ -164,7 +164,9 @@ fn std_declares_the_types_the_conformance_tests_import() {
 fn std_has_only_capability_constructors_outside_sync() {
     // `sync.ingot` has the first real bodies (`Cell` and `Atomic`, P1b). The
     // capability modules add one `pub(pkg) fn init` each, which `rt.start` uses to
-    // build `Env` (docs/std/env.md); they must not grow another body.
+    // build `Env` (docs/std/env.md); they must not grow another body. `testing.ingot`
+    // (B3) has constructors that take their parts, and a private `unit` that gives the
+    // `void` value of `TestEnv`'s private field; nothing else.
     for file in [
         "main.ingot",
         "mem.ingot",
@@ -192,10 +194,16 @@ fn std_has_only_capability_constructors_outside_sync() {
                 }
             }
         }
+        let allowed = |f: &&ingot_syntax::ast::FnDecl| {
+            if file == "testing.ingot" {
+                (f.name == "init" && f.mods.pkg && !f.mods.public)
+                    || (f.name == "unit" && !f.mods.pkg && !f.mods.public && f.params.is_empty())
+            } else {
+                f.name == "init" && f.mods.pkg && !f.mods.public && f.params.is_empty()
+            }
+        };
         assert!(
-            bodies
-                .iter()
-                .all(|f| f.name == "init" && f.mods.pkg && !f.mods.public && f.params.is_empty()),
+            bodies.iter().all(allowed),
             "{file}: only the pub(pkg) capability constructor may have a body"
         );
     }
