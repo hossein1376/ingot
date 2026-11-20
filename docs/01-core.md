@@ -28,13 +28,16 @@ warnings.
   every other value: `max_len`, never `MAX_LEN`.
 * Built-in type names are keywords: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void
   never`, and the vector types of section 26 (`f32x4`, `u8x16`, `boolx8`, ...).
-* Keywords: `align as bench break catch const continue copy defer dispatch dyn else enum
+* Keywords: `as bench break catch const continue copy defer dispatch dyn else enum
   errdefer export extern fail false fn for from if impl import in inline interface into
   kernel let linear loop match mut noinline orelse pub return scope select spawn
-  static struct test true try type unsafe var waitable when while`. Six more words
-  (`par`, `step`, `over`, `on`, `reduce`, `grain`) are keywords only in one position
-  each and are ordinary identifiers elsewhere: `par` only where it begins a parallel
-  loop (`par for`, `par(grain: n) for`, section 19), so `exec.par` is an ordinary name.
+  static struct test true try type unsafe var waitable when while`. Seven more words
+  (`par`, `step`, `over`, `on`, `reduce`, `grain`, `align`) are keywords only in one
+  position each and are ordinary identifiers elsewhere: `par` only where it begins a
+  parallel loop (`par for`, `par(grain: n) for`, section 19), so `exec.par` is an
+  ordinary name; `align` only where `align(n)` follows the name and generic parameters
+  of a struct, or the type of a field or a `static`, so `size, align` is an ordinary
+  pair of parameters.
 * Builtins are spelled `@name`. They are in their own namespace and are part of the
   language, not the library.
 * Comments: `//` to end of line. `///` before a declaration is a doc comment and is

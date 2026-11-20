@@ -71,7 +71,11 @@ fn first_line(fs: &Fs, path: []u8, out: []mut u8) -> i64 ! IoErr {
   old value) or an `?T` field with `.take()`.
 * A `var` that was moved from can be assigned again and is then usable.
 * Assigning to a place that still holds a linear value is an error, because the old
-  value would be lost. Take it out first with `@replace`.
+  value would be lost. Take it out first with `@replace`. An assignment through a raw
+  pointer (`p.* = v`, in `unsafe`) is not checked: allocator memory is not a place
+  (section 15), the compiler cannot know what it holds, and storing into it is how a
+  container puts a value into fresh memory. Overwriting a live linear value there only
+  leaks it, which is safe; not doing so is the `unsafe` block's duty.
 * A variable moved in one branch and not the other is moved after the join. For a linear
   value that is an error (E1003, at its declaration), because one path would leak it.
 * A temporary, a value that is used without being bound, lives until the end of the

@@ -105,6 +105,16 @@ impl Vm {
 `Heap` is `Copy`, `Send`, `Sync`, `Owned` and `Discard`. `Vm` is the same. `Vm` is not
 an `Allocator`: it reserves address space and does not hand out typed storage.
 
+`Heap` is the system allocator (D8): on macOS libSystem's `malloc`, `posix_memalign`
+for an alignment above 16, and `free`; glibc's on Linux; `HeapAlloc` on Windows. A
+request of size 0 gives the pointer `align` itself (non-null, aligned, never
+dereferenced) and its `free` does nothing. `resize` asks nothing of the system: it
+returns `true` when the block's usable size (`malloc_size` on macOS,
+`malloc_usable_size` on Linux) already covers `new`, and `false` otherwise, so a
+container then allocates and copies. `Vm` uses `mmap` with `PROT_NONE` to reserve,
+`mprotect` to commit and `madvise(MADV_FREE)` with `PROT_NONE` to decommit, and the
+`VirtualAlloc` family on Windows.
+
 ## 4. `Arena`
 
 ```ingot
@@ -141,6 +151,10 @@ impl Arena {
 }
 
 impl Allocator for &Arena { ... }
+
+/// The base pointer is raw, so `Send` is not derived (02-memory §15); one task at a
+/// time owns the reservation, so it may move between tasks.
+unsafe impl Send for Arena {}
 ```
 
 `Arena` is `linear`, `Send`, `Owned`, not `Sync`, not `Copy`, not `Discard`. The
@@ -207,6 +221,11 @@ impl[T, A: Allocator] Box[T, A] {
 impl[T: Discard, A: Allocator] Box[T, A] {
     pub fn deinit(self: Box[T, A]) -> void
 }
+
+/// The value is behind a raw pointer, so neither property is derived; the box owns it
+/// as a field would.
+unsafe impl[T: Send, A: Allocator + Send] Send for Box[T, A] {}
+unsafe impl[T: Sync, A: Allocator + Sync] Sync for Box[T, A] {}
 ```
 
 `Box` is `linear` even when `T` is `Copy`, because it owns the allocation. It is
@@ -330,11 +349,14 @@ exclusive destination slice and a shared source slice of the same place.
 | `Pool[T, A]` | no | no | yes | if `T`, `A: Owned` | if `T`, `A: Send` | if `T`, `A: Sync` |
 
 `Arena` and `FixedBuf` are `Send` and not `Sync`; `&Arena` and `&FixedBuf` are neither.
+A raw pointer is neither `Send` nor `Sync`, so a type that holds its storage behind
+one (`Arena`, `Box`, and `List` in list.md) states the rows of this table with
+`unsafe impl` in its own module; the other types derive theirs.
 `Arc`'s contents are `Owned`: shared ownership of a borrow cannot outlive the borrow.
 
 ## 11. What is `unsafe` inside
 
-- `Heap.alloc/free/resize` call the OS memory layer.
+- `Heap.alloc/free/resize` call the system allocator through `std.sys`.
 - `Vm.reserve/release/commit/decommit` call `mmap`/`VirtualAlloc` and friends.
 - `Arena` and `FixedBuf` advance a bump pointer through `Cell` and create
   `&mut T`/`[]mut T` from raw memory with `@borrow_from_raw` and `@slice_from_raw`.
@@ -367,6 +389,11 @@ All six are decided. The recommendation was accepted in each case.
   `generation: u32`; a slot whose generation is used up is retired.
 - **D7. Zero-size requests.** **Decided (review 2).** Size 0 is valid and gives a
   non-null aligned pointer that is never dereferenced.
+- **D8. What `Heap` is built on.** **Decided (*user*, 2026-11-19, R1): the system
+  allocator** (§3). Small to write and fast; an allocator written in Ingot over `Vm`
+  can replace it later behind the same interface. *Rejected for now:* a size-class
+  allocator over `Vm` pages (no libc dependency for memory, the same behavior on every
+  target, but several times the work, and it must be thread-safe before R3).
 
 ## Language questions
 

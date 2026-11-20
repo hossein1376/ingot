@@ -245,7 +245,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 | E1001 | `use_after_move` | a place is read, borrowed or moved while it is moved or maybe moved | the use (`move`, and `loop` if the move is in an earlier iteration) | — |
 | E1002 | `move_out_of_borrow` | a non-`Copy` value is moved out of `r.*`, an array or slice element, or a `static` | the expression | — (the message names `@replace`, `@swap` and `.take()`) |
 | E1003 | `linear_not_consumed` | a linear value is still owned at an exit of its scope on some path, or a linear temporary is not consumed by the end of its statement. In a generic body, a `T` without `Discard` counts as linear | the binding at its declaration, or the expression that made the temporary (`scope_end`: each exit that leaks it) | if the type has exactly one consuming function with no other parameters and no error type, insert `defer { x.f(); }` after the declaration; otherwise the message lists the candidates. In a generic body, add the bound `Discard` instead, if the value is a `T` |
-| E1004 | `linear_overwritten` | assignment to a place that holds a linear value | the assignment | — |
+| E1004 | `linear_overwritten` | assignment to a place that holds a linear value, other than through a raw pointer | the assignment | — |
 | E1005 | `moved_but_deferred` | a value that a pending deferred block consumes or uses is moved before the block runs | the move (`defer`) | — |
 | E1006 | `partial_move_of_linear` | a field is moved out of a linear struct without destructuring the whole, outside its module | the expression | — |
 

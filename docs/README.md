@@ -21,7 +21,7 @@ changed since the first draft.
 | [later.md](later.md) | Features deliberately left for after v1: why each waits and what would bring it forward |
 | [research.md](research.md) | Sourced facts about the hardware and the platform ABIs, and what is still unsourced |
 | [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms, the tool protocol, and the decision record ([impl/decisions.md](impl/decisions.md)) |
-| [std/](std/plan.md) | Standard library design drafts (`rt`, `sched`, `task`, `sync`, `mem`, `env`, `time`) and the plan for the rest; not normative until a module is accepted |
+| [std/](std/plan.md) | Standard library design drafts (`rt`, `sched`, `task`, `sync`, `mem`, `list`, `str`, `env`, `time`) and the plan for the rest; not normative until a module is accepted |
 | [../conformance/](../conformance/README.md) | Programs with an expected outcome, which every implementation must pass |
 
 Sections are numbered once across files 01 to 05, so "section 13" means the same thing

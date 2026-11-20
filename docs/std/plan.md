@@ -1,7 +1,8 @@
 # The rest of `std`: plan and design order
 
 The base documents beside this file cover `rt` (with `sched.md` for the scheduler),
-`task`, `sync`, `mem` and `Env`.
+`task`, `sync`, `mem` and `Env`, and `list.md` and `str.md` the first containers
+(step R1).
 `time.md` is the first module from the remaining list and is now designed; this file
 lists the rest of section 35, what each needs from that base, and the order I recommend
 designing them. It does not repeat their APIs.

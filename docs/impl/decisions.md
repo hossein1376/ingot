@@ -441,6 +441,19 @@ code alone.
   environment is the test's parameter, so `let t = @test_env();` and capture `t`.
   *Rejected:* an implicit capture (the only one in the language). `par for` and `spawn`
   bodies are lowered to functions too and need the same answer when R2 builds them.
+* **An assignment through a raw pointer is not E1004** (*user*, 2026-11-19, found
+  planning R1; 02 §10). `p.* = v` in `unsafe` is how a container stores a value into
+  fresh memory; allocator memory is not a place, so the checker cannot know what it
+  holds, and overwriting a live linear value there only leaks it, which is safe.
+  *Rejected:* a separate `@write(p, v)` builtin (one more builtin for what the
+  assignment already says inside `unsafe`). Moving out with `p.*` was already accepted.
+* **`align` is a contextual keyword** (*user*, 2026-11-19, found planning R1; 01 §1),
+  like `par` and `grain`: a keyword only where `align(n)` follows a struct header or
+  the type of a field or `static`. The parser already accepted it as a parameter name,
+  and `size, align` is the allocator vocabulary. *Rejected:* reserving it everywhere
+  and renaming `Allocator`'s parameters to `alignment`.
+* **`Heap` is the system allocator** (*user*, 2026-11-19, R1; mem.md D8). *Rejected
+  for now:* a size-class allocator written in Ingot over `Vm`.
 * **A file with no manifest is a package named after its stem, made an identifier**
   (*user*, 2026-11-19, found in the B3 review; tools.md §1). Normalized as Cargo does for
   crate names, plus lowering (a capitalized name is a type) and a `_` after a keyword:
