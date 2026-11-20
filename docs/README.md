@@ -18,6 +18,7 @@ changed since the first draft.
 | [05-tooling.md](05-tooling.md) | Diagnostics, cost reports, tests, packages, formatter, standard library outline |
 | [grammar.md](grammar.md) | The complete EBNF |
 | [rationale.md](rationale.md) | Why each major decision of the first draft went the way it did, and what was rejected. Later decisions: [impl/decisions.md](impl/decisions.md) |
+| [later.md](later.md) | Features deliberately left for after v1: why each waits and what would bring it forward |
 | [research.md](research.md) | Sourced facts about the hardware and the platform ABIs, and what is still unsourced |
 | [impl/](impl/README.md) | For implementers: glossary, the diagnostic and trap catalog, compiler pipeline constraints, the ownership checker as algorithms, the tool protocol, and the decision record ([impl/decisions.md](impl/decisions.md)) |
 | [std/](std/plan.md) | Standard library design drafts (`rt`, `sched`, `task`, `sync`, `mem`, `env`, `time`) and the plan for the rest; not normative until a module is accepted |

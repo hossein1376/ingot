@@ -86,6 +86,5 @@ Post-link layout optimization only if a measured program shows the need.
 A formatter specification. (The Tree-sitter grammar and the Language Server adapter
 over `ingot serve` exist: see [editors/](editors/README.md) and [LSP.md](LSP.md).)
 
-The deferred list in section 12 of the rationale: a struct-of-arrays container,
-contracts, static borrow types, named origin parameters on structs, SME streaming
-regions, GPU textures and multi-pass pipelines. Self-hosting the compiler.
+Features deferred past v1, with why each waits: [docs/later.md](docs/later.md).
+Self-hosting the compiler.

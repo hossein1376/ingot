@@ -242,19 +242,8 @@ Macros and compile-time code generation. Reflection. Inheritance. Exceptions.
 state. Separately compiled libraries and a stable ABI between Ingot packages. Run-time
 CPU feature detection. Any CPU or operating system beyond the three targets.
 
-**Deferred, not rejected:** a built-in struct-of-arrays container; `requires`/`ensures`
-contracts on signatures; `f16`, `i128`; a borrow type that is known to be static and so
-is not a view; named origin parameters on structs; streaming-mode (SME) regions; GPU
-textures and multi-pass pipelines; a `packed struct` with bit fields; profiling with a
-report for the author, then profile-guided optimization; post-link layout optimization;
-grid kernels (`Idx2`, `Idx3`, `Grid`); a compiler-provided structural `Eq`, `Ord` and
-`Hash` for a plain struct, on request, if writing `std` shows the need, rather than a
-general derive mechanism; `@config.name` values from `ingot.toml` for `when`, which
-cannot name a constant; a C-callable static library as a second build output (its
-roots are the `export fn`s, and foreign threads enter through `task.run`; it needs a
-decision on who starts the runtime and a generated header); dev-dependencies, until a
-package is hurt by the lack; conversions between raw pointers and `extern fn` pointers,
-for `dlsym` and GPU function tables, with the GPU step.
+**Deferred, not rejected:** tracked in [later.md](later.md), with why each waits and
+what would bring it forward.
 
 ## 13. Where this design is most likely to be wrong
 
