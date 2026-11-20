@@ -626,7 +626,8 @@ fn a_file_with_no_manifest_is_a_package_of_its_own() {
         assert_eq!(text(ok, "status"), "ok");
         // Paths are bare file names.
         assert_eq!(text(ok.get("span").unwrap(), "file"), "solo.ingot");
-        assert!(!text(ok, "module").is_empty());
+        // The package is named after the file's stem (tools.md section 1).
+        assert_eq!(text(ok, "module"), "solo");
         let failed = by_name(&run, "solo fails");
         assert_eq!(text(failed, "status"), "trapped");
         assert_eq!(

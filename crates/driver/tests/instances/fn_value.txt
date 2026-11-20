@@ -1,7 +1,7 @@
-3	_I1:t1:t18:t.make.{closure 5}3:i64
-3	_I1:t1:t18:t.make.{closure 5}4:bool
-0	_I1:t1:t5:t.run
-1	_I1:t1:t6:t.make3:i64
-1	_I1:t1:t6:t.make4:bool
-2	_I1:t1:t7:t.apply19:c[t.make][5][[i64]]
-2	_I1:t1:t7:t.apply20:c[t.make][5][[bool]]
+0	_I8:fn_value8:fn_value12:fn_value.run
+1	_I8:fn_value8:fn_value13:fn_value.make3:i64
+1	_I8:fn_value8:fn_value13:fn_value.make4:bool
+2	_I8:fn_value8:fn_value14:fn_value.apply26:c[fn_value.make][5][[i64]]
+2	_I8:fn_value8:fn_value14:fn_value.apply27:c[fn_value.make][5][[bool]]
+3	_I8:fn_value8:fn_value25:fn_value.make.{closure 5}3:i64
+3	_I8:fn_value8:fn_value25:fn_value.make.{closure 5}4:bool

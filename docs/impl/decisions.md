@@ -441,6 +441,12 @@ code alone.
   environment is the test's parameter, so `let t = @test_env();` and capture `t`.
   *Rejected:* an implicit capture (the only one in the language). `par for` and `spawn`
   bodies are lowered to functions too and need the same answer when R2 builds them.
+* **A file with no manifest is a package named after its stem, made an identifier**
+  (*user*, 2026-11-19, found in the B3 review; tools.md §1). Normalized as Cargo does for
+  crate names, plus lowering (a capitalized name is a type) and a `_` after a keyword:
+  `my-tool` → `my_tool`, `parse.fixed` → `parse_fixed`, `test` → `test_`. The loader had
+  named every such package `t`. *Rejected:* E1705 for a stem that is not a name (`ingot
+  run my-tool.ingot` would fail), and a fixed fallback name.
 * **A test process that ends other than by 0, 1 or 101 is `crashed`** (B3,
   2026-11-19; tools.md §3), with its `exit` or `signal`. A fourth status rather than
   folding it into `trapped`, which promises a trap line.

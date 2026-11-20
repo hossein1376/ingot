@@ -32,7 +32,11 @@ Section 33 of the specification lists the commands. This file fixes their output
   relative to the package root. `build` and `test`, which an error anywhere in the
   package stops, print every diagnostic of the package. A file with no manifest above it is a package of its
   own: its name is the file's stem, its root is the directory containing it, it holds
-  that one module, and it depends only on `std`. Its paths are bare file names.
+  that one module, and it depends only on `std`. Its paths are bare file names. A stem
+  that is not a value identifier is made one: uppercase ASCII is lowered, every other
+  character that cannot be in an identifier becomes `_`, a leading digit gets a `_`
+  before it, and a keyword or type name gets a `_` after it (`my-tool.ingot` is
+  `my_tool`, `test.ingot` is `test_`).
 * **Positions** are objects `{"line":L,"col":C,"offset":O}`: line and column are
   1-based, the column counts bytes, and `offset` is the 0-based byte offset in the file.
   A **span** is `{"file":F,"start":P,"end":P}`, half-open. Offsets are there so that an

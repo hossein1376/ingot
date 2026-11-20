@@ -1,5 +1,5 @@
-1	_I1:t1:t4:t.fp19:f[c][1][u8][i64][n]
-1	_I1:t1:t4:t.fp20:f[c][1][i64][i64][n]
-0	_I1:t1:t4:t.h1
-0	_I1:t1:t4:t.h2
-0	_I1:t1:t5:t.run
+1	_I16:fn_value_generic16:fn_value_generic19:fn_value_generic.fp19:f[c][1][u8][i64][n]
+1	_I16:fn_value_generic16:fn_value_generic19:fn_value_generic.fp20:f[c][1][i64][i64][n]
+0	_I16:fn_value_generic16:fn_value_generic19:fn_value_generic.h1
+0	_I16:fn_value_generic16:fn_value_generic19:fn_value_generic.h2
+0	_I16:fn_value_generic16:fn_value_generic20:fn_value_generic.run

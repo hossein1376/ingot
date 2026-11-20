@@ -316,7 +316,39 @@ pub fn load_graph(path: &Path, options: LoadOptions) -> std::io::Result<LoadedGr
     Ok(loader.graph)
 }
 
-/// A single file with no manifest above it: its own package named `t`.
+/// The package name of a file with no manifest (tools.md section 1): its stem, made a
+/// value identifier. Uppercase ASCII is lowered, every other character that cannot be
+/// in an identifier becomes `_`, a leading digit gets a `_` before it, and a name that
+/// is still not one (a keyword, a scalar type) gets `_` after it: `my-tool` is
+/// `my_tool`, `parse.fixed` is `parse_fixed`, `2d` is `_2d`, `test` is `test_`.
+pub fn single_file_package_name(path: &Path) -> String {
+    let stem = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = stem.strip_suffix(".ingot").unwrap_or(&stem);
+    let mut name: String = stem
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '_') => c,
+            _ => '_',
+        })
+        .collect();
+    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+        name.insert(0, '_');
+    }
+    // A keyword, a scalar or vector type name, or a lone `_`: one `_` more makes it
+    // an ordinary identifier; the loop is a guard, not an expected path.
+    for _ in 0..4 {
+        if is_value_identifier(&name) {
+            break;
+        }
+        name.push('_');
+    }
+    name
+}
+
+/// A single file with no manifest above it: its own package, named after its stem.
 fn load_single_file(path: &Path, files: &Files) -> std::io::Result<LoadedGraph> {
     let text = files.read_to_string(path)?;
     let display = path
@@ -327,7 +359,7 @@ fn load_single_file(path: &Path, files: &Files) -> std::io::Result<LoadedGraph> 
     let mut sources = Sources::default();
     sources.add(source);
     let package = LoadedPackage {
-        package_name: "t".to_string(),
+        package_name: single_file_package_name(path),
         root: path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -351,7 +383,7 @@ fn load_single_file(path: &Path, files: &Files) -> std::io::Result<LoadedGraph> 
         checked: vec![0],
         order: vec![0],
         deps: vec![Vec::new()],
-        chains: vec![vec!["t".to_string()]],
+        chains: vec![vec![single_file_package_name(path)]],
         entries: vec![None],
         entry_files: vec![None],
         overridden: vec![false],

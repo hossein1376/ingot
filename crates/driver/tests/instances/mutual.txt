@@ -1,3 +1,3 @@
-1	_I1:t1:t3:t.f3:i64
-2	_I1:t1:t3:t.g3:i64
-0	_I1:t1:t5:t.run
+0	_I6:mutual6:mutual10:mutual.run
+1	_I6:mutual6:mutual8:mutual.f3:i64
+2	_I6:mutual6:mutual8:mutual.g3:i64

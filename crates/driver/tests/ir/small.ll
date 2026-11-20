@@ -1,74 +1,74 @@
 ; Ingot back end
 target triple = "arm64-apple-macosx14.0.0"
 
-%t0 = type { i64, i64, [0 x i64] }
-%t1 = type [2 x i64]
-%t2 = type { ptr, i64 }
-%t3 = type { i8, [7 x i8], [0 x i64], [8 x i8] }
-%t4 = type [1 x i8]
-%t5 = type { ptr, i64 }
-%t6 = type { i8, [0 x i8] }
-%t7 = type { ptr, i64 }
+%t0 = type [1 x i8]
+%t1 = type { ptr, i64 }
+%t2 = type { i8, [0 x i8] }
+%t3 = type { ptr, i64 }
+%t4 = type {}
+%t5 = type {}
+%t6 = type {}
+%t7 = type {}
 %t8 = type {}
 %t9 = type {}
 %t10 = type {}
 %t11 = type {}
 %t12 = type {}
-%t13 = type {}
-%t14 = type {}
-%t15 = type {}
-%t16 = type {}
-%t17 = type { i8, [0 x i8] }
-%t18 = type { %t7, ptr, %t9, %t10, ptr, ptr, ptr, ptr, ptr, ptr, ptr, %t17, [7 x i8], [0 x i64] }
-%t19 = type { %t6, [7 x i8], %t5, i32, i32, %t5, [0 x i64] }
+%t13 = type { i8, [0 x i8] }
+%t14 = type { %t3, ptr, %t5, %t6, ptr, ptr, ptr, ptr, ptr, ptr, ptr, %t13, [7 x i8], [0 x i64] }
+%t15 = type { %t2, [7 x i8], %t1, i32, i32, %t1, [0 x i64] }
+%t16 = type { i64, i64, [0 x i64] }
+%t17 = type [2 x i64]
+%t18 = type { ptr, i64 }
+%t19 = type { i8, [7 x i8], [0 x i64], [8 x i8] }
 
-@str.0 = private unnamed_addr constant [11 x i8] c"small.ingot"
-@str.1 = private unnamed_addr constant [21 x i8] c"integer overflow in +"
-@str.2 = private unnamed_addr constant [32 x i8] c"assertion failed: p.a + p.b == 3"
-@str.3 = private unnamed_addr constant [30 x i8] c"assertion failed: p.sum() == 3"
-@str.4 = private unnamed_addr constant [40 x i8] c"assertion failed: pick(&a[0..2], 1) == 4"
-@str.5 = private unnamed_addr constant [27 x i8] c"assertion failed: z[0] == 0"
-@str.6 = private unnamed_addr constant [24 x i8] c"assertion failed: v == 3"
-@str.7 = private unnamed_addr constant [23 x i8] c"assertion failed: false"
-@str.8 = private unnamed_addr constant [34 x i8] c"index \01 out of bounds for length \02"
-@str.9 = private unnamed_addr constant [7 x i8] c": trap "
-@str.10 = private unnamed_addr constant [2 x i8] c": "
-@str.11 = private unnamed_addr constant [16 x i8] c"std/sys/rt.ingot"
-@str.12 = private unnamed_addr constant [24 x i8] c"entered unreachable code"
-@str.13 = private unnamed_addr constant [3 x i8] c"T01"
-@str.14 = private unnamed_addr constant [3 x i8] c"T02"
-@str.15 = private unnamed_addr constant [3 x i8] c"T03"
-@str.16 = private unnamed_addr constant [3 x i8] c"T04"
-@str.17 = private unnamed_addr constant [3 x i8] c"T05"
-@str.18 = private unnamed_addr constant [3 x i8] c"T06"
-@str.19 = private unnamed_addr constant [3 x i8] c"T07"
-@str.20 = private unnamed_addr constant [3 x i8] c"T08"
-@str.21 = private unnamed_addr constant [3 x i8] c"T09"
-@str.22 = private unnamed_addr constant [3 x i8] c"T10"
-@str.23 = private unnamed_addr constant [3 x i8] c"T11"
-@str.24 = private unnamed_addr constant [3 x i8] c"T12"
-@str.25 = private unnamed_addr constant [3 x i8] c"T13"
-@str.26 = private unnamed_addr constant [3 x i8] c"T14"
-@str.27 = private unnamed_addr constant [3 x i8] c"T15"
-@str.28 = private unnamed_addr constant [3 x i8] c"T16"
-@str.29 = private unnamed_addr constant [3 x i8] c"T17"
-@str.30 = private unnamed_addr constant [21 x i8] c"integer overflow in *"
-@str.31 = private unnamed_addr constant [9 x i8] c"<runtime>"
-@str.32 = private unnamed_addr constant [20 x i8] c"no memory for a task"
-@site.0 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 10, i32 16, { ptr, i64 } { ptr @str.1, i64 21 } }
-@site.1 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 31, i32 13, { ptr, i64 } { ptr @str.1, i64 21 } }
-@site.2 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 31, i32 5, { ptr, i64 } { ptr @str.2, i64 32 } }
-@site.3 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 32, i32 5, { ptr, i64 } { ptr @str.3, i64 30 } }
-@site.4 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 34, i32 5, { ptr, i64 } { ptr @str.4, i64 40 } }
-@site.5 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 36, i32 5, { ptr, i64 } { ptr @str.5, i64 27 } }
-@site.6 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 40, i32 13, { ptr, i64 } { ptr @str.6, i64 24 } }
-@site.7 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 43, i32 13, { ptr, i64 } { ptr @str.7, i64 23 } }
-@site.8 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 0, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.0, i64 11 }, i32 19, i32 12, { ptr, i64 } { ptr @str.8, i64 34 } }
-@site.9 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 9, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.11, i64 16 }, i32 202, i32 5, { ptr, i64 } { ptr @str.12, i64 24 } }
-@site.10 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.11, i64 16 }, i32 199, i32 13, { ptr, i64 } { ptr @str.1, i64 21 } }
-@site.11 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.11, i64 16 }, i32 79, i32 10, { ptr, i64 } { ptr @str.1, i64 21 } }
-@site.12 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.11, i64 16 }, i32 223, i32 21, { ptr, i64 } { ptr @str.30, i64 21 } }
-@site.13 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.11, i64 16 }, i32 250, i32 13, { ptr, i64 } { ptr @str.1, i64 21 } }
+@str.0 = private unnamed_addr constant [7 x i8] c": trap "
+@str.1 = private unnamed_addr constant [2 x i8] c": "
+@str.2 = private unnamed_addr constant [16 x i8] c"std/sys/rt.ingot"
+@str.3 = private unnamed_addr constant [24 x i8] c"entered unreachable code"
+@str.4 = private unnamed_addr constant [21 x i8] c"integer overflow in +"
+@str.5 = private unnamed_addr constant [3 x i8] c"T01"
+@str.6 = private unnamed_addr constant [3 x i8] c"T02"
+@str.7 = private unnamed_addr constant [3 x i8] c"T03"
+@str.8 = private unnamed_addr constant [3 x i8] c"T04"
+@str.9 = private unnamed_addr constant [3 x i8] c"T05"
+@str.10 = private unnamed_addr constant [3 x i8] c"T06"
+@str.11 = private unnamed_addr constant [3 x i8] c"T07"
+@str.12 = private unnamed_addr constant [3 x i8] c"T08"
+@str.13 = private unnamed_addr constant [3 x i8] c"T09"
+@str.14 = private unnamed_addr constant [3 x i8] c"T10"
+@str.15 = private unnamed_addr constant [3 x i8] c"T11"
+@str.16 = private unnamed_addr constant [3 x i8] c"T12"
+@str.17 = private unnamed_addr constant [3 x i8] c"T13"
+@str.18 = private unnamed_addr constant [3 x i8] c"T14"
+@str.19 = private unnamed_addr constant [3 x i8] c"T15"
+@str.20 = private unnamed_addr constant [3 x i8] c"T16"
+@str.21 = private unnamed_addr constant [3 x i8] c"T17"
+@str.22 = private unnamed_addr constant [21 x i8] c"integer overflow in *"
+@str.23 = private unnamed_addr constant [9 x i8] c"<runtime>"
+@str.24 = private unnamed_addr constant [20 x i8] c"no memory for a task"
+@str.25 = private unnamed_addr constant [11 x i8] c"small.ingot"
+@str.26 = private unnamed_addr constant [32 x i8] c"assertion failed: p.a + p.b == 3"
+@str.27 = private unnamed_addr constant [30 x i8] c"assertion failed: p.sum() == 3"
+@str.28 = private unnamed_addr constant [40 x i8] c"assertion failed: pick(&a[0..2], 1) == 4"
+@str.29 = private unnamed_addr constant [27 x i8] c"assertion failed: z[0] == 0"
+@str.30 = private unnamed_addr constant [24 x i8] c"assertion failed: v == 3"
+@str.31 = private unnamed_addr constant [23 x i8] c"assertion failed: false"
+@str.32 = private unnamed_addr constant [34 x i8] c"index \01 out of bounds for length \02"
+@site.0 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 9, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 202, i32 5, { ptr, i64 } { ptr @str.3, i64 24 } }
+@site.1 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 199, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.2 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 79, i32 10, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.3 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 223, i32 21, { ptr, i64 } { ptr @str.22, i64 21 } }
+@site.4 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 250, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.5 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 31, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.6 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 31, i32 5, { ptr, i64 } { ptr @str.26, i64 32 } }
+@site.7 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 32, i32 5, { ptr, i64 } { ptr @str.27, i64 30 } }
+@site.8 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 34, i32 5, { ptr, i64 } { ptr @str.28, i64 40 } }
+@site.9 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 36, i32 5, { ptr, i64 } { ptr @str.29, i64 27 } }
+@site.10 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 40, i32 13, { ptr, i64 } { ptr @str.30, i64 24 } }
+@site.11 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 43, i32 13, { ptr, i64 } { ptr @str.31, i64 23 } }
+@site.12 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 0, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 19, i32 12, { ptr, i64 } { ptr @str.32, i64 34 } }
+@site.13 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 10, i32 16, { ptr, i64 } { ptr @str.4, i64 21 } }
 
 declare void @exit(i32) noreturn nounwind
 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) nounwind readnone
@@ -77,402 +77,38 @@ declare { i8, i1 } @llvm.uadd.with.overflow.i8(i8, i8) nounwind readnone
 declare ptr @mmap(ptr, i64, i32, i32, i32, i64) nounwind
 declare i64 @write(i32, ptr, i64) nounwind
 
-define internal i64 @"_I1:t1:t12:t.Pair[].sum8:t.Pair[]"(ptr %arg0) nounwind #0 {
-bb0:
-  %l0 = alloca ptr, align 8
-  %l1 = alloca i64, align 8
-  %l2 = alloca i64, align 8
-  %l3 = alloca i64, align 8
-  %l4 = alloca i64, align 8
-  store ptr %arg0, ptr %l0
-  %tmp0 = load ptr, ptr %l0
-  %tmp1 = getelementptr i8, ptr %tmp0, i64 0
-  %tmp2 = load i64, ptr %tmp1
-  store i64 %tmp2, ptr %l1
-  %tmp3 = load ptr, ptr %l0
-  %tmp4 = getelementptr i8, ptr %tmp3, i64 8
-  %tmp5 = load i64, ptr %tmp4
-  store i64 %tmp5, ptr %l2
-  %tmp6 = load i64, ptr %l1
-  %tmp7 = load i64, ptr %l2
-  %tmp8 = add i64 %tmp6, %tmp7
-  store i64 %tmp8, ptr %l3
-  %tmp9 = load i64, ptr %l1
-  %tmp10 = load i64, ptr %l2
-  %tmp11 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %tmp9, i64 %tmp10)
-  %tmp12 = extractvalue { i64, i1 } %tmp11, 1
-  br i1 %tmp12, label %trap0, label %cont1
-cont1:
-  %tmp13 = load i64, ptr %l3
-  store i64 %tmp13, ptr %l4
-  %tmp14 = load i64, ptr %l4
-  ret i64 %tmp14
-trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.0, i64 0, i64 0, i64 0)
-  unreachable
-}
-
-define internal i8 @"_I1:t1:t6:t.main"(ptr %arg0) nounwind #0 {
-bb0:
-  %tmp0 = alloca %t0, align 8
-  %tmp28 = alloca %t1, align 8
-  %tmp56 = alloca [8 x i8], align 8
-  %l0 = alloca ptr, align 8
-  %l1 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l1
-  %l2 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l2
-  %l3 = alloca i64, align 8
-  %l4 = alloca i64, align 8
-  %l5 = alloca i64, align 8
-  %l6 = alloca i64, align 8
-  %l7 = alloca i1, align 1
-  %l8 = alloca i1, align 1
-  %l9 = alloca ptr, align 8
-  %l10 = alloca i64, align 8
-  %l11 = alloca i64, align 8
-  %l12 = alloca i1, align 1
-  %l13 = alloca i1, align 1
-  %l14 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l14
-  %l15 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l15
-  %l16 = alloca %t2, align 8
-  %l17 = alloca i64, align 8
-  %l18 = alloca i64, align 8
-  %l19 = alloca i1, align 1
-  %l20 = alloca i1, align 1
-  %l21 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l21
-  %l22 = alloca i64, align 8
-  %l23 = alloca i1, align 1
-  %l24 = alloca i1, align 1
-  %l25 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l25
-  %l26 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l26
-  %l27 = alloca i8, align 1
-  %l28 = alloca i1, align 1
-  %l29 = alloca i64, align 8
-  %l30 = alloca i64, align 8
-  %l31 = alloca i1, align 1
-  %l32 = alloca i1, align 1
-  %l33 = alloca i8, align 1
-  %l34 = alloca i1, align 1
-  store ptr %arg0, ptr %l0
-  store %t0 zeroinitializer, ptr %tmp0
-  %tmp1 = getelementptr i8, ptr %tmp0, i64 0
-  store i64 1, ptr %tmp1
-  %tmp2 = getelementptr i8, ptr %tmp0, i64 8
-  store i64 2, ptr %tmp2
-  %tmp3 = load %t0, ptr %tmp0
-  store %t0 %tmp3, ptr %l1
-  %tmp4 = load %t0, ptr %l1
-  store %t0 %tmp4, ptr %l2
-  %tmp5 = getelementptr i8, ptr %l2, i64 0
-  %tmp6 = load i64, ptr %tmp5
-  store i64 %tmp6, ptr %l3
-  %tmp7 = getelementptr i8, ptr %l2, i64 8
-  %tmp8 = load i64, ptr %tmp7
-  store i64 %tmp8, ptr %l4
-  %tmp9 = load i64, ptr %l3
-  %tmp10 = load i64, ptr %l4
-  %tmp11 = add i64 %tmp9, %tmp10
-  store i64 %tmp11, ptr %l5
-  %tmp12 = load i64, ptr %l3
-  %tmp13 = load i64, ptr %l4
-  %tmp14 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %tmp12, i64 %tmp13)
-  %tmp15 = extractvalue { i64, i1 } %tmp14, 1
-  br i1 %tmp15, label %trap0, label %cont1
-bb1:
-  store ptr %l2, ptr %l9
-  %tmp21 = load ptr, ptr %l9
-  %tmp22 = call i64 @"_I1:t1:t12:t.Pair[].sum8:t.Pair[]"(ptr %tmp21)
-  store i64 %tmp22, ptr %l10
-  br label %bb3
-bb2:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.2, i64 0, i64 0, i64 0)
-  unreachable
-bb3:
-  %tmp23 = load i64, ptr %l10
-  store i64 %tmp23, ptr %l11
-  %tmp24 = load i64, ptr %l11
-  %tmp25 = icmp eq i64 %tmp24, 3
-  store i1 %tmp25, ptr %l12
-  %tmp26 = load i1, ptr %l12
-  store i1 %tmp26, ptr %l13
-  %tmp27 = load i1, ptr %l13
-  br i1 %tmp27, label %bb4, label %bb5
-bb4:
-  store %t1 zeroinitializer, ptr %tmp28
-  %tmp29 = getelementptr %t1, ptr %tmp28, i64 0, i64 0
-  store i64 3, ptr %tmp29
-  %tmp30 = getelementptr %t1, ptr %tmp28, i64 0, i64 1
-  store i64 4, ptr %tmp30
-  %tmp31 = load %t1, ptr %tmp28
-  store %t1 %tmp31, ptr %l14
-  %tmp32 = load %t1, ptr %l14
-  store %t1 %tmp32, ptr %l15
-  %tmp33 = getelementptr %t1, ptr %l15, i64 0, i64 0
-  %tmp34 = getelementptr i64, ptr %tmp33, i64 0
-  %tmp35 = sub i64 2, 0
-  %tmp36 = insertvalue %t2 zeroinitializer, ptr %tmp34, 0
-  %tmp37 = insertvalue %t2 %tmp36, i64 %tmp35, 1
-  store %t2 %tmp37, ptr %l16
-  %tmp38 = load %t2, ptr %l16
-  %tmp39 = extractvalue %t2 %tmp38, 0
-  %tmp40 = extractvalue %t2 %tmp38, 1
-  %tmp41 = call i64 @"_I1:t1:t6:t.pick"(ptr %tmp39, i64 %tmp40, i64 1)
-  store i64 %tmp41, ptr %l17
-  br label %bb6
-bb5:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.3, i64 0, i64 0, i64 0)
-  unreachable
-bb6:
-  %tmp42 = load i64, ptr %l17
-  store i64 %tmp42, ptr %l18
-  %tmp43 = load i64, ptr %l18
-  %tmp44 = icmp eq i64 %tmp43, 4
-  store i1 %tmp44, ptr %l19
-  %tmp45 = load i1, ptr %l19
-  store i1 %tmp45, ptr %l20
-  %tmp46 = load i1, ptr %l20
-  br i1 %tmp46, label %bb7, label %bb8
-bb7:
-  store %t1 zeroinitializer, ptr %l21
-  %tmp47 = getelementptr %t1, ptr %l21, i64 0, i64 0
-  %tmp48 = load i64, ptr %tmp47
-  store i64 %tmp48, ptr %l22
-  %tmp49 = load i64, ptr %l22
-  %tmp50 = icmp eq i64 %tmp49, 0
-  store i1 %tmp50, ptr %l23
-  %tmp51 = load i1, ptr %l23
-  store i1 %tmp51, ptr %l24
-  %tmp52 = load i1, ptr %l24
-  br i1 %tmp52, label %bb9, label %bb10
-bb8:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.4, i64 0, i64 0, i64 0)
-  unreachable
-bb9:
-  %tmp53 = call { i8, i64 } @"_I1:t1:t7:t.maybe"(i64 3)
-  %tmp54 = extractvalue { i8, i64 } %tmp53, 0
-  store i8 %tmp54, ptr %l25
-  %tmp55 = extractvalue { i8, i64 } %tmp53, 1
-  store [8 x i8] zeroinitializer, ptr %tmp56
-  store i64 %tmp55, ptr %tmp56
-  %tmp57 = getelementptr i8, ptr %l25, i64 8
-  %tmp58 = load i64, ptr %tmp56, align 1
-  store i64 %tmp58, ptr %tmp57, align 1
-  br label %bb11
-bb10:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.5, i64 0, i64 0, i64 0)
-  unreachable
-bb11:
-  %tmp59 = load %t3, ptr %l25
-  store %t3 %tmp59, ptr %l26
-  %tmp60 = load i8, ptr %l26
-  store i8 %tmp60, ptr %l27
-  %tmp61 = load i8, ptr %l27
-  %tmp62 = icmp eq i8 %tmp61, 1
-  store i1 %tmp62, ptr %l28
-  %tmp63 = load i1, ptr %l28
-  br i1 %tmp63, label %bb14, label %bb15
-bb12:
-  ret i8 0
-bb13:
-  %tmp64 = load i8, ptr %l26
-  store i8 %tmp64, ptr %l33
-  %tmp65 = load i8, ptr %l33
-  %tmp66 = icmp eq i8 %tmp65, 0
-  store i1 %tmp66, ptr %l34
-  %tmp67 = load i1, ptr %l34
-  br i1 %tmp67, label %bb19, label %bb20
-bb14:
-  %tmp68 = getelementptr i8, ptr %l26, i64 8
-  %tmp69 = load i64, ptr %tmp68
-  store i64 %tmp69, ptr %l29
-  %tmp70 = load i64, ptr %l29
-  store i64 %tmp70, ptr %l30
-  %tmp71 = load i64, ptr %l30
-  %tmp72 = icmp eq i64 %tmp71, 3
-  store i1 %tmp72, ptr %l31
-  %tmp73 = load i1, ptr %l31
-  store i1 %tmp73, ptr %l32
-  %tmp74 = load i1, ptr %l32
-  br i1 %tmp74, label %bb16, label %bb17
-bb15:
-  br label %bb13
-bb16:
-  br label %bb12
-bb17:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.6, i64 0, i64 0, i64 0)
-  unreachable
-bb18:
-  unreachable
-bb19:
-  br i1 false, label %bb21, label %bb22
-bb20:
-  br label %bb18
-bb21:
-  br label %bb12
-bb22:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.7, i64 0, i64 0, i64 0)
-  unreachable
-cont1:
-  %tmp16 = load i64, ptr %l5
-  store i64 %tmp16, ptr %l6
-  %tmp17 = load i64, ptr %l6
-  %tmp18 = icmp eq i64 %tmp17, 3
-  store i1 %tmp18, ptr %l7
-  %tmp19 = load i1, ptr %l7
-  store i1 %tmp19, ptr %l8
-  %tmp20 = load i1, ptr %l8
-  br i1 %tmp20, label %bb1, label %bb2
-trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.1, i64 0, i64 0, i64 0)
-  unreachable
-}
-
-define internal i64 @"_I1:t1:t6:t.pick"(ptr %arg0, i64 %arg1, i64 %arg2) nounwind #0 {
-bb0:
-  %l0 = alloca %t2, align 8
-  %l1 = alloca i64, align 8
-  %l2 = alloca i64, align 8
-  %l3 = alloca i64, align 8
-  %tmp0 = insertvalue %t2 zeroinitializer, ptr %arg0, 0
-  %tmp1 = insertvalue %t2 %tmp0, i64 %arg1, 1
-  store %t2 %tmp1, ptr %l0
-  store i64 %arg2, ptr %l1
-  %tmp2 = load i64, ptr %l1
-  store i64 %tmp2, ptr %l2
-  %tmp3 = getelementptr i8, ptr %l0, i64 8
-  %tmp4 = load i64, ptr %tmp3
-  %tmp5 = load i64, ptr %l2
-  %tmp6 = icmp slt i64 %tmp5, 0
-  %tmp7 = icmp uge i64 %tmp5, %tmp4
-  %tmp8 = or i1 %tmp6, %tmp7
-  br i1 %tmp8, label %trap0, label %cont1
-cont1:
-  %tmp9 = load i64, ptr %l2
-  %tmp11 = load ptr, ptr %l0
-  %tmp10 = getelementptr i64, ptr %tmp11, i64 %tmp9
-  %tmp12 = load i64, ptr %tmp10
-  store i64 %tmp12, ptr %l3
-  %tmp13 = load i64, ptr %l3
-  ret i64 %tmp13
-trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.8, i64 %tmp5, i64 %tmp4, i64 0)
-  unreachable
-}
-
-define internal { i8, i64 } @"_I1:t1:t7:t.maybe"(i64 %arg0) nounwind #0 {
-bb0:
-  %tmp6 = alloca %t3, align 8
-  %tmp12 = alloca %t3, align 8
-  %tmp14 = alloca [8 x i8], align 8
-  %tmp20 = alloca %t3, align 8
-  %tmp24 = alloca %t3, align 8
-  %tmp26 = alloca [8 x i8], align 8
-  %l0 = alloca i64, align 8
-  %l1 = alloca i64, align 8
-  %l2 = alloca i1, align 1
-  %l3 = alloca i1, align 1
-  %l4 = alloca i64, align 8
-  %l5 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l5
-  %l6 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l6
-  %l7 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l7
-  %l8 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l8
-  store i64 %arg0, ptr %l0
-  %tmp0 = load i64, ptr %l0
-  store i64 %tmp0, ptr %l1
-  %tmp1 = load i64, ptr %l1
-  %tmp2 = icmp sgt i64 %tmp1, 0
-  store i1 %tmp2, ptr %l2
-  %tmp3 = load i1, ptr %l2
-  store i1 %tmp3, ptr %l3
-  %tmp4 = load i1, ptr %l3
-  br i1 %tmp4, label %bb1, label %bb2
-bb1:
-  %tmp5 = load i64, ptr %l0
-  store i64 %tmp5, ptr %l4
-  store %t3 zeroinitializer, ptr %tmp6
-  store i8 1, ptr %tmp6
-  %tmp7 = load i64, ptr %l4
-  %tmp8 = getelementptr i8, ptr %tmp6, i64 8
-  store i64 %tmp7, ptr %tmp8
-  %tmp9 = load %t3, ptr %tmp6
-  store %t3 %tmp9, ptr %l5
-  %tmp10 = load %t3, ptr %l5
-  store %t3 %tmp10, ptr %l6
-  %tmp11 = load %t3, ptr %l6
-  store %t3 %tmp11, ptr %tmp12
-  %tmp13 = load i8, ptr %tmp12
-  store [8 x i8] zeroinitializer, ptr %tmp14
-  %tmp15 = getelementptr i8, ptr %tmp12, i64 8
-  %tmp16 = load i64, ptr %tmp15, align 1
-  store i64 %tmp16, ptr %tmp14, align 1
-  %tmp17 = load i64, ptr %tmp14
-  %tmp18 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp13, 0
-  %tmp19 = insertvalue { i8, i64 } %tmp18, i64 %tmp17, 1
-  ret { i8, i64 } %tmp19
-bb2:
-  br label %bb3
-bb3:
-  store %t3 zeroinitializer, ptr %tmp20
-  store i8 0, ptr %tmp20
-  %tmp21 = load %t3, ptr %tmp20
-  store %t3 %tmp21, ptr %l7
-  %tmp22 = load %t3, ptr %l7
-  store %t3 %tmp22, ptr %l8
-  %tmp23 = load %t3, ptr %l8
-  store %t3 %tmp23, ptr %tmp24
-  %tmp25 = load i8, ptr %tmp24
-  store [8 x i8] zeroinitializer, ptr %tmp26
-  %tmp27 = getelementptr i8, ptr %tmp24, i64 8
-  %tmp28 = load i64, ptr %tmp27, align 1
-  store i64 %tmp28, ptr %tmp26, align 1
-  %tmp29 = load i64, ptr %tmp26
-  %tmp30 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp25, 0
-  %tmp31 = insertvalue { i8, i64 } %tmp30, i64 %tmp29, 1
-  ret { i8, i64 } %tmp31
-}
-
 define internal void @"_I3:std10:std.sys.rt15:std.sys.rt.putc"(i8 %arg0) nounwind #0 {
 bb0:
-  %tmp0 = alloca %t4, align 1
+  %tmp0 = alloca %t0, align 1
   %l0 = alloca i8, align 1
   %l1 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l1
   %l2 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l2
   %l3 = alloca i8, align 1
-  %l4 = alloca %t5, align 8
+  %l4 = alloca %t1, align 8
   store i8 %arg0, ptr %l0
-  store %t4 zeroinitializer, ptr %tmp0
-  %tmp1 = getelementptr %t4, ptr %tmp0, i64 0, i64 0
+  store %t0 zeroinitializer, ptr %tmp0
+  %tmp1 = getelementptr %t0, ptr %tmp0, i64 0, i64 0
   store i8 0, ptr %tmp1
-  %tmp2 = load %t4, ptr %tmp0
-  store %t4 %tmp2, ptr %l1
-  %tmp3 = load %t4, ptr %l1
-  store %t4 %tmp3, ptr %l2
+  %tmp2 = load %t0, ptr %tmp0
+  store %t0 %tmp2, ptr %l1
+  %tmp3 = load %t0, ptr %l1
+  store %t0 %tmp3, ptr %l2
   %tmp4 = load i8, ptr %l0
   store i8 %tmp4, ptr %l3
   %tmp5 = load i8, ptr %l3
-  %tmp6 = getelementptr %t4, ptr %l2, i64 0, i64 0
+  %tmp6 = getelementptr %t0, ptr %l2, i64 0, i64 0
   store i8 %tmp5, ptr %tmp6
-  %tmp7 = getelementptr %t4, ptr %l2, i64 0, i64 0
+  %tmp7 = getelementptr %t0, ptr %l2, i64 0, i64 0
   %tmp8 = getelementptr i8, ptr %tmp7, i64 0
   %tmp9 = sub i64 1, 0
-  %tmp10 = insertvalue %t5 zeroinitializer, ptr %tmp8, 0
-  %tmp11 = insertvalue %t5 %tmp10, i64 %tmp9, 1
-  store %t5 %tmp11, ptr %l4
-  %tmp12 = load %t5, ptr %l4
-  %tmp13 = extractvalue %t5 %tmp12, 0
-  %tmp14 = extractvalue %t5 %tmp12, 1
+  %tmp10 = insertvalue %t1 zeroinitializer, ptr %tmp8, 0
+  %tmp11 = insertvalue %t1 %tmp10, i64 %tmp9, 1
+  store %t1 %tmp11, ptr %l4
+  %tmp12 = load %t1, ptr %l4
+  %tmp13 = extractvalue %t1 %tmp12, 0
+  %tmp14 = extractvalue %t1 %tmp12, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp13, i64 %tmp14)
   br label %bb1
 bb1:
@@ -485,7 +121,7 @@ bb0:
   %l1 = alloca i64, align 8
   %l2 = alloca i64, align 8
   %l3 = alloca i64, align 8
-  %l4 = alloca %t5, align 8
+  %l4 = alloca %t1, align 8
   %l5 = alloca i32, align 4
   %l6 = alloca i64, align 8
   %l7 = alloca i64, align 8
@@ -494,9 +130,9 @@ bb0:
   %l10 = alloca i64, align 8
   %l11 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l11
-  %l12 = alloca %t5, align 8
-  %l13 = alloca %t5, align 8
-  %l14 = alloca %t5, align 8
+  %l12 = alloca %t1, align 8
+  %l13 = alloca %t1, align 8
+  %l14 = alloca %t1, align 8
   %l15 = alloca i64, align 8
   %l16 = alloca i64, align 8
   %l17 = alloca i64, align 8
@@ -530,11 +166,11 @@ bb0:
   store i64 %arg3, ptr %l3
   %tmp0 = load ptr, ptr %l0
   %tmp1 = getelementptr i8, ptr %tmp0, i64 8
-  %tmp2 = load %t5, ptr %tmp1
-  store %t5 %tmp2, ptr %l4
-  %tmp3 = load %t5, ptr %l4
-  %tmp4 = extractvalue %t5 %tmp3, 0
-  %tmp5 = extractvalue %t5 %tmp3, 1
+  %tmp2 = load %t1, ptr %tmp1
+  store %t1 %tmp2, ptr %l4
+  %tmp3 = load %t1, ptr %l4
+  %tmp4 = extractvalue %t1 %tmp3, 0
+  %tmp5 = extractvalue %t1 %tmp3, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp4, i64 %tmp5)
   br label %bb1
 bb1:
@@ -570,51 +206,51 @@ bb4:
   call void @"_I3:std10:std.sys.rt20:std.sys.rt.print_i64"(i64 %tmp19)
   br label %bb5
 bb5:
-  %tmp20 = insertvalue %t5 zeroinitializer, ptr @str.9, 0
-  %tmp21 = insertvalue %t5 %tmp20, i64 7, 1
-  %tmp22 = extractvalue %t5 %tmp21, 0
-  %tmp23 = extractvalue %t5 %tmp21, 1
+  %tmp20 = insertvalue %t1 zeroinitializer, ptr @str.0, 0
+  %tmp21 = insertvalue %t1 %tmp20, i64 7, 1
+  %tmp22 = extractvalue %t1 %tmp21, 0
+  %tmp23 = extractvalue %t1 %tmp21, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp22, i64 %tmp23)
   br label %bb6
 bb6:
   %tmp24 = load ptr, ptr %l0
   %tmp25 = getelementptr i8, ptr %tmp24, i64 0
-  %tmp26 = load %t6, ptr %tmp25
-  store %t6 %tmp26, ptr %l11
-  %tmp27 = load %t6, ptr %l11
-  %tmp28 = extractvalue %t6 %tmp27, 0
-  %tmp29 = call %t5 @"_I3:std10:std.sys.rt20:std.sys.rt.code_text"(i8 %tmp28)
-  store %t5 %tmp29, ptr %l12
+  %tmp26 = load %t2, ptr %tmp25
+  store %t2 %tmp26, ptr %l11
+  %tmp27 = load %t2, ptr %l11
+  %tmp28 = extractvalue %t2 %tmp27, 0
+  %tmp29 = call %t1 @"_I3:std10:std.sys.rt20:std.sys.rt.code_text"(i8 %tmp28)
+  store %t1 %tmp29, ptr %l12
   br label %bb7
 bb7:
-  %tmp30 = load %t5, ptr %l12
-  store %t5 %tmp30, ptr %l13
-  %tmp31 = load %t5, ptr %l13
-  %tmp32 = extractvalue %t5 %tmp31, 0
-  %tmp33 = extractvalue %t5 %tmp31, 1
+  %tmp30 = load %t1, ptr %l12
+  store %t1 %tmp30, ptr %l13
+  %tmp31 = load %t1, ptr %l13
+  %tmp32 = extractvalue %t1 %tmp31, 0
+  %tmp33 = extractvalue %t1 %tmp31, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp32, i64 %tmp33)
   br label %bb8
 bb8:
-  %tmp34 = insertvalue %t5 zeroinitializer, ptr @str.10, 0
-  %tmp35 = insertvalue %t5 %tmp34, i64 2, 1
-  %tmp36 = extractvalue %t5 %tmp35, 0
-  %tmp37 = extractvalue %t5 %tmp35, 1
+  %tmp34 = insertvalue %t1 zeroinitializer, ptr @str.1, 0
+  %tmp35 = insertvalue %t1 %tmp34, i64 2, 1
+  %tmp36 = extractvalue %t1 %tmp35, 0
+  %tmp37 = extractvalue %t1 %tmp35, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp36, i64 %tmp37)
   br label %bb9
 bb9:
   %tmp38 = load ptr, ptr %l0
   %tmp39 = getelementptr i8, ptr %tmp38, i64 32
-  %tmp40 = load %t5, ptr %tmp39
-  store %t5 %tmp40, ptr %l14
+  %tmp40 = load %t1, ptr %tmp39
+  store %t1 %tmp40, ptr %l14
   %tmp41 = load i64, ptr %l1
   store i64 %tmp41, ptr %l15
   %tmp42 = load i64, ptr %l2
   store i64 %tmp42, ptr %l16
   %tmp43 = load i64, ptr %l3
   store i64 %tmp43, ptr %l17
-  %tmp44 = load %t5, ptr %l14
-  %tmp45 = extractvalue %t5 %tmp44, 0
-  %tmp46 = extractvalue %t5 %tmp44, 1
+  %tmp44 = load %t1, ptr %l14
+  %tmp45 = extractvalue %t1 %tmp44, 0
+  %tmp46 = extractvalue %t1 %tmp44, 1
   %tmp47 = load i64, ptr %l15
   %tmp48 = load i64, ptr %l16
   %tmp49 = load i64, ptr %l17
@@ -623,9 +259,9 @@ bb9:
 bb10:
   %tmp50 = load ptr, ptr %l0
   %tmp51 = getelementptr i8, ptr %tmp50, i64 0
-  %tmp52 = load %t6, ptr %tmp51
-  store %t6 %tmp52, ptr %l18
-  %tmp53 = load %t6, ptr %l18
+  %tmp52 = load %t2, ptr %tmp51
+  store %t2 %tmp52, ptr %l18
+  %tmp53 = load %t2, ptr %l18
   %tmp55 = load i8, ptr %l18
   store i8 %tmp55, ptr %l19
   %tmp56 = load i8, ptr %l19
@@ -640,10 +276,10 @@ bb10:
   %tmp61 = load i1, ptr %l23
   br i1 %tmp61, label %bb13, label %bb14
 bb11:
-  %tmp62 = insertvalue %t5 zeroinitializer, ptr @str.10, 0
-  %tmp63 = insertvalue %t5 %tmp62, i64 2, 1
-  %tmp64 = extractvalue %t5 %tmp63, 0
-  %tmp65 = extractvalue %t5 %tmp63, 1
+  %tmp62 = insertvalue %t1 zeroinitializer, ptr @str.1, 0
+  %tmp63 = insertvalue %t1 %tmp62, i64 2, 1
+  %tmp64 = extractvalue %t1 %tmp63, 0
+  %tmp65 = extractvalue %t1 %tmp63, 1
   call void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %tmp64, i64 %tmp65)
   br label %bb17
 bb12:
@@ -732,41 +368,41 @@ bb27:
 
 define internal void @"_I3:std10:std.sys.rt16:std.sys.rt.start"(i32 %arg0, ptr %arg1, ptr %arg2, ptr %arg3) nounwind cold noreturn #0 {
 bb0:
-  %tmp37 = alloca %t17, align 1
-  %tmp40 = alloca %t18, align 8
+  %tmp37 = alloca %t13, align 1
+  %tmp40 = alloca %t14, align 8
   %l0 = alloca i32, align 4
   %l1 = alloca ptr, align 8
   %l2 = alloca ptr, align 8
   %l3 = alloca ptr, align 8
   %l4 = alloca i32, align 4
   %l5 = alloca ptr, align 8
-  %l6 = alloca %t7, align 8
-  %l7 = alloca %t7, align 8
-  %l8 = alloca %t8, align 1
-  %l9 = alloca %t8, align 1
-  %l10 = alloca %t9, align 1
-  %l11 = alloca %t9, align 1
-  %l12 = alloca %t10, align 1
-  %l13 = alloca %t10, align 1
-  %l14 = alloca %t11, align 1
-  %l15 = alloca %t11, align 1
-  %l16 = alloca %t12, align 1
-  %l17 = alloca %t12, align 1
-  %l18 = alloca %t13, align 1
-  %l19 = alloca %t13, align 1
-  %l20 = alloca %t14, align 1
-  %l21 = alloca %t14, align 1
-  %l22 = alloca %t15, align 1
-  %l23 = alloca %t15, align 1
-  %l24 = alloca %t16, align 1
-  %l25 = alloca %t16, align 1
-  %l26 = alloca %t16, align 1
-  %l27 = alloca %t16, align 1
-  %l28 = alloca %t7, align 8
+  %l6 = alloca %t3, align 8
+  %l7 = alloca %t3, align 8
+  %l8 = alloca %t4, align 1
+  %l9 = alloca %t4, align 1
+  %l10 = alloca %t5, align 1
+  %l11 = alloca %t5, align 1
+  %l12 = alloca %t6, align 1
+  %l13 = alloca %t6, align 1
+  %l14 = alloca %t7, align 1
+  %l15 = alloca %t7, align 1
+  %l16 = alloca %t8, align 1
+  %l17 = alloca %t8, align 1
+  %l18 = alloca %t9, align 1
+  %l19 = alloca %t9, align 1
+  %l20 = alloca %t10, align 1
+  %l21 = alloca %t10, align 1
+  %l22 = alloca %t11, align 1
+  %l23 = alloca %t11, align 1
+  %l24 = alloca %t12, align 1
+  %l25 = alloca %t12, align 1
+  %l26 = alloca %t12, align 1
+  %l27 = alloca %t12, align 1
+  %l28 = alloca %t3, align 8
   %l29 = alloca ptr, align 8
   %l30 = alloca ptr, align 8
-  %l31 = alloca %t9, align 1
-  %l32 = alloca %t10, align 1
+  %l31 = alloca %t5, align 1
+  %l32 = alloca %t6, align 1
   %l33 = alloca ptr, align 8
   %l34 = alloca ptr, align 8
   %l35 = alloca ptr, align 8
@@ -785,8 +421,8 @@ bb0:
   store [16 x i8] zeroinitializer, ptr %l47
   %l48 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l48
-  %l49 = alloca %t18, align 8
-  %l50 = alloca %t18, align 8
+  %l49 = alloca %t14, align 8
+  %l50 = alloca %t14, align 8
   %l51 = alloca ptr, align 8
   %l52 = alloca ptr, align 8
   %l53 = alloca i32, align 4
@@ -802,81 +438,81 @@ bb0:
   store ptr %tmp1, ptr %l5
   %tmp2 = load i32, ptr %l4
   %tmp3 = load ptr, ptr %l5
-  %tmp4 = call %t7 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %tmp2, ptr %tmp3)
-  store %t7 %tmp4, ptr %l6
+  %tmp4 = call %t3 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %tmp2, ptr %tmp3)
+  store %t3 %tmp4, ptr %l6
   br label %bb1
 bb1:
-  %tmp5 = load %t7, ptr %l6
-  store %t7 %tmp5, ptr %l7
-  %tmp6 = call %t8 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"()
-  store %t8 %tmp6, ptr %l8
+  %tmp5 = load %t3, ptr %l6
+  store %t3 %tmp5, ptr %l7
+  %tmp6 = call %t4 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"()
+  store %t4 %tmp6, ptr %l8
   br label %bb2
 bb2:
-  %tmp7 = load %t8, ptr %l8
-  store %t8 %tmp7, ptr %l9
-  %tmp8 = call %t9 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"()
-  store %t9 %tmp8, ptr %l10
+  %tmp7 = load %t4, ptr %l8
+  store %t4 %tmp7, ptr %l9
+  %tmp8 = call %t5 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"()
+  store %t5 %tmp8, ptr %l10
   br label %bb3
 bb3:
-  %tmp9 = load %t9, ptr %l10
-  store %t9 %tmp9, ptr %l11
-  %tmp10 = call %t10 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"()
-  store %t10 %tmp10, ptr %l12
+  %tmp9 = load %t5, ptr %l10
+  store %t5 %tmp9, ptr %l11
+  %tmp10 = call %t6 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"()
+  store %t6 %tmp10, ptr %l12
   br label %bb4
 bb4:
-  %tmp11 = load %t10, ptr %l12
-  store %t10 %tmp11, ptr %l13
-  %tmp12 = call %t11 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"()
-  store %t11 %tmp12, ptr %l14
+  %tmp11 = load %t6, ptr %l12
+  store %t6 %tmp11, ptr %l13
+  %tmp12 = call %t7 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"()
+  store %t7 %tmp12, ptr %l14
   br label %bb5
 bb5:
-  %tmp13 = load %t11, ptr %l14
-  store %t11 %tmp13, ptr %l15
-  %tmp14 = call %t12 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"()
-  store %t12 %tmp14, ptr %l16
+  %tmp13 = load %t7, ptr %l14
+  store %t7 %tmp13, ptr %l15
+  %tmp14 = call %t8 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"()
+  store %t8 %tmp14, ptr %l16
   br label %bb6
 bb6:
-  %tmp15 = load %t12, ptr %l16
-  store %t12 %tmp15, ptr %l17
-  %tmp16 = call %t13 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"()
-  store %t13 %tmp16, ptr %l18
+  %tmp15 = load %t8, ptr %l16
+  store %t8 %tmp15, ptr %l17
+  %tmp16 = call %t9 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"()
+  store %t9 %tmp16, ptr %l18
   br label %bb7
 bb7:
-  %tmp17 = load %t13, ptr %l18
-  store %t13 %tmp17, ptr %l19
-  %tmp18 = call %t14 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"()
-  store %t14 %tmp18, ptr %l20
+  %tmp17 = load %t9, ptr %l18
+  store %t9 %tmp17, ptr %l19
+  %tmp18 = call %t10 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"()
+  store %t10 %tmp18, ptr %l20
   br label %bb8
 bb8:
-  %tmp19 = load %t14, ptr %l20
-  store %t14 %tmp19, ptr %l21
-  %tmp20 = call %t15 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"()
-  store %t15 %tmp20, ptr %l22
+  %tmp19 = load %t10, ptr %l20
+  store %t10 %tmp19, ptr %l21
+  %tmp20 = call %t11 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"()
+  store %t11 %tmp20, ptr %l22
   br label %bb9
 bb9:
-  %tmp21 = load %t15, ptr %l22
-  store %t15 %tmp21, ptr %l23
-  %tmp22 = call %t16 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
-  store %t16 %tmp22, ptr %l24
+  %tmp21 = load %t11, ptr %l22
+  store %t11 %tmp21, ptr %l23
+  %tmp22 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
+  store %t12 %tmp22, ptr %l24
   br label %bb10
 bb10:
-  %tmp23 = load %t16, ptr %l24
-  store %t16 %tmp23, ptr %l25
-  %tmp24 = call %t16 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
-  store %t16 %tmp24, ptr %l26
+  %tmp23 = load %t12, ptr %l24
+  store %t12 %tmp23, ptr %l25
+  %tmp24 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
+  store %t12 %tmp24, ptr %l26
   br label %bb11
 bb11:
-  %tmp25 = load %t16, ptr %l26
-  store %t16 %tmp25, ptr %l27
-  %tmp26 = load %t7, ptr %l7
-  store %t7 %tmp26, ptr %l28
+  %tmp25 = load %t12, ptr %l26
+  store %t12 %tmp25, ptr %l27
+  %tmp26 = load %t3, ptr %l7
+  store %t3 %tmp26, ptr %l28
   store ptr %l9, ptr %l29
   %tmp27 = load ptr, ptr %l29
   store ptr %tmp27, ptr %l30
-  %tmp28 = load %t9, ptr %l11
-  store %t9 %tmp28, ptr %l31
-  %tmp29 = load %t10, ptr %l13
-  store %t10 %tmp29, ptr %l32
+  %tmp28 = load %t5, ptr %l11
+  store %t5 %tmp28, ptr %l31
+  %tmp29 = load %t6, ptr %l13
+  store %t6 %tmp29, ptr %l32
   store ptr %l15, ptr %l33
   %tmp30 = load ptr, ptr %l33
   store ptr %tmp30, ptr %l34
@@ -898,25 +534,25 @@ bb11:
   store ptr %l27, ptr %l45
   %tmp36 = load ptr, ptr %l45
   store ptr %tmp36, ptr %l46
-  store %t17 zeroinitializer, ptr %tmp37
+  store %t13 zeroinitializer, ptr %tmp37
   store i8 0, ptr %tmp37
-  %tmp38 = load %t17, ptr %tmp37
-  store %t17 %tmp38, ptr %l47
-  %tmp39 = load %t17, ptr %l47
-  store %t17 %tmp39, ptr %l48
-  store %t18 zeroinitializer, ptr %tmp40
-  %tmp41 = load %t7, ptr %l28
+  %tmp38 = load %t13, ptr %tmp37
+  store %t13 %tmp38, ptr %l47
+  %tmp39 = load %t13, ptr %l47
+  store %t13 %tmp39, ptr %l48
+  store %t14 zeroinitializer, ptr %tmp40
+  %tmp41 = load %t3, ptr %l28
   %tmp42 = getelementptr i8, ptr %tmp40, i64 0
-  store %t7 %tmp41, ptr %tmp42
+  store %t3 %tmp41, ptr %tmp42
   %tmp43 = load ptr, ptr %l30
   %tmp44 = getelementptr i8, ptr %tmp40, i64 16
   store ptr %tmp43, ptr %tmp44
-  %tmp45 = load %t9, ptr %l31
+  %tmp45 = load %t5, ptr %l31
   %tmp46 = getelementptr i8, ptr %tmp40, i64 24
-  store %t9 %tmp45, ptr %tmp46
-  %tmp47 = load %t10, ptr %l32
+  store %t5 %tmp45, ptr %tmp46
+  %tmp47 = load %t6, ptr %l32
   %tmp48 = getelementptr i8, ptr %tmp40, i64 24
-  store %t10 %tmp47, ptr %tmp48
+  store %t6 %tmp47, ptr %tmp48
   %tmp49 = load ptr, ptr %l34
   %tmp50 = getelementptr i8, ptr %tmp40, i64 24
   store ptr %tmp49, ptr %tmp50
@@ -938,13 +574,13 @@ bb11:
   %tmp61 = load ptr, ptr %l46
   %tmp62 = getelementptr i8, ptr %tmp40, i64 72
   store ptr %tmp61, ptr %tmp62
-  %tmp63 = load %t17, ptr %l48
+  %tmp63 = load %t13, ptr %l48
   %tmp64 = getelementptr i8, ptr %tmp40, i64 80
-  store %t17 %tmp63, ptr %tmp64
-  %tmp65 = load %t18, ptr %tmp40
-  store %t18 %tmp65, ptr %l49
-  %tmp66 = load %t18, ptr %l49
-  store %t18 %tmp66, ptr %l50
+  store %t13 %tmp63, ptr %tmp64
+  %tmp65 = load %t14, ptr %tmp40
+  store %t14 %tmp65, ptr %l49
+  %tmp66 = load %t14, ptr %l49
+  store %t14 %tmp66, ptr %l50
   %tmp67 = load ptr, ptr %l3
   store ptr %tmp67, ptr %l51
   store ptr %l50, ptr %l52
@@ -967,7 +603,7 @@ bb13:
 
 define internal void @"_I3:std10:std.sys.rt17:std.sys.rt.expand"(ptr %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4) nounwind #0 {
 bb0:
-  %l0 = alloca %t5, align 8
+  %l0 = alloca %t1, align 8
   %l1 = alloca i64, align 8
   %l2 = alloca i64, align 8
   %l3 = alloca i64, align 8
@@ -994,9 +630,9 @@ bb0:
   %l24 = alloca i8, align 1
   %l25 = alloca i64, align 8
   %l26 = alloca i64, align 8
-  %tmp0 = insertvalue %t5 zeroinitializer, ptr %arg0, 0
-  %tmp1 = insertvalue %t5 %tmp0, i64 %arg1, 1
-  store %t5 %tmp1, ptr %l0
+  %tmp0 = insertvalue %t1 zeroinitializer, ptr %arg0, 0
+  %tmp1 = insertvalue %t1 %tmp0, i64 %arg1, 1
+  store %t1 %tmp1, ptr %l0
   store i64 %arg2, ptr %l1
   store i64 %arg3, ptr %l2
   store i64 %arg4, ptr %l3
@@ -1209,7 +845,7 @@ bb0:
 bb1:
   br i1 true, label %bb3, label %bb4
 bb2:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.9, i64 0, i64 0, i64 0)
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.0, i64 0, i64 0, i64 0)
   unreachable
 bb3:
   %tmp0 = load ptr, ptr %l0
@@ -1278,11 +914,11 @@ cont1:
   store i64 %tmp31, ptr %l1
   br label %bb1
 trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.10, i64 0, i64 0, i64 0)
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.1, i64 0, i64 0, i64 0)
   unreachable
 }
 
-define internal %t5 @"_I3:std10:std.sys.rt20:std.sys.rt.code_text"(i8 %arg0) nounwind #0 {
+define internal %t1 @"_I3:std10:std.sys.rt20:std.sys.rt.code_text"(i8 %arg0) nounwind #0 {
 bb0:
   %l0 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l0
@@ -1338,11 +974,11 @@ bb0:
   %l49 = alloca i8, align 1
   %l50 = alloca i1, align 1
   %l51 = alloca i1, align 1
-  %tmp0 = insertvalue %t6 zeroinitializer, i8 %arg0, 0
-  store %t6 %tmp0, ptr %l0
-  %tmp1 = load %t6, ptr %l0
-  store %t6 %tmp1, ptr %l1
-  %tmp2 = load %t6, ptr %l1
+  %tmp0 = insertvalue %t2 zeroinitializer, i8 %arg0, 0
+  store %t2 %tmp0, ptr %l0
+  %tmp1 = load %t2, ptr %l0
+  store %t2 %tmp1, ptr %l1
+  %tmp2 = load %t2, ptr %l1
   %tmp4 = load i8, ptr %l1
   store i8 %tmp4, ptr %l2
   %tmp5 = load i8, ptr %l2
@@ -1357,9 +993,9 @@ bb0:
   %tmp10 = load i1, ptr %l6
   br i1 %tmp10, label %bb1, label %bb2
 bb1:
-  %tmp11 = insertvalue %t5 zeroinitializer, ptr @str.13, 0
-  %tmp12 = insertvalue %t5 %tmp11, i64 3, 1
-  ret %t5 %tmp12
+  %tmp11 = insertvalue %t1 zeroinitializer, ptr @str.5, 0
+  %tmp12 = insertvalue %t1 %tmp11, i64 3, 1
+  ret %t1 %tmp12
 bb2:
   br label %bb3
 bb3:
@@ -1373,9 +1009,9 @@ bb3:
   %tmp17 = load i1, ptr %l9
   br i1 %tmp17, label %bb4, label %bb5
 bb4:
-  %tmp18 = insertvalue %t5 zeroinitializer, ptr @str.14, 0
-  %tmp19 = insertvalue %t5 %tmp18, i64 3, 1
-  ret %t5 %tmp19
+  %tmp18 = insertvalue %t1 zeroinitializer, ptr @str.6, 0
+  %tmp19 = insertvalue %t1 %tmp18, i64 3, 1
+  ret %t1 %tmp19
 bb5:
   br label %bb6
 bb6:
@@ -1389,9 +1025,9 @@ bb6:
   %tmp24 = load i1, ptr %l12
   br i1 %tmp24, label %bb7, label %bb8
 bb7:
-  %tmp25 = insertvalue %t5 zeroinitializer, ptr @str.15, 0
-  %tmp26 = insertvalue %t5 %tmp25, i64 3, 1
-  ret %t5 %tmp26
+  %tmp25 = insertvalue %t1 zeroinitializer, ptr @str.7, 0
+  %tmp26 = insertvalue %t1 %tmp25, i64 3, 1
+  ret %t1 %tmp26
 bb8:
   br label %bb9
 bb9:
@@ -1405,9 +1041,9 @@ bb9:
   %tmp31 = load i1, ptr %l15
   br i1 %tmp31, label %bb10, label %bb11
 bb10:
-  %tmp32 = insertvalue %t5 zeroinitializer, ptr @str.16, 0
-  %tmp33 = insertvalue %t5 %tmp32, i64 3, 1
-  ret %t5 %tmp33
+  %tmp32 = insertvalue %t1 zeroinitializer, ptr @str.8, 0
+  %tmp33 = insertvalue %t1 %tmp32, i64 3, 1
+  ret %t1 %tmp33
 bb11:
   br label %bb12
 bb12:
@@ -1421,9 +1057,9 @@ bb12:
   %tmp38 = load i1, ptr %l18
   br i1 %tmp38, label %bb13, label %bb14
 bb13:
-  %tmp39 = insertvalue %t5 zeroinitializer, ptr @str.17, 0
-  %tmp40 = insertvalue %t5 %tmp39, i64 3, 1
-  ret %t5 %tmp40
+  %tmp39 = insertvalue %t1 zeroinitializer, ptr @str.9, 0
+  %tmp40 = insertvalue %t1 %tmp39, i64 3, 1
+  ret %t1 %tmp40
 bb14:
   br label %bb15
 bb15:
@@ -1437,9 +1073,9 @@ bb15:
   %tmp45 = load i1, ptr %l21
   br i1 %tmp45, label %bb16, label %bb17
 bb16:
-  %tmp46 = insertvalue %t5 zeroinitializer, ptr @str.18, 0
-  %tmp47 = insertvalue %t5 %tmp46, i64 3, 1
-  ret %t5 %tmp47
+  %tmp46 = insertvalue %t1 zeroinitializer, ptr @str.10, 0
+  %tmp47 = insertvalue %t1 %tmp46, i64 3, 1
+  ret %t1 %tmp47
 bb17:
   br label %bb18
 bb18:
@@ -1453,9 +1089,9 @@ bb18:
   %tmp52 = load i1, ptr %l24
   br i1 %tmp52, label %bb19, label %bb20
 bb19:
-  %tmp53 = insertvalue %t5 zeroinitializer, ptr @str.19, 0
-  %tmp54 = insertvalue %t5 %tmp53, i64 3, 1
-  ret %t5 %tmp54
+  %tmp53 = insertvalue %t1 zeroinitializer, ptr @str.11, 0
+  %tmp54 = insertvalue %t1 %tmp53, i64 3, 1
+  ret %t1 %tmp54
 bb20:
   br label %bb21
 bb21:
@@ -1469,9 +1105,9 @@ bb21:
   %tmp59 = load i1, ptr %l27
   br i1 %tmp59, label %bb22, label %bb23
 bb22:
-  %tmp60 = insertvalue %t5 zeroinitializer, ptr @str.20, 0
-  %tmp61 = insertvalue %t5 %tmp60, i64 3, 1
-  ret %t5 %tmp61
+  %tmp60 = insertvalue %t1 zeroinitializer, ptr @str.12, 0
+  %tmp61 = insertvalue %t1 %tmp60, i64 3, 1
+  ret %t1 %tmp61
 bb23:
   br label %bb24
 bb24:
@@ -1485,9 +1121,9 @@ bb24:
   %tmp66 = load i1, ptr %l30
   br i1 %tmp66, label %bb25, label %bb26
 bb25:
-  %tmp67 = insertvalue %t5 zeroinitializer, ptr @str.21, 0
-  %tmp68 = insertvalue %t5 %tmp67, i64 3, 1
-  ret %t5 %tmp68
+  %tmp67 = insertvalue %t1 zeroinitializer, ptr @str.13, 0
+  %tmp68 = insertvalue %t1 %tmp67, i64 3, 1
+  ret %t1 %tmp68
 bb26:
   br label %bb27
 bb27:
@@ -1501,9 +1137,9 @@ bb27:
   %tmp73 = load i1, ptr %l33
   br i1 %tmp73, label %bb28, label %bb29
 bb28:
-  %tmp74 = insertvalue %t5 zeroinitializer, ptr @str.22, 0
-  %tmp75 = insertvalue %t5 %tmp74, i64 3, 1
-  ret %t5 %tmp75
+  %tmp74 = insertvalue %t1 zeroinitializer, ptr @str.14, 0
+  %tmp75 = insertvalue %t1 %tmp74, i64 3, 1
+  ret %t1 %tmp75
 bb29:
   br label %bb30
 bb30:
@@ -1517,9 +1153,9 @@ bb30:
   %tmp80 = load i1, ptr %l36
   br i1 %tmp80, label %bb31, label %bb32
 bb31:
-  %tmp81 = insertvalue %t5 zeroinitializer, ptr @str.23, 0
-  %tmp82 = insertvalue %t5 %tmp81, i64 3, 1
-  ret %t5 %tmp82
+  %tmp81 = insertvalue %t1 zeroinitializer, ptr @str.15, 0
+  %tmp82 = insertvalue %t1 %tmp81, i64 3, 1
+  ret %t1 %tmp82
 bb32:
   br label %bb33
 bb33:
@@ -1533,9 +1169,9 @@ bb33:
   %tmp87 = load i1, ptr %l39
   br i1 %tmp87, label %bb34, label %bb35
 bb34:
-  %tmp88 = insertvalue %t5 zeroinitializer, ptr @str.24, 0
-  %tmp89 = insertvalue %t5 %tmp88, i64 3, 1
-  ret %t5 %tmp89
+  %tmp88 = insertvalue %t1 zeroinitializer, ptr @str.16, 0
+  %tmp89 = insertvalue %t1 %tmp88, i64 3, 1
+  ret %t1 %tmp89
 bb35:
   br label %bb36
 bb36:
@@ -1549,9 +1185,9 @@ bb36:
   %tmp94 = load i1, ptr %l42
   br i1 %tmp94, label %bb37, label %bb38
 bb37:
-  %tmp95 = insertvalue %t5 zeroinitializer, ptr @str.25, 0
-  %tmp96 = insertvalue %t5 %tmp95, i64 3, 1
-  ret %t5 %tmp96
+  %tmp95 = insertvalue %t1 zeroinitializer, ptr @str.17, 0
+  %tmp96 = insertvalue %t1 %tmp95, i64 3, 1
+  ret %t1 %tmp96
 bb38:
   br label %bb39
 bb39:
@@ -1565,9 +1201,9 @@ bb39:
   %tmp101 = load i1, ptr %l45
   br i1 %tmp101, label %bb40, label %bb41
 bb40:
-  %tmp102 = insertvalue %t5 zeroinitializer, ptr @str.26, 0
-  %tmp103 = insertvalue %t5 %tmp102, i64 3, 1
-  ret %t5 %tmp103
+  %tmp102 = insertvalue %t1 zeroinitializer, ptr @str.18, 0
+  %tmp103 = insertvalue %t1 %tmp102, i64 3, 1
+  ret %t1 %tmp103
 bb41:
   br label %bb42
 bb42:
@@ -1581,9 +1217,9 @@ bb42:
   %tmp108 = load i1, ptr %l48
   br i1 %tmp108, label %bb43, label %bb44
 bb43:
-  %tmp109 = insertvalue %t5 zeroinitializer, ptr @str.27, 0
-  %tmp110 = insertvalue %t5 %tmp109, i64 3, 1
-  ret %t5 %tmp110
+  %tmp109 = insertvalue %t1 zeroinitializer, ptr @str.19, 0
+  %tmp110 = insertvalue %t1 %tmp109, i64 3, 1
+  ret %t1 %tmp110
 bb44:
   br label %bb45
 bb45:
@@ -1597,15 +1233,15 @@ bb45:
   %tmp115 = load i1, ptr %l51
   br i1 %tmp115, label %bb46, label %bb47
 bb46:
-  %tmp116 = insertvalue %t5 zeroinitializer, ptr @str.28, 0
-  %tmp117 = insertvalue %t5 %tmp116, i64 3, 1
-  ret %t5 %tmp117
+  %tmp116 = insertvalue %t1 zeroinitializer, ptr @str.20, 0
+  %tmp117 = insertvalue %t1 %tmp116, i64 3, 1
+  ret %t1 %tmp117
 bb47:
   br label %bb48
 bb48:
-  %tmp118 = insertvalue %t5 zeroinitializer, ptr @str.29, 0
-  %tmp119 = insertvalue %t5 %tmp118, i64 3, 1
-  ret %t5 %tmp119
+  %tmp118 = insertvalue %t1 zeroinitializer, ptr @str.21, 0
+  %tmp119 = insertvalue %t1 %tmp118, i64 3, 1
+  ret %t1 %tmp119
 }
 
 define internal void @"_I3:std10:std.sys.rt20:std.sys.rt.print_i64"(i64 %arg0) nounwind #0 {
@@ -1742,11 +1378,11 @@ cont1:
   call void @"_I3:std10:std.sys.rt15:std.sys.rt.putc"(i8 %tmp27)
   br label %bb5
 trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.11, i64 0, i64 0, i64 0)
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.2, i64 0, i64 0, i64 0)
   unreachable
 }
 
-define internal %t7 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %arg0, ptr %arg1) nounwind #0 {
+define internal %t3 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %arg0, ptr %arg1) nounwind #0 {
 bb0:
   %l0 = alloca i32, align 4
   %l1 = alloca ptr, align 8
@@ -1815,8 +1451,8 @@ bb0:
   %l65 = alloca i64, align 8
   %l66 = alloca ptr, align 8
   %l67 = alloca i64, align 8
-  %l68 = alloca %t5, align 8
-  %l69 = alloca %t5, align 8
+  %l68 = alloca %t1, align 8
+  %l69 = alloca %t1, align 8
   %l70 = alloca i64, align 8
   %l71 = alloca i64, align 8
   %l72 = alloca i64, align 8
@@ -1826,7 +1462,7 @@ bb0:
   %l76 = alloca i64, align 8
   %l77 = alloca ptr, align 8
   %l78 = alloca ptr, align 8
-  %l79 = alloca %t5, align 8
+  %l79 = alloca %t1, align 8
   %l80 = alloca i64, align 8
   %l81 = alloca i64, align 8
   %l82 = alloca ptr, align 8
@@ -1834,8 +1470,8 @@ bb0:
   %l84 = alloca ptr, align 8
   %l85 = alloca ptr, align 8
   %l86 = alloca i64, align 8
-  %l87 = alloca %t7, align 8
-  %l88 = alloca %t7, align 8
+  %l87 = alloca %t3, align 8
+  %l88 = alloca %t3, align 8
   store i32 %arg0, ptr %l0
   store ptr %arg1, ptr %l1
   %tmp0 = load i32, ptr %l0
@@ -1962,13 +1598,13 @@ bb10:
   store i64 %tmp63, ptr %l86
   %tmp64 = load ptr, ptr %l85
   %tmp65 = load i64, ptr %l86
-  %tmp66 = insertvalue %t7 zeroinitializer, ptr %tmp64, 0
-  %tmp67 = insertvalue %t7 %tmp66, i64 %tmp65, 1
-  store %t7 %tmp67, ptr %l87
-  %tmp68 = load %t7, ptr %l87
-  store %t7 %tmp68, ptr %l88
-  %tmp69 = load %t7, ptr %l88
-  ret %t7 %tmp69
+  %tmp66 = insertvalue %t3 zeroinitializer, ptr %tmp64, 0
+  %tmp67 = insertvalue %t3 %tmp66, i64 %tmp65, 1
+  store %t3 %tmp67, ptr %l87
+  %tmp68 = load %t3, ptr %l87
+  store %t3 %tmp68, ptr %l88
+  %tmp69 = load %t3, ptr %l88
+  ret %t3 %tmp69
 bb11:
   %tmp70 = load i64, ptr %l27
   store i64 %tmp70, ptr %l46
@@ -2029,11 +1665,11 @@ bb14:
   store i64 %tmp99, ptr %l67
   %tmp100 = load ptr, ptr %l66
   %tmp101 = load i64, ptr %l67
-  %tmp102 = insertvalue %t5 zeroinitializer, ptr %tmp100, 0
-  %tmp103 = insertvalue %t5 %tmp102, i64 %tmp101, 1
-  store %t5 %tmp103, ptr %l68
-  %tmp104 = load %t5, ptr %l68
-  store %t5 %tmp104, ptr %l69
+  %tmp102 = insertvalue %t1 zeroinitializer, ptr %tmp100, 0
+  %tmp103 = insertvalue %t1 %tmp102, i64 %tmp101, 1
+  store %t1 %tmp103, ptr %l68
+  %tmp104 = load %t1, ptr %l68
+  store %t1 %tmp104, ptr %l69
   %tmp105 = load i64, ptr %l33
   store i64 %tmp105, ptr %l70
   %tmp106 = load i64, ptr %l48
@@ -2059,11 +1695,11 @@ bb15:
   store ptr %tmp117, ptr %l77
   %tmp118 = load ptr, ptr %l77
   store ptr %tmp118, ptr %l78
-  %tmp119 = load %t5, ptr %l69
-  store %t5 %tmp119, ptr %l79
-  %tmp120 = load %t5, ptr %l79
+  %tmp119 = load %t1, ptr %l69
+  store %t1 %tmp119, ptr %l79
+  %tmp120 = load %t1, ptr %l79
   %tmp121 = load ptr, ptr %l78
-  store %t5 %tmp120, ptr %tmp121
+  store %t1 %tmp120, ptr %tmp121
   %tmp122 = load i64, ptr %l27
   store i64 %tmp122, ptr %l80
   %tmp123 = load i64, ptr %l80
@@ -2090,16 +1726,16 @@ cont3:
   store i64 %tmp128, ptr %l27
   br label %bb9
 trap0:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.12, i64 0, i64 0, i64 0)
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.3, i64 0, i64 0, i64 0)
   unreachable
 trap2:
-  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.13, i64 0, i64 0, i64 0)
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.4, i64 0, i64 0, i64 0)
   unreachable
 }
 
 define internal void @"_I3:std10:std.sys.rt22:std.sys.rt.write_bytes"(ptr %arg0, i64 %arg1) nounwind #0 {
 bb0:
-  %l0 = alloca %t5, align 8
+  %l0 = alloca %t1, align 8
   %l1 = alloca i64, align 8
   %l2 = alloca i64, align 8
   %l3 = alloca i1, align 1
@@ -2110,9 +1746,9 @@ bb0:
   %l8 = alloca i64, align 8
   %l9 = alloca i64, align 8
   %l10 = alloca i64, align 8
-  %tmp0 = insertvalue %t5 zeroinitializer, ptr %arg0, 0
-  %tmp1 = insertvalue %t5 %tmp0, i64 %arg1, 1
-  store %t5 %tmp1, ptr %l0
+  %tmp0 = insertvalue %t1 zeroinitializer, ptr %arg0, 0
+  %tmp1 = insertvalue %t1 %tmp0, i64 %arg1, 1
+  store %t1 %tmp1, ptr %l0
   %tmp2 = getelementptr i8, ptr %l0, i64 8
   %tmp3 = load i64, ptr %tmp2
   store i64 %tmp3, ptr %l1
@@ -2152,41 +1788,41 @@ bb4:
 
 define internal void @"_I3:std10:std.sys.rt25:std.sys.rt.no_args_memory"() nounwind cold noreturn #0 {
 bb0:
-  %tmp0 = alloca %t6, align 1
-  %tmp3 = alloca %t19, align 8
+  %tmp0 = alloca %t2, align 1
+  %tmp3 = alloca %t15, align 8
   %l0 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l0
   %l1 = alloca [16 x i8], align 8
   store [16 x i8] zeroinitializer, ptr %l1
-  %l2 = alloca %t19, align 8
-  %l3 = alloca %t19, align 8
+  %l2 = alloca %t15, align 8
+  %l3 = alloca %t15, align 8
   %l4 = alloca ptr, align 8
-  store %t6 zeroinitializer, ptr %tmp0
+  store %t2 zeroinitializer, ptr %tmp0
   store i8 11, ptr %tmp0
-  %tmp1 = load %t6, ptr %tmp0
-  store %t6 %tmp1, ptr %l0
-  %tmp2 = load %t6, ptr %l0
-  store %t6 %tmp2, ptr %l1
-  store %t19 zeroinitializer, ptr %tmp3
-  %tmp4 = load %t6, ptr %l1
+  %tmp1 = load %t2, ptr %tmp0
+  store %t2 %tmp1, ptr %l0
+  %tmp2 = load %t2, ptr %l0
+  store %t2 %tmp2, ptr %l1
+  store %t15 zeroinitializer, ptr %tmp3
+  %tmp4 = load %t2, ptr %l1
   %tmp5 = getelementptr i8, ptr %tmp3, i64 0
-  store %t6 %tmp4, ptr %tmp5
-  %tmp6 = insertvalue %t5 zeroinitializer, ptr @str.31, 0
-  %tmp7 = insertvalue %t5 %tmp6, i64 9, 1
+  store %t2 %tmp4, ptr %tmp5
+  %tmp6 = insertvalue %t1 zeroinitializer, ptr @str.23, 0
+  %tmp7 = insertvalue %t1 %tmp6, i64 9, 1
   %tmp8 = getelementptr i8, ptr %tmp3, i64 8
-  store %t5 %tmp7, ptr %tmp8
+  store %t1 %tmp7, ptr %tmp8
   %tmp9 = getelementptr i8, ptr %tmp3, i64 24
   store i32 0, ptr %tmp9
   %tmp10 = getelementptr i8, ptr %tmp3, i64 28
   store i32 0, ptr %tmp10
-  %tmp11 = insertvalue %t5 zeroinitializer, ptr @str.32, 0
-  %tmp12 = insertvalue %t5 %tmp11, i64 20, 1
+  %tmp11 = insertvalue %t1 zeroinitializer, ptr @str.24, 0
+  %tmp12 = insertvalue %t1 %tmp11, i64 20, 1
   %tmp13 = getelementptr i8, ptr %tmp3, i64 32
-  store %t5 %tmp12, ptr %tmp13
-  %tmp14 = load %t19, ptr %tmp3
-  store %t19 %tmp14, ptr %l2
-  %tmp15 = load %t19, ptr %l2
-  store %t19 %tmp15, ptr %l3
+  store %t1 %tmp12, ptr %tmp13
+  %tmp14 = load %t15, ptr %tmp3
+  store %t15 %tmp14, ptr %l2
+  %tmp15 = load %t15, ptr %l2
+  store %t15 %tmp15, ptr %l3
   store ptr %l3, ptr %l4
   %tmp16 = load ptr, ptr %l4
   call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr %tmp16, i64 0, i64 0, i64 0)
@@ -2274,21 +1910,35 @@ bb1:
   ret i64 %tmp8
 }
 
-define internal %t8 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"() nounwind #0 {
+define internal %t4 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"() nounwind #0 {
 bb0:
-  %tmp0 = alloca %t8, align 1
-  %l0 = alloca %t8, align 1
-  %l1 = alloca %t8, align 1
-  store %t8 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t8, ptr %tmp0
-  store %t8 %tmp1, ptr %l0
-  %tmp2 = load %t8, ptr %l0
-  store %t8 %tmp2, ptr %l1
-  %tmp3 = load %t8, ptr %l1
-  ret %t8 %tmp3
+  %tmp0 = alloca %t4, align 1
+  %l0 = alloca %t4, align 1
+  %l1 = alloca %t4, align 1
+  store %t4 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t4, ptr %tmp0
+  store %t4 %tmp1, ptr %l0
+  %tmp2 = load %t4, ptr %l0
+  store %t4 %tmp2, ptr %l1
+  %tmp3 = load %t4, ptr %l1
+  ret %t4 %tmp3
 }
 
-define internal %t11 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"() nounwind #0 {
+define internal %t7 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"() nounwind #0 {
+bb0:
+  %tmp0 = alloca %t7, align 1
+  %l0 = alloca %t7, align 1
+  %l1 = alloca %t7, align 1
+  store %t7 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t7, ptr %tmp0
+  store %t7 %tmp1, ptr %l0
+  %tmp2 = load %t7, ptr %l0
+  store %t7 %tmp2, ptr %l1
+  %tmp3 = load %t7, ptr %l1
+  ret %t7 %tmp3
+}
+
+define internal %t11 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"() nounwind #0 {
 bb0:
   %tmp0 = alloca %t11, align 1
   %l0 = alloca %t11, align 1
@@ -2302,63 +1952,7 @@ bb0:
   ret %t11 %tmp3
 }
 
-define internal %t15 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"() nounwind #0 {
-bb0:
-  %tmp0 = alloca %t15, align 1
-  %l0 = alloca %t15, align 1
-  %l1 = alloca %t15, align 1
-  store %t15 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t15, ptr %tmp0
-  store %t15 %tmp1, ptr %l0
-  %tmp2 = load %t15, ptr %l0
-  store %t15 %tmp2, ptr %l1
-  %tmp3 = load %t15, ptr %l1
-  ret %t15 %tmp3
-}
-
-define internal %t16 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"() nounwind #0 {
-bb0:
-  %tmp0 = alloca %t16, align 1
-  %l0 = alloca %t16, align 1
-  %l1 = alloca %t16, align 1
-  store %t16 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t16, ptr %tmp0
-  store %t16 %tmp1, ptr %l0
-  %tmp2 = load %t16, ptr %l0
-  store %t16 %tmp2, ptr %l1
-  %tmp3 = load %t16, ptr %l1
-  ret %t16 %tmp3
-}
-
-define internal %t10 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"() nounwind #0 {
-bb0:
-  %tmp0 = alloca %t10, align 1
-  %l0 = alloca %t10, align 1
-  %l1 = alloca %t10, align 1
-  store %t10 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t10, ptr %tmp0
-  store %t10 %tmp1, ptr %l0
-  %tmp2 = load %t10, ptr %l0
-  store %t10 %tmp2, ptr %l1
-  %tmp3 = load %t10, ptr %l1
-  ret %t10 %tmp3
-}
-
-define internal %t9 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"() nounwind #0 {
-bb0:
-  %tmp0 = alloca %t9, align 1
-  %l0 = alloca %t9, align 1
-  %l1 = alloca %t9, align 1
-  store %t9 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t9, ptr %tmp0
-  store %t9 %tmp1, ptr %l0
-  %tmp2 = load %t9, ptr %l0
-  store %t9 %tmp2, ptr %l1
-  %tmp3 = load %t9, ptr %l1
-  ret %t9 %tmp3
-}
-
-define internal %t12 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"() nounwind #0 {
+define internal %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"() nounwind #0 {
 bb0:
   %tmp0 = alloca %t12, align 1
   %l0 = alloca %t12, align 1
@@ -2372,37 +1966,443 @@ bb0:
   ret %t12 %tmp3
 }
 
-define internal %t14 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"() nounwind #0 {
+define internal %t6 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"() nounwind #0 {
 bb0:
-  %tmp0 = alloca %t14, align 1
-  %l0 = alloca %t14, align 1
-  %l1 = alloca %t14, align 1
-  store %t14 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t14, ptr %tmp0
-  store %t14 %tmp1, ptr %l0
-  %tmp2 = load %t14, ptr %l0
-  store %t14 %tmp2, ptr %l1
-  %tmp3 = load %t14, ptr %l1
-  ret %t14 %tmp3
+  %tmp0 = alloca %t6, align 1
+  %l0 = alloca %t6, align 1
+  %l1 = alloca %t6, align 1
+  store %t6 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t6, ptr %tmp0
+  store %t6 %tmp1, ptr %l0
+  %tmp2 = load %t6, ptr %l0
+  store %t6 %tmp2, ptr %l1
+  %tmp3 = load %t6, ptr %l1
+  ret %t6 %tmp3
 }
 
-define internal %t13 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"() nounwind #0 {
+define internal %t5 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"() nounwind #0 {
 bb0:
-  %tmp0 = alloca %t13, align 1
-  %l0 = alloca %t13, align 1
-  %l1 = alloca %t13, align 1
-  store %t13 zeroinitializer, ptr %tmp0
-  %tmp1 = load %t13, ptr %tmp0
-  store %t13 %tmp1, ptr %l0
-  %tmp2 = load %t13, ptr %l0
-  store %t13 %tmp2, ptr %l1
-  %tmp3 = load %t13, ptr %l1
-  ret %t13 %tmp3
+  %tmp0 = alloca %t5, align 1
+  %l0 = alloca %t5, align 1
+  %l1 = alloca %t5, align 1
+  store %t5 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t5, ptr %tmp0
+  store %t5 %tmp1, ptr %l0
+  %tmp2 = load %t5, ptr %l0
+  store %t5 %tmp2, ptr %l1
+  %tmp3 = load %t5, ptr %l1
+  ret %t5 %tmp3
+}
+
+define internal %t8 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"() nounwind #0 {
+bb0:
+  %tmp0 = alloca %t8, align 1
+  %l0 = alloca %t8, align 1
+  %l1 = alloca %t8, align 1
+  store %t8 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t8, ptr %tmp0
+  store %t8 %tmp1, ptr %l0
+  %tmp2 = load %t8, ptr %l0
+  store %t8 %tmp2, ptr %l1
+  %tmp3 = load %t8, ptr %l1
+  ret %t8 %tmp3
+}
+
+define internal %t10 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"() nounwind #0 {
+bb0:
+  %tmp0 = alloca %t10, align 1
+  %l0 = alloca %t10, align 1
+  %l1 = alloca %t10, align 1
+  store %t10 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t10, ptr %tmp0
+  store %t10 %tmp1, ptr %l0
+  %tmp2 = load %t10, ptr %l0
+  store %t10 %tmp2, ptr %l1
+  %tmp3 = load %t10, ptr %l1
+  ret %t10 %tmp3
+}
+
+define internal %t9 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"() nounwind #0 {
+bb0:
+  %tmp0 = alloca %t9, align 1
+  %l0 = alloca %t9, align 1
+  %l1 = alloca %t9, align 1
+  store %t9 zeroinitializer, ptr %tmp0
+  %tmp1 = load %t9, ptr %tmp0
+  store %t9 %tmp1, ptr %l0
+  %tmp2 = load %t9, ptr %l0
+  store %t9 %tmp2, ptr %l1
+  %tmp3 = load %t9, ptr %l1
+  ret %t9 %tmp3
+}
+
+define internal i8 @"_I5:small5:small10:small.main"(ptr %arg0) nounwind #0 {
+bb0:
+  %tmp0 = alloca %t16, align 8
+  %tmp28 = alloca %t17, align 8
+  %tmp56 = alloca [8 x i8], align 8
+  %l0 = alloca ptr, align 8
+  %l1 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l1
+  %l2 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l2
+  %l3 = alloca i64, align 8
+  %l4 = alloca i64, align 8
+  %l5 = alloca i64, align 8
+  %l6 = alloca i64, align 8
+  %l7 = alloca i1, align 1
+  %l8 = alloca i1, align 1
+  %l9 = alloca ptr, align 8
+  %l10 = alloca i64, align 8
+  %l11 = alloca i64, align 8
+  %l12 = alloca i1, align 1
+  %l13 = alloca i1, align 1
+  %l14 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l14
+  %l15 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l15
+  %l16 = alloca %t18, align 8
+  %l17 = alloca i64, align 8
+  %l18 = alloca i64, align 8
+  %l19 = alloca i1, align 1
+  %l20 = alloca i1, align 1
+  %l21 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l21
+  %l22 = alloca i64, align 8
+  %l23 = alloca i1, align 1
+  %l24 = alloca i1, align 1
+  %l25 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l25
+  %l26 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l26
+  %l27 = alloca i8, align 1
+  %l28 = alloca i1, align 1
+  %l29 = alloca i64, align 8
+  %l30 = alloca i64, align 8
+  %l31 = alloca i1, align 1
+  %l32 = alloca i1, align 1
+  %l33 = alloca i8, align 1
+  %l34 = alloca i1, align 1
+  store ptr %arg0, ptr %l0
+  store %t16 zeroinitializer, ptr %tmp0
+  %tmp1 = getelementptr i8, ptr %tmp0, i64 0
+  store i64 1, ptr %tmp1
+  %tmp2 = getelementptr i8, ptr %tmp0, i64 8
+  store i64 2, ptr %tmp2
+  %tmp3 = load %t16, ptr %tmp0
+  store %t16 %tmp3, ptr %l1
+  %tmp4 = load %t16, ptr %l1
+  store %t16 %tmp4, ptr %l2
+  %tmp5 = getelementptr i8, ptr %l2, i64 0
+  %tmp6 = load i64, ptr %tmp5
+  store i64 %tmp6, ptr %l3
+  %tmp7 = getelementptr i8, ptr %l2, i64 8
+  %tmp8 = load i64, ptr %tmp7
+  store i64 %tmp8, ptr %l4
+  %tmp9 = load i64, ptr %l3
+  %tmp10 = load i64, ptr %l4
+  %tmp11 = add i64 %tmp9, %tmp10
+  store i64 %tmp11, ptr %l5
+  %tmp12 = load i64, ptr %l3
+  %tmp13 = load i64, ptr %l4
+  %tmp14 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %tmp12, i64 %tmp13)
+  %tmp15 = extractvalue { i64, i1 } %tmp14, 1
+  br i1 %tmp15, label %trap0, label %cont1
+bb1:
+  store ptr %l2, ptr %l9
+  %tmp21 = load ptr, ptr %l9
+  %tmp22 = call i64 @"_I5:small5:small16:small.Pair[].sum12:small.Pair[]"(ptr %tmp21)
+  store i64 %tmp22, ptr %l10
+  br label %bb3
+bb2:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.6, i64 0, i64 0, i64 0)
+  unreachable
+bb3:
+  %tmp23 = load i64, ptr %l10
+  store i64 %tmp23, ptr %l11
+  %tmp24 = load i64, ptr %l11
+  %tmp25 = icmp eq i64 %tmp24, 3
+  store i1 %tmp25, ptr %l12
+  %tmp26 = load i1, ptr %l12
+  store i1 %tmp26, ptr %l13
+  %tmp27 = load i1, ptr %l13
+  br i1 %tmp27, label %bb4, label %bb5
+bb4:
+  store %t17 zeroinitializer, ptr %tmp28
+  %tmp29 = getelementptr %t17, ptr %tmp28, i64 0, i64 0
+  store i64 3, ptr %tmp29
+  %tmp30 = getelementptr %t17, ptr %tmp28, i64 0, i64 1
+  store i64 4, ptr %tmp30
+  %tmp31 = load %t17, ptr %tmp28
+  store %t17 %tmp31, ptr %l14
+  %tmp32 = load %t17, ptr %l14
+  store %t17 %tmp32, ptr %l15
+  %tmp33 = getelementptr %t17, ptr %l15, i64 0, i64 0
+  %tmp34 = getelementptr i64, ptr %tmp33, i64 0
+  %tmp35 = sub i64 2, 0
+  %tmp36 = insertvalue %t18 zeroinitializer, ptr %tmp34, 0
+  %tmp37 = insertvalue %t18 %tmp36, i64 %tmp35, 1
+  store %t18 %tmp37, ptr %l16
+  %tmp38 = load %t18, ptr %l16
+  %tmp39 = extractvalue %t18 %tmp38, 0
+  %tmp40 = extractvalue %t18 %tmp38, 1
+  %tmp41 = call i64 @"_I5:small5:small10:small.pick"(ptr %tmp39, i64 %tmp40, i64 1)
+  store i64 %tmp41, ptr %l17
+  br label %bb6
+bb5:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.7, i64 0, i64 0, i64 0)
+  unreachable
+bb6:
+  %tmp42 = load i64, ptr %l17
+  store i64 %tmp42, ptr %l18
+  %tmp43 = load i64, ptr %l18
+  %tmp44 = icmp eq i64 %tmp43, 4
+  store i1 %tmp44, ptr %l19
+  %tmp45 = load i1, ptr %l19
+  store i1 %tmp45, ptr %l20
+  %tmp46 = load i1, ptr %l20
+  br i1 %tmp46, label %bb7, label %bb8
+bb7:
+  store %t17 zeroinitializer, ptr %l21
+  %tmp47 = getelementptr %t17, ptr %l21, i64 0, i64 0
+  %tmp48 = load i64, ptr %tmp47
+  store i64 %tmp48, ptr %l22
+  %tmp49 = load i64, ptr %l22
+  %tmp50 = icmp eq i64 %tmp49, 0
+  store i1 %tmp50, ptr %l23
+  %tmp51 = load i1, ptr %l23
+  store i1 %tmp51, ptr %l24
+  %tmp52 = load i1, ptr %l24
+  br i1 %tmp52, label %bb9, label %bb10
+bb8:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.8, i64 0, i64 0, i64 0)
+  unreachable
+bb9:
+  %tmp53 = call { i8, i64 } @"_I5:small5:small11:small.maybe"(i64 3)
+  %tmp54 = extractvalue { i8, i64 } %tmp53, 0
+  store i8 %tmp54, ptr %l25
+  %tmp55 = extractvalue { i8, i64 } %tmp53, 1
+  store [8 x i8] zeroinitializer, ptr %tmp56
+  store i64 %tmp55, ptr %tmp56
+  %tmp57 = getelementptr i8, ptr %l25, i64 8
+  %tmp58 = load i64, ptr %tmp56, align 1
+  store i64 %tmp58, ptr %tmp57, align 1
+  br label %bb11
+bb10:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.9, i64 0, i64 0, i64 0)
+  unreachable
+bb11:
+  %tmp59 = load %t19, ptr %l25
+  store %t19 %tmp59, ptr %l26
+  %tmp60 = load i8, ptr %l26
+  store i8 %tmp60, ptr %l27
+  %tmp61 = load i8, ptr %l27
+  %tmp62 = icmp eq i8 %tmp61, 1
+  store i1 %tmp62, ptr %l28
+  %tmp63 = load i1, ptr %l28
+  br i1 %tmp63, label %bb14, label %bb15
+bb12:
+  ret i8 0
+bb13:
+  %tmp64 = load i8, ptr %l26
+  store i8 %tmp64, ptr %l33
+  %tmp65 = load i8, ptr %l33
+  %tmp66 = icmp eq i8 %tmp65, 0
+  store i1 %tmp66, ptr %l34
+  %tmp67 = load i1, ptr %l34
+  br i1 %tmp67, label %bb19, label %bb20
+bb14:
+  %tmp68 = getelementptr i8, ptr %l26, i64 8
+  %tmp69 = load i64, ptr %tmp68
+  store i64 %tmp69, ptr %l29
+  %tmp70 = load i64, ptr %l29
+  store i64 %tmp70, ptr %l30
+  %tmp71 = load i64, ptr %l30
+  %tmp72 = icmp eq i64 %tmp71, 3
+  store i1 %tmp72, ptr %l31
+  %tmp73 = load i1, ptr %l31
+  store i1 %tmp73, ptr %l32
+  %tmp74 = load i1, ptr %l32
+  br i1 %tmp74, label %bb16, label %bb17
+bb15:
+  br label %bb13
+bb16:
+  br label %bb12
+bb17:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.10, i64 0, i64 0, i64 0)
+  unreachable
+bb18:
+  unreachable
+bb19:
+  br i1 false, label %bb21, label %bb22
+bb20:
+  br label %bb18
+bb21:
+  br label %bb12
+bb22:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.11, i64 0, i64 0, i64 0)
+  unreachable
+cont1:
+  %tmp16 = load i64, ptr %l5
+  store i64 %tmp16, ptr %l6
+  %tmp17 = load i64, ptr %l6
+  %tmp18 = icmp eq i64 %tmp17, 3
+  store i1 %tmp18, ptr %l7
+  %tmp19 = load i1, ptr %l7
+  store i1 %tmp19, ptr %l8
+  %tmp20 = load i1, ptr %l8
+  br i1 %tmp20, label %bb1, label %bb2
+trap0:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.5, i64 0, i64 0, i64 0)
+  unreachable
+}
+
+define internal i64 @"_I5:small5:small10:small.pick"(ptr %arg0, i64 %arg1, i64 %arg2) nounwind #0 {
+bb0:
+  %l0 = alloca %t18, align 8
+  %l1 = alloca i64, align 8
+  %l2 = alloca i64, align 8
+  %l3 = alloca i64, align 8
+  %tmp0 = insertvalue %t18 zeroinitializer, ptr %arg0, 0
+  %tmp1 = insertvalue %t18 %tmp0, i64 %arg1, 1
+  store %t18 %tmp1, ptr %l0
+  store i64 %arg2, ptr %l1
+  %tmp2 = load i64, ptr %l1
+  store i64 %tmp2, ptr %l2
+  %tmp3 = getelementptr i8, ptr %l0, i64 8
+  %tmp4 = load i64, ptr %tmp3
+  %tmp5 = load i64, ptr %l2
+  %tmp6 = icmp slt i64 %tmp5, 0
+  %tmp7 = icmp uge i64 %tmp5, %tmp4
+  %tmp8 = or i1 %tmp6, %tmp7
+  br i1 %tmp8, label %trap0, label %cont1
+cont1:
+  %tmp9 = load i64, ptr %l2
+  %tmp11 = load ptr, ptr %l0
+  %tmp10 = getelementptr i64, ptr %tmp11, i64 %tmp9
+  %tmp12 = load i64, ptr %tmp10
+  store i64 %tmp12, ptr %l3
+  %tmp13 = load i64, ptr %l3
+  ret i64 %tmp13
+trap0:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.12, i64 %tmp5, i64 %tmp4, i64 0)
+  unreachable
+}
+
+define internal { i8, i64 } @"_I5:small5:small11:small.maybe"(i64 %arg0) nounwind #0 {
+bb0:
+  %tmp6 = alloca %t19, align 8
+  %tmp12 = alloca %t19, align 8
+  %tmp14 = alloca [8 x i8], align 8
+  %tmp20 = alloca %t19, align 8
+  %tmp24 = alloca %t19, align 8
+  %tmp26 = alloca [8 x i8], align 8
+  %l0 = alloca i64, align 8
+  %l1 = alloca i64, align 8
+  %l2 = alloca i1, align 1
+  %l3 = alloca i1, align 1
+  %l4 = alloca i64, align 8
+  %l5 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l5
+  %l6 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l6
+  %l7 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l7
+  %l8 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l8
+  store i64 %arg0, ptr %l0
+  %tmp0 = load i64, ptr %l0
+  store i64 %tmp0, ptr %l1
+  %tmp1 = load i64, ptr %l1
+  %tmp2 = icmp sgt i64 %tmp1, 0
+  store i1 %tmp2, ptr %l2
+  %tmp3 = load i1, ptr %l2
+  store i1 %tmp3, ptr %l3
+  %tmp4 = load i1, ptr %l3
+  br i1 %tmp4, label %bb1, label %bb2
+bb1:
+  %tmp5 = load i64, ptr %l0
+  store i64 %tmp5, ptr %l4
+  store %t19 zeroinitializer, ptr %tmp6
+  store i8 1, ptr %tmp6
+  %tmp7 = load i64, ptr %l4
+  %tmp8 = getelementptr i8, ptr %tmp6, i64 8
+  store i64 %tmp7, ptr %tmp8
+  %tmp9 = load %t19, ptr %tmp6
+  store %t19 %tmp9, ptr %l5
+  %tmp10 = load %t19, ptr %l5
+  store %t19 %tmp10, ptr %l6
+  %tmp11 = load %t19, ptr %l6
+  store %t19 %tmp11, ptr %tmp12
+  %tmp13 = load i8, ptr %tmp12
+  store [8 x i8] zeroinitializer, ptr %tmp14
+  %tmp15 = getelementptr i8, ptr %tmp12, i64 8
+  %tmp16 = load i64, ptr %tmp15, align 1
+  store i64 %tmp16, ptr %tmp14, align 1
+  %tmp17 = load i64, ptr %tmp14
+  %tmp18 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp13, 0
+  %tmp19 = insertvalue { i8, i64 } %tmp18, i64 %tmp17, 1
+  ret { i8, i64 } %tmp19
+bb2:
+  br label %bb3
+bb3:
+  store %t19 zeroinitializer, ptr %tmp20
+  store i8 0, ptr %tmp20
+  %tmp21 = load %t19, ptr %tmp20
+  store %t19 %tmp21, ptr %l7
+  %tmp22 = load %t19, ptr %l7
+  store %t19 %tmp22, ptr %l8
+  %tmp23 = load %t19, ptr %l8
+  store %t19 %tmp23, ptr %tmp24
+  %tmp25 = load i8, ptr %tmp24
+  store [8 x i8] zeroinitializer, ptr %tmp26
+  %tmp27 = getelementptr i8, ptr %tmp24, i64 8
+  %tmp28 = load i64, ptr %tmp27, align 1
+  store i64 %tmp28, ptr %tmp26, align 1
+  %tmp29 = load i64, ptr %tmp26
+  %tmp30 = insertvalue { i8, i64 } zeroinitializer, i8 %tmp25, 0
+  %tmp31 = insertvalue { i8, i64 } %tmp30, i64 %tmp29, 1
+  ret { i8, i64 } %tmp31
+}
+
+define internal i64 @"_I5:small5:small16:small.Pair[].sum12:small.Pair[]"(ptr %arg0) nounwind #0 {
+bb0:
+  %l0 = alloca ptr, align 8
+  %l1 = alloca i64, align 8
+  %l2 = alloca i64, align 8
+  %l3 = alloca i64, align 8
+  %l4 = alloca i64, align 8
+  store ptr %arg0, ptr %l0
+  %tmp0 = load ptr, ptr %l0
+  %tmp1 = getelementptr i8, ptr %tmp0, i64 0
+  %tmp2 = load i64, ptr %tmp1
+  store i64 %tmp2, ptr %l1
+  %tmp3 = load ptr, ptr %l0
+  %tmp4 = getelementptr i8, ptr %tmp3, i64 8
+  %tmp5 = load i64, ptr %tmp4
+  store i64 %tmp5, ptr %l2
+  %tmp6 = load i64, ptr %l1
+  %tmp7 = load i64, ptr %l2
+  %tmp8 = add i64 %tmp6, %tmp7
+  store i64 %tmp8, ptr %l3
+  %tmp9 = load i64, ptr %l1
+  %tmp10 = load i64, ptr %l2
+  %tmp11 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %tmp9, i64 %tmp10)
+  %tmp12 = extractvalue { i64, i1 } %tmp11, 1
+  br i1 %tmp12, label %trap0, label %cont1
+cont1:
+  %tmp13 = load i64, ptr %l3
+  store i64 %tmp13, ptr %l4
+  %tmp14 = load i64, ptr %l4
+  ret i64 %tmp14
+trap0:
+  call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.13, i64 0, i64 0, i64 0)
+  unreachable
 }
 
 define internal i32 @_I.entry(ptr %env) nounwind #0 {
 entry:
-  %r = call i8 @"_I1:t1:t6:t.main"(ptr %env)
+  %r = call i8 @"_I5:small5:small10:small.main"(ptr %env)
   %status = zext i8 %r to i32
   ret i32 %status
 }

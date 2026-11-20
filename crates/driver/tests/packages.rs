@@ -441,3 +441,26 @@ fn all_targets_merges_identical_diagnostics() {
     assert_eq!(targets.len(), 3);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_file_with_no_manifest_is_named_after_its_stem_made_an_identifier() {
+    // tools.md section 1: uppercase is lowered, other characters become `_`, a leading
+    // digit gets a `_` before it, and a keyword or type name gets one after it.
+    for (file, name) in [
+        ("solo.ingot", "solo"),
+        ("my-tool.ingot", "my_tool"),
+        ("parse.fixed.ingot", "parse_fixed"),
+        ("Report.ingot", "report"),
+        ("2d.ingot", "_2d"),
+        ("test.ingot", "test_"),
+        ("match.ingot", "match_"),
+        ("i64.ingot", "i64_"),
+        ("caf\u{e9}.ingot", "caf_"),
+    ] {
+        assert_eq!(
+            ingot_driver::loader::single_file_package_name(std::path::Path::new(file)),
+            name,
+            "{file}"
+        );
+    }
+}

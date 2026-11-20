@@ -1,8 +1,8 @@
-1	_I1:t1:t10:t.by_bound12:t.Box[[i64]]
-1	_I1:t1:t10:t.by_bound13:t.Box[[bool]]
-1	_I1:t1:t25:t.Box[[g[t.impl.T]]].name3:i6412:t.Box[[i64]]
-1	_I1:t1:t25:t.Box[[g[t.impl.T]]].name4:bool13:t.Box[[bool]]
-1	_I1:t1:t35:{method table t.Box[[i64]] t.Named}
-1	_I1:t1:t36:{method table t.Box[[bool]] t.Named}
-0	_I1:t1:t5:t.run
-0	_I1:t1:t8:t.by_dyn
+0	_I12:generic_impl12:generic_impl16:generic_impl.run
+0	_I12:generic_impl12:generic_impl19:generic_impl.by_dyn
+1	_I12:generic_impl12:generic_impl21:generic_impl.by_bound23:generic_impl.Box[[i64]]
+1	_I12:generic_impl12:generic_impl21:generic_impl.by_bound24:generic_impl.Box[[bool]]
+1	_I12:generic_impl12:generic_impl47:generic_impl.Box[[g[generic_impl.impl.T]]].name3:i6423:generic_impl.Box[[i64]]
+1	_I12:generic_impl12:generic_impl47:generic_impl.Box[[g[generic_impl.impl.T]]].name4:bool24:generic_impl.Box[[bool]]
+1	_I12:generic_impl12:generic_impl57:{method table generic_impl.Box[[i64]] generic_impl.Named}
+1	_I12:generic_impl12:generic_impl58:{method table generic_impl.Box[[bool]] generic_impl.Named}

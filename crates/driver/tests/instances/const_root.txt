@@ -1,3 +1,3 @@
-0	_I1:t1:t5:t.run
-1	_I1:t1:t6:t.make3:i64
-0	_I1:t1:t8:t.answer
+0	_I10:const_root10:const_root14:const_root.run
+1	_I10:const_root10:const_root15:const_root.make3:i64
+0	_I10:const_root10:const_root17:const_root.answer

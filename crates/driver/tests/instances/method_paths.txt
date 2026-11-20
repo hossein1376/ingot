@@ -1,6 +1,6 @@
-1	_I1:t1:t10:t.by_bound8:t.Item[]
-0	_I1:t1:t13:t.Item[].name8:t.Item[]
-0	_I1:t1:t15:t.Item[].unused8:t.Item[]
-1	_I1:t1:t31:{method table t.Item[] t.Named}
-0	_I1:t1:t5:t.run
-0	_I1:t1:t8:t.by_dyn
+0	_I12:method_paths12:method_paths16:method_paths.run
+0	_I12:method_paths12:method_paths19:method_paths.by_dyn
+1	_I12:method_paths12:method_paths21:method_paths.by_bound19:method_paths.Item[]
+0	_I12:method_paths12:method_paths24:method_paths.Item[].name19:method_paths.Item[]
+0	_I12:method_paths12:method_paths26:method_paths.Item[].unused19:method_paths.Item[]
+1	_I12:method_paths12:method_paths53:{method table method_paths.Item[] method_paths.Named}

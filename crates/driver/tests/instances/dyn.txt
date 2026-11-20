@@ -1,4 +1,4 @@
-0	_I1:t1:t13:t.Item[].name8:t.Item[]
-1	_I1:t1:t31:{method table t.Item[] t.Named}
-0	_I1:t1:t5:t.run
-0	_I1:t1:t6:t.call
+0	_I4:dyn_4:dyn_16:dyn_.Item[].name11:dyn_.Item[]
+1	_I4:dyn_4:dyn_37:{method table dyn_.Item[] dyn_.Named}
+0	_I4:dyn_4:dyn_8:dyn_.run
+0	_I4:dyn_4:dyn_9:dyn_.call

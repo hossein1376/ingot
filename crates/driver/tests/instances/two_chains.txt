@@ -1,4 +1,4 @@
-0	_I1:t1:t5:t.run
-2	_I1:t1:t6:t.leaf3:i64
-1	_I1:t1:t6:t.long3:i64
-1	_I1:t1:t7:t.short3:i64
+0	_I10:two_chains10:two_chains14:two_chains.run
+2	_I10:two_chains10:two_chains15:two_chains.leaf3:i64
+1	_I10:two_chains10:two_chains15:two_chains.long3:i64
+1	_I10:two_chains10:two_chains16:two_chains.short3:i64

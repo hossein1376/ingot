@@ -1,3 +1,3 @@
-2	_I1:t1:t18:t.bump.{par for 1}3:i64
-0	_I1:t1:t5:t.run
-1	_I1:t1:t6:t.bump3:i64
+0	_I6:parfor6:parfor10:parfor.run
+1	_I6:parfor6:parfor11:parfor.bump3:i64
+2	_I6:parfor6:parfor23:parfor.bump.{par for 1}3:i64
