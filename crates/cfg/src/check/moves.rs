@@ -611,6 +611,7 @@ impl<'a> Cx<'a> {
         self.use_rvalue(flow, value, read_span.unwrap_or(span), defer);
         if let Some(path) = path_key(place) {
             if let Some(ty) = dest_ty
+                && !through_raw(&path)
                 && self.obligation(flow, &path, ty, 0)
             {
                 self.error(
@@ -657,6 +658,7 @@ impl<'a> Cx<'a> {
         if let Some(path) = path_key(dest) {
             let ty = self.place_ty(dest);
             if let Some(ty) = ty
+                && !through_raw(&path)
                 && self.obligation(flow, &path, ty, 0)
             {
                 self.error(
@@ -712,7 +714,7 @@ impl<'a> Cx<'a> {
         };
         let brought = match self.place_ty(place) {
             Some(ty) => {
-                if self.obligation(flow, &path, ty, 0) {
+                if !through_raw(&path) && self.obligation(flow, &path, ty, 0) {
                     self.error(
                         flow,
                         "E1004",
@@ -1746,6 +1748,14 @@ enum MoveClass {
     Normal,
     Illegal,
     Partial,
+}
+
+/// Whether a raw-pointer dereference is anywhere on the path. Storing into such a place
+/// is not checked for E1004 (02 section 10): allocator memory is not a place, the
+/// checker cannot know what it holds, and overwriting a live linear value there only
+/// leaks it.
+fn through_raw(path: &PathKey) -> bool {
+    path.proj.iter().any(|s| matches!(s, Step::Raw))
 }
 
 fn path_key(place: &Place) -> Option<PathKey> {

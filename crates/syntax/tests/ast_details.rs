@@ -281,3 +281,76 @@ fn list_items_and_when_items_end_with_their_last_token() {
         "when @target.os == .linux { fn a() {} } else { fn b() {} }"
     );
 }
+
+fn struct_named<'a>(ast: &'a Module, name: &str) -> &'a StructDecl {
+    ast.items
+        .iter()
+        .find_map(|item| match item {
+            Item::Struct(s) if s.name == name => Some(s),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no struct {name}"))
+}
+
+#[test]
+fn align_is_a_keyword_after_a_struct_header_a_field_type_and_a_static_type() {
+    let (_, ast) = module(
+        "struct Plain align(16) { a: i64 }\n\
+         struct Generic[T] align(32) { a: T }\n\
+         struct Field { a: i64 align(8), b: u8 }\n\
+         static table: [4]u8 align(64) = @zero;\n",
+    );
+    assert!(struct_named(&ast, "Plain").align.is_some());
+    assert!(struct_named(&ast, "Generic").align.is_some());
+    let field = struct_named(&ast, "Field");
+    assert!(field.fields[0].align.is_some());
+    assert!(field.fields[1].align.is_none());
+    assert!(ast.items.iter().any(|item| matches!(
+        item,
+        Item::Static(s) if s.name == "table" && s.align.is_some()
+    )));
+}
+
+#[test]
+fn align_is_an_ordinary_name_elsewhere() {
+    let (_, ast) = module(
+        "struct Pair { size: i64, align: i64 }\n\
+         struct Both align(8) { align: i64 align(8) }\n\
+         fn align(size: i64, align: i64) -> i64 { return size + align; }\n\
+         fn f(p: &Pair) -> i64 {\n\
+         let align = p.align;\n\
+         let g = fn [](align: i64) -> i64 { return align; };\n\
+         return g(align) + align(1, align);\n}\n",
+    );
+    let pair = struct_named(&ast, "Pair");
+    assert_eq!(pair.fields[1].name, "align");
+    assert!(pair.fields[1].align.is_none());
+    let both = struct_named(&ast, "Both");
+    assert!(both.align.is_some());
+    assert_eq!(both.fields[0].name, "align");
+    assert!(both.fields[0].align.is_some());
+    let function = ast
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Fn(f) if f.name == "align" => Some(f),
+            _ => None,
+        })
+        .expect("a function named align");
+    assert_eq!(function.params[1].name, "align");
+    let stmts = body_of(&ast, "f");
+    assert!(matches!(
+        &stmts[0],
+        Stmt::Let { pattern: Pattern::Bind { name, .. }, init, .. }
+            if name == "align"
+                && matches!(&init.kind, ExprKind::Field { name, .. } if name == "align")
+    ));
+}
+
+#[test]
+fn align_without_its_parentheses_is_a_syntax_error() {
+    let source = Source::new("t.ingot", "struct S align { a: i64 }\n");
+    let (tokens, _) = lex(&source);
+    let (_, diagnostics) = parse(&source, tokens);
+    assert!(!diagnostics.is_empty());
+}

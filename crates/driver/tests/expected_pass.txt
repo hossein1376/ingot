@@ -509,6 +509,7 @@ ownership/linear_field_replaced.ingot
 ownership/linear_not_consumed.fixed.ingot
 ownership/linear_not_consumed.ingot
 ownership/linear_overwritten.ingot
+ownership/linear_overwritten_through_borrow.ingot
 ownership/linear_temporary_not_consumed.ingot
 ownership/move_in_loop.ingot
 ownership/move_in_one_branch.ingot
@@ -536,6 +537,7 @@ packages/bad_module_name/main.ingot
 packages/run_error_hidden_fields/main.ingot
 packages/run_error_no_visible_fields/main.ingot
 packages/run_error_other_package/main.ingot
+packages/run_main_only_in_root_module/main.ingot
 packages/unknown_target/main.ingot
 packages/accept_git_dependency/main.ingot
 packages/accept_nested_package/main.ingot
@@ -574,6 +576,7 @@ simd/shuffle.ingot
 simd/shuffle_bad_width.ingot
 simd/shuffle_out_of_range.ingot
 simd/vector_shape_mismatch.ingot
+syntax/align_is_contextual.ingot
 syntax/block_has_no_value.ingot
 syntax/branch_block_leaves.ingot
 syntax/branch_block_reaches_end.ingot
@@ -599,6 +602,7 @@ types/array_slice_needs_borrow.ingot
 types/bad_bits.ingot
 types/bad_enum_conversion.ingot
 types/bad_zero.ingot
+types/bound_call_by_value_self.ingot
 types/builtin_module_type/main.ingot
 types/builtin_ord_composite.ingot
 types/builtin_ord_large_array.ingot
@@ -691,11 +695,14 @@ unsafe/needs_unsafe_extern.ingot
 unsafe/needs_unsafe_fn.ingot
 unsafe/needs_unsafe_from_raw.ingot
 unsafe/needs_unsafe_unchecked.ingot
+unsafe/offset_generic.ingot
 unsafe/offset_is_safe.ingot
 unsafe/offset_needs_pointer.ingot
+unsafe/offset_read_write.ingot
 unsafe/raw_pointer_cast_rejects.ingot
 unsafe/raw_pointer_casts.ingot
 unsafe/raw_round_trip.ingot
+unsafe/raw_store_linear.ingot
 unsafe/slice_ptr_alone_needs_no_unsafe.ingot
 unsafe/slice_ptr_is_safe.ingot
 unsafe/unchecked_builtins.ingot

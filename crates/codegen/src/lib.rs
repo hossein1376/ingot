@@ -619,7 +619,10 @@ impl<'p> Codegen<'p> {
                     caller,
                 )
                 .ok_or_else(|| {
-                    BuildError::NotImplemented("instances with substitution (B2)".to_string())
+                    BuildError::Internal(format!(
+                        "no instance for the call of `{}`",
+                        self.program.sema.def(def).name
+                    ))
                 })?;
                 self.add_instance(key, queue, seen)?;
             }
@@ -1465,7 +1468,12 @@ impl<'p> Codegen<'p> {
                 );
                 Ok(())
             }
-            TyKind::Param(_) | TyKind::Projection(..) => self.ni("generic instances (B2)"),
+            // Every type reaching the back end has been substituted (B2), so a parameter or
+            // projection here is a bug in whoever built the substitution.
+            TyKind::Param(_) | TyKind::Projection(..) => Err(BuildError::Internal(format!(
+                "the type `{}` reached the back end unsubstituted",
+                self.type_display(ty)
+            ))),
             TyKind::Poison => self.ni("a poisoned type"),
         }
     }
@@ -2506,7 +2514,12 @@ impl<'a, 'p> FnGen<'a, 'p> {
                     ingot_syntax::ast::UnOp::BitNot => {
                         self.emit(format!("{out} = xor {ll} {v}, -1"));
                     }
-                    _ => return self.cg.ni("this unary operation (B2)"),
+                    // CFG lowering builds `Unary` for these four only.
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "a unary rvalue that is not `-`, `-%`, `!` or `~`".to_string(),
+                        ));
+                    }
                 }
                 Ok((out, ll))
             }
@@ -4489,7 +4502,12 @@ impl<'a, 'p> FnGen<'a, 'p> {
                     "{out} = select i1 {over}, {ll} {lim}, {ll} {value}"
                 ));
             }
-            _ => return self.cg.ni("this saturating operation (B2)"),
+            // `kind` is `add`, `sub` or `mul`, and each is handled for both signednesses.
+            _ => {
+                return Err(BuildError::Internal(
+                    "a saturating operation that is not `add`, `sub` or `mul`".to_string(),
+                ));
+            }
         }
         Ok((out, ll.to_string()))
     }
@@ -4746,6 +4764,43 @@ impl<'a, 'p> FnGen<'a, 'p> {
                     BuildError::Internal("`@borrow_from_raw` without a pointer".to_string())
                 })?;
                 self.value(p)
+            }
+            "offset" => {
+                // `p + n * @sizeof(T)`, wrapping and never trapping (02 section 15): a
+                // byte `getelementptr` without `inbounds` (pipeline section 7), scaled by
+                // the layout's size, which is what `@sizeof` says.
+                let p = arg(0).ok_or_else(|| {
+                    BuildError::Internal("`@offset` without a pointer".to_string())
+                })?;
+                let n = arg(1)
+                    .ok_or_else(|| BuildError::Internal("`@offset` without a count".to_string()))?;
+                let result_ty = self.cg.resolve_ty(result_ty);
+                let elem = match self.cg.program.decls.types.kind(result_ty) {
+                    TyKind::RawPtr(_, elem) => *elem,
+                    _ => {
+                        return Err(BuildError::Internal(
+                            "`@offset` with a result that is not a raw pointer".to_string(),
+                        ));
+                    }
+                };
+                let size = self.cg.layout(elem)?.size;
+                let (pv, pll) = self.value(p)?;
+                let (nv, nll) = self.value(n)?;
+                if pll != "ptr" || nll != "i64" {
+                    return Err(BuildError::Internal(
+                        "`@offset` got a pointer or a count of the wrong type".to_string(),
+                    ));
+                }
+                let bytes = if size == 1 {
+                    nv
+                } else {
+                    let scaled = self.fresh_tmp();
+                    self.emit(format!("{scaled} = mul i64 {nv}, {size}"));
+                    scaled
+                };
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = getelementptr i8, ptr {pv}, i64 {bytes}"));
+                Ok((out, "ptr".to_string()))
             }
             "wrap" | "narrow" | "sat" | "nearest" | "bits" => {
                 let target = type_arg.ok_or_else(|| {
@@ -6163,11 +6218,13 @@ impl<'p> Codegen<'p> {
         fn_ref: &ingot_sema::typed::FnRef,
     ) -> Result<(String, bool, FnSig, Subst), BuildError> {
         let def = fn_ref.def;
-        let sig = self.program.decls.fn_sig(def).cloned().ok_or_else(|| {
-            BuildError::Internal("a call of a function with no signature".to_string())
-        })?;
         let external = self.program.sema.def(def).kind == DefKind::ExternFn;
         let mut call_subst = Subst::new();
+        // The signature that goes with the substitution is the one of the body the call
+        // reaches. A call through an interface bound names the interface's method, whose
+        // signature mentions the interface's `Self`; the instance is the impl's method,
+        // whose key binds the impl's parameters and not that `Self`.
+        let mut sig_def = def;
         let symbol = if external {
             self.program.sema.def(def).name.clone()
         } else {
@@ -6178,8 +6235,12 @@ impl<'p> Codegen<'p> {
                 &self.subst,
             )
             .ok_or_else(|| {
-                BuildError::NotImplemented("instances with substitution (B2)".to_string())
+                BuildError::Internal(format!(
+                    "no instance for the call of `{}`",
+                    self.program.sema.def(def).name
+                ))
             })?;
+            sig_def = key.owner;
             call_subst = key.subst.clone();
             self.symbols.get(&key).cloned().ok_or_else(|| {
                 BuildError::Internal(format!(
@@ -6188,6 +6249,9 @@ impl<'p> Codegen<'p> {
                 ))
             })?
         };
+        let sig = self.program.decls.fn_sig(sig_def).cloned().ok_or_else(|| {
+            BuildError::Internal("a call of a function with no signature".to_string())
+        })?;
         if external {
             self.check_c_abi(&sig)?;
             let ret = sig.ret;
@@ -6215,23 +6279,20 @@ impl<'p> Codegen<'p> {
     }
 
     fn fn_value_ty(&mut self, fn_ref: &ingot_sema::typed::FnRef) -> Result<TypeId, BuildError> {
-        let sig = self
-            .program
-            .decls
-            .fn_sig(fn_ref.def)
-            .cloned()
-            .ok_or_else(|| {
-                BuildError::Internal("a function value with no signature".to_string())
-            })?;
-        let ext = self.program.sema.def(fn_ref.def).kind == DefKind::ExternFn || sig.mods.export;
-        let subst = ingot_cfg::instances::callee_key(
+        // As in `resolve_fn`: the signature of the body the value reaches goes with the
+        // substitution of its key.
+        let key = ingot_cfg::instances::callee_key(
             self.program.sema,
             &mut *self.program.decls,
             fn_ref,
             &self.subst,
-        )
-        .map(|k| k.subst)
-        .unwrap_or_default();
+        );
+        let sig_def = key.as_ref().map_or(fn_ref.def, |k| k.owner);
+        let subst = key.map(|k| k.subst).unwrap_or_default();
+        let sig = self.program.decls.fn_sig(sig_def).cloned().ok_or_else(|| {
+            BuildError::Internal("a function value with no signature".to_string())
+        })?;
+        let ext = self.program.sema.def(fn_ref.def).kind == DefKind::ExternFn || sig.mods.export;
         let params = sig
             .params
             .iter()
@@ -7518,7 +7579,10 @@ impl<'p> Codegen<'p> {
         } else if body.sig.params.len() == 1 {
             let p = body.sig.params[0].ty;
             if !matches!(self.program.decls.types.kind(p), TyKind::Ref(..)) {
-                return self.ni("main's parameter is not `&Env` (B1)");
+                return Err(BuildError::Internal(
+                    "main's parameter is not a reference (E0514 should have rejected it)"
+                        .to_string(),
+                ));
             }
             format!(
                 "call {} {}(ptr %env)",
@@ -7526,7 +7590,9 @@ impl<'p> Codegen<'p> {
                 global_ref(&symbol)
             )
         } else {
-            return self.ni("main with more than one parameter (B1)");
+            return Err(BuildError::Internal(
+                "main has more than one parameter (E0514 should have rejected it)".to_string(),
+            ));
         };
         let mut out = String::new();
         out.push_str("define internal i32 @_I.entry(ptr %env) nounwind #0 {\n");
@@ -7544,7 +7610,12 @@ impl<'p> Codegen<'p> {
                 TyKind::Int(IntTy::I32) => {
                     out.push_str("  ret i32 %r\n");
                 }
-                _ => return self.ni("main's result (B1: `void`, `u8` or `i32`)"),
+                _ => {
+                    return Err(BuildError::Internal(
+                        "main's result is not `void` or `u8` (E0514 should have rejected it)"
+                            .to_string(),
+                    ));
+                }
             }
         }
         out.push_str("}\n");

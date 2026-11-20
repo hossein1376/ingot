@@ -1,0 +1,60 @@
+//! expect: run
+//! section: 15
+
+// `@offset` scales by `@sizeof(T)` (a struct with padding, a byte, an integer), reads and
+// writes through the result, goes backwards with a negative count, and is the same
+// pointer for a count of zero.
+
+import std.Env;
+
+copy struct Wide {
+    a: i64,
+    b: u8,
+}
+
+fn store_at[T: Copy](p: *mut T, i: i64, v: T) {
+    unsafe("p points at an array with at least i + 1 elements") {
+        @offset(p, i).* = v;
+    }
+}
+
+fn load_at[T: Copy](p: *mut T, i: i64) -> T {
+    unsafe("p points at an array with at least i + 1 elements") {
+        return @offset(p, i).*;
+    }
+    @unreachable();
+}
+
+fn slide[T](p: *mut T, n: i64) -> *mut T {
+    return @offset(p, n);
+}
+
+pub fn main(env: &Env) -> u8 {
+    var xs: [4]i64 = @zero;
+    let p = &mut xs[0] as *mut i64;
+    store_at(p, 2, 40);
+    store_at(slide(p, 1), 2, 2);
+    @assert(xs[2] == 40);
+    @assert(xs[3] == 2);
+    @assert(load_at(p, 3) == 2);
+
+    var ws: [3]Wide = @zero;
+    let q = &mut ws[0] as *mut Wide;
+    store_at(q, 1, Wide.{ a: 5, b: 6 });
+    @assert(ws[1].a == 5);
+    @assert(ws[1].b == 6);
+    @assert(ws[0].a == 0);
+    @assert(ws[2].a == 0);
+
+    var bs: [4]u8 = @zero;
+    let r = &mut bs[0] as *mut u8;
+    store_at(r, 3, 9);
+    @assert(bs[3] == 9);
+    @assert(bs[2] == 0);
+
+    let back = @offset(@offset(p, 3), -3);
+    @assert(back as u64 == p as u64);
+    @assert(@offset(p, 0) as u64 == p as u64);
+    @assert(@offset(p, 1) as u64 == p as u64 +% 8);
+    return 0;
+}

@@ -1,0 +1,38 @@
+//! expect: accept
+//! section: 15
+
+// `@offset` on a raw pointer to a type parameter: the result is a raw pointer, which has
+// no origins, so the checker has nothing to follow, whatever `T` may hold. Linear
+// elements are moved through the pointer, never overwritten (`unsafe/raw_store_linear.ingot`).
+
+linear struct Handle[T] {
+    value: T,
+}
+
+fn slide[T](p: *mut T, n: i64) -> *mut T {
+    return @offset(p, n);
+}
+
+fn slide_shared[T](p: *T, n: i64) -> *T {
+    return @offset(p, n);
+}
+
+fn put_at[T](p: *mut T, i: i64, v: T) {
+    unsafe("p is valid for a write of a T at index i") { @offset(p, i).* = v; }
+}
+
+fn take_at[T](p: *mut T, i: i64) -> T {
+    unsafe("p holds a T at index i") { return @offset(p, i).*; }
+    @unreachable();
+}
+
+fn swap_ends[T](p: *mut T, n: i64) {
+    let first = take_at(p, 0);
+    let last = take_at(p, n - 1);
+    put_at(p, 0, last);
+    put_at(p, n - 1, first);
+}
+
+fn handle_at[T](p: *mut Handle[T], i: i64) -> *mut Handle[T] {
+    return slide(p, i);
+}

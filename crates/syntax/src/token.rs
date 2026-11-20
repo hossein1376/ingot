@@ -4,7 +4,6 @@ use ingot_diag::source::Span;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kw {
-    Align,
     As,
     Bench,
     Break,
@@ -63,7 +62,6 @@ impl Kw {
     /// `all_lists_every_keyword` stops compiling when a keyword is added to the enum and
     /// not here.
     pub const ALL: &[Kw] = &[
-        Kw::Align,
         Kw::As,
         Kw::Bench,
         Kw::Break,
@@ -119,7 +117,6 @@ impl Kw {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Kw::Align => "align",
             Kw::As => "as",
             Kw::Bench => "bench",
             Kw::Break => "break",
@@ -176,7 +173,6 @@ impl Kw {
 
     pub fn from_spelling(s: &str) -> Option<Kw> {
         Some(match s {
-            "align" => Kw::Align,
             "as" => Kw::As,
             "bench" => Kw::Bench,
             "break" => Kw::Break,
@@ -536,64 +532,63 @@ mod tests {
         // position, and the loop below then fails until `Kw::ALL` lists it there.
         fn position(keyword: Kw) -> usize {
             match keyword {
-                Kw::Align => 0,
-                Kw::As => 1,
-                Kw::Bench => 2,
-                Kw::Break => 3,
-                Kw::Catch => 4,
-                Kw::Const => 5,
-                Kw::Continue => 6,
-                Kw::Copy => 7,
-                Kw::Defer => 8,
-                Kw::Dispatch => 9,
-                Kw::Dyn => 10,
-                Kw::Else => 11,
-                Kw::Enum => 12,
-                Kw::Errdefer => 13,
-                Kw::Export => 14,
-                Kw::Extern => 15,
-                Kw::Fail => 16,
-                Kw::False => 17,
-                Kw::Fn => 18,
-                Kw::For => 19,
-                Kw::From => 20,
-                Kw::If => 21,
-                Kw::Impl => 22,
-                Kw::Import => 23,
-                Kw::In => 24,
-                Kw::Inline => 25,
-                Kw::Interface => 26,
-                Kw::Into => 27,
-                Kw::Kernel => 28,
-                Kw::Let => 29,
-                Kw::Linear => 30,
-                Kw::Loop => 31,
-                Kw::Match => 32,
-                Kw::Mut => 33,
-                Kw::Noinline => 34,
-                Kw::Orelse => 35,
-                Kw::Pub => 36,
-                Kw::Return => 37,
-                Kw::Scope => 38,
-                Kw::Select => 39,
-                Kw::Spawn => 40,
-                Kw::Static => 41,
-                Kw::Struct => 42,
-                Kw::Test => 43,
-                Kw::True => 44,
-                Kw::Try => 45,
-                Kw::Type => 46,
-                Kw::Unsafe => 47,
-                Kw::Var => 48,
-                Kw::Waitable => 49,
-                Kw::When => 50,
-                Kw::While => 51,
+                Kw::As => 0,
+                Kw::Bench => 1,
+                Kw::Break => 2,
+                Kw::Catch => 3,
+                Kw::Const => 4,
+                Kw::Continue => 5,
+                Kw::Copy => 6,
+                Kw::Defer => 7,
+                Kw::Dispatch => 8,
+                Kw::Dyn => 9,
+                Kw::Else => 10,
+                Kw::Enum => 11,
+                Kw::Errdefer => 12,
+                Kw::Export => 13,
+                Kw::Extern => 14,
+                Kw::Fail => 15,
+                Kw::False => 16,
+                Kw::Fn => 17,
+                Kw::For => 18,
+                Kw::From => 19,
+                Kw::If => 20,
+                Kw::Impl => 21,
+                Kw::Import => 22,
+                Kw::In => 23,
+                Kw::Inline => 24,
+                Kw::Interface => 25,
+                Kw::Into => 26,
+                Kw::Kernel => 27,
+                Kw::Let => 28,
+                Kw::Linear => 29,
+                Kw::Loop => 30,
+                Kw::Match => 31,
+                Kw::Mut => 32,
+                Kw::Noinline => 33,
+                Kw::Orelse => 34,
+                Kw::Pub => 35,
+                Kw::Return => 36,
+                Kw::Scope => 37,
+                Kw::Select => 38,
+                Kw::Spawn => 39,
+                Kw::Static => 40,
+                Kw::Struct => 41,
+                Kw::Test => 42,
+                Kw::True => 43,
+                Kw::Try => 44,
+                Kw::Type => 45,
+                Kw::Unsafe => 46,
+                Kw::Var => 47,
+                Kw::Waitable => 48,
+                Kw::When => 49,
+                Kw::While => 50,
             }
         }
         for (index, keyword) in Kw::ALL.iter().enumerate() {
             assert_eq!(position(*keyword), index, "{keyword:?}");
             assert_eq!(Kw::from_spelling(keyword.as_str()), Some(*keyword));
         }
-        assert_eq!(Kw::ALL.len(), 52);
+        assert_eq!(Kw::ALL.len(), 51);
     }
 }

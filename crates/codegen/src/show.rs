@@ -484,7 +484,12 @@ impl<'p> Codegen<'p> {
             TyKind::Int(IntTy::U8) => Some(("i8", true)),
             TyKind::Int(IntTy::I32) => Some(("i32", false)),
             _ if ret == self.program.decls.types.void => None,
-            _ => return self.ni("main's result (B1: `void`, `u8` or `i32`, fallible or not)"),
+            _ => {
+                return Err(BuildError::Internal(
+                    "main's result is not `void` or `u8` (E0514 should have rejected it)"
+                        .to_string(),
+                ));
+            }
         };
         let abi = self.ret_abi(&body.sig)?;
         let Some(result) = abi.result().cloned() else {
@@ -505,7 +510,9 @@ impl<'p> Codegen<'p> {
         {
             "ptr %env".to_string()
         } else {
-            return self.ni("main's parameters (B1: none or `&Env`)");
+            return Err(BuildError::Internal(
+                "main's parameters are not `&Env` (E0514 should have rejected it)".to_string(),
+            ));
         };
         let tag = fb.tmp();
         if result.ptr {

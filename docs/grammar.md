@@ -4,9 +4,9 @@ The grammar is LL(1) apart from three places that need more lookahead, all noted
 below. Terminals in capitals are tokens from section 1: `IDENT` (lowercase
 initial), `TYPE` (uppercase initial), `INT`, `FLOAT`, `STRING`, `CSTRING`, `BUILTIN`
 (`@name`), `SCALAR` (`i8` ... `f64`, `bool`, `void`, `never`) and `VECTOR` (`f32x4`,
-`boolx8`, ...). The words `par`, `step`, `over`, `on`, `reduce` and `grain` are
-contextual: they are keywords only in the positions shown and are ordinary identifiers
-elsewhere.
+`boolx8`, ...). The words `par`, `step`, `over`, `on`, `reduce`, `grain` and `align`
+are contextual: they are keywords only in the positions shown and are ordinary
+identifiers elsewhere.
 
 ```ebnf
 file         = { import } { item } ;

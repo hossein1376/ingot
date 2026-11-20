@@ -1,0 +1,36 @@
+//! expect: reject
+//! section: 11
+
+// A store through a `&mut` is still an overwrite of a live linear value, unlike a store
+// through a raw pointer (`unsafe/raw_store_linear.ingot`).
+
+linear struct Token {
+    id: i32,
+}
+
+impl Token {
+    fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+    fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+linear struct Pair {
+    t: Token,
+}
+
+fn through_borrow(r: &mut Token) {
+    r.* = Token.make(2); //~ E1004
+}
+
+fn through_field(r: &mut Pair) {
+    r.*.t = Token.make(3); //~ E1004
+}
+
+fn through_local_field() {
+    var p = Pair.{ t: Token.make(1) };
+    p.t = Token.make(4); //~ E1004
+    p.t.release();
+}

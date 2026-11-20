@@ -1,0 +1,40 @@
+//! expect: accept
+//! section: 10, 15
+
+// A store through a raw pointer is not an overwrite of a place that holds a linear
+// value: the target may be a `T` with no `Discard` bound, a field of one or an element
+// of one, and the checker leaves all three alone. Moving out through the pointer is
+// accepted too.
+
+linear struct Slot[T] {
+    value: T,
+    tag: i64,
+}
+
+linear struct Token {
+    id: i32,
+}
+
+fn put[T](p: *mut T, v: T) {
+    unsafe("p is valid for a write of a T") { p.* = v; }
+}
+
+fn put_value[T](p: *mut Slot[T], v: T) {
+    unsafe("p is valid for a write of a Slot") {
+        p.*.value = v;
+        p.*.tag = 1;
+    }
+}
+
+fn put_element[T](p: *mut [4]T, v: T) {
+    unsafe("p is valid for a write of four Ts") { (p.*)[2] = v; }
+}
+
+fn take[T](p: *mut T) -> T {
+    unsafe("p holds a T") { return p.*; }
+    @unreachable();
+}
+
+fn put_token(p: *mut Token, v: Token) {
+    unsafe("p is valid for a write of a Token") { p.* = v; }
+}

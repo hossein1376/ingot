@@ -213,10 +213,14 @@ impl<'a> Discovery<'a> {
             let yes = match roots {
                 Roots::Check => matches!(kind, DefKind::Fn | DefKind::Test { .. }),
                 Roots::Build => {
-                    let package = self.sema.module(self.sema.def(owner).module).package.0 as usize;
-                    matches!(kind, DefKind::Fn)
-                        && (sig.is_some_and(|s| s.mods.export)
-                            || (self.sema.def(owner).name == "main" && self.root == Some(package)))
+                    let module = self.sema.def(owner).module;
+                    let package = self.sema.module(module).package.0 as usize;
+                    // The entry is `main` of the root package's root module (05 section
+                    // 33), not a `main` in any other module of that package.
+                    let entry = self.sema.def(owner).name == "main"
+                        && self.root == Some(package)
+                        && self.sema.packages[package].root == Some(module);
+                    matches!(kind, DefKind::Fn) && (sig.is_some_and(|s| s.mods.export) || entry)
                 }
                 Roots::Test => {
                     let module = self.sema.def(owner).module;

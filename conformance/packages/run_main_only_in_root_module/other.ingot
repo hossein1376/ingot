@@ -1,0 +1,7 @@
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+    let v = @splat(f32x4, 1.0);
+    _ = v;
+    return 4;
+}

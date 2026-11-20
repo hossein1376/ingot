@@ -1,0 +1,13 @@
+//! expect: run
+//! exit: 3
+//! section: 33.1
+
+// The entry is `main` of the root module. A `pub fn main` in another module is an
+// ordinary function: not a root of the build, so its body is not compiled here (its
+// vector is something the back end cannot compile yet).
+
+import std.Env;
+
+pub fn main(env: &Env) -> u8 {
+    return 3;
+}

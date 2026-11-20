@@ -853,8 +853,10 @@ impl<'a> Cx<'a> {
                 self.eval_swap(flow, args);
                 OriginSet::new()
             }
-            // `@test_env` borrows the harness's storage for the test's duration.
-            "forget" | "bits" | "slice_from_raw" | "borrow_from_raw" | "test_env" => {
+            // `@test_env` borrows the harness's storage for the test's duration. A raw
+            // pointer has no origins (02 section 15), so `@offset`, like a cast, gives
+            // the empty set.
+            "forget" | "bits" | "slice_from_raw" | "borrow_from_raw" | "test_env" | "offset" => {
                 OriginSet::new()
             }
             "unchecked_slice" => {

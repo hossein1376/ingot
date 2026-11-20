@@ -1,0 +1,35 @@
+//! expect: run
+//! section: 1, 4.2
+
+// `align` is a keyword only where `align(n)` follows a struct's name and generic
+// parameters, or the type of a field or a `static`. Everywhere else it is a name: a
+// local, a parameter, a field, a function.
+
+import std.Env;
+
+struct Request[T] align(16) {
+    size: i64,
+    align: i64 align(8),
+    data: T,
+}
+
+static table: [4]u8 align(64) = @zero;
+
+fn align(size: i64, align: i64) -> i64 {
+    return (size + align - 1) / align * align;
+}
+
+fn round(size: i64, a: i64) -> i64 {
+    return align(size, a);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let align = 8;
+    let r = Request[i64].{ size: 5, align: align, data: 1 };
+    @assert(round(r.size, r.align) == 8);
+    let widen = fn [](align: i64) -> i64 { return align + 1; };
+    @assert(widen(r.align) == 9);
+    @assert(@alignof(Request[i64]) == 16);
+    @assert(table[0] == 0);
+    return 0;
+}

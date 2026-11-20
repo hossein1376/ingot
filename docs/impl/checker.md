@@ -93,13 +93,17 @@ Checks:
 |---|---|---|
 | any read, borrow or move of `π` | `π`, a prefix of it, or (for a whole read) anything under it is *moved* or *maybe* | E1001. `move`: the moving statements that reach here. `loop` if one of them is later in the same loop |
 | a move out of a path with a dereference, an element, or a `static` | always | E1002 |
-| `π = ...` | `π` or something under it has linear type and is *init* or *maybe* | E1004 |
+| `π = ...` | `π` or something under it has linear type and is *init* or *maybe*, and no step of `π` is a raw-pointer dereference | E1004 |
 | storage end of `x` | some path under `x` has linear type and is *init* or *maybe* | E1003, reported once per local at its declaration, with one `scope_end` per exit that reaches a failing storage end |
 
 Notes:
 
 * "Linear type" includes a type parameter without `Discard`. The fix for that case is
   the bound, not a `defer`.
+* A store whose path has a raw-pointer dereference anywhere (`p.* = v`, `p.*.f = v`,
+  `(p.*)[i] = v`) is not E1004, whatever the type: allocator memory is not a place and
+  the checker cannot know what it holds, and overwriting a live linear value there only
+  leaks it (02 §10). The same store through a `&mut` or a local is still E1004.
 * Deferred blocks were copied to every exit by lowering, so a value consumed in a
   `defer` is *moved* at each storage end that follows the copy. If the value is also
   moved earlier on that path, the copy's use reports E1005 instead of E1001, with the
@@ -208,7 +212,8 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
    * nothing for `from static`.
 4. A call through a `fn` value, a closure or `&dyn Fn` has no clauses (§13.5): the
    result's set is the union of all `A_i ∪ inner*(A_i)` and the set of the callable.
-5. `@slice_from_raw`, `@borrow_from_raw` and a raw pointer cast give the empty set.
+5. `@slice_from_raw`, `@borrow_from_raw`, `@offset` and a raw pointer cast give the empty
+   set: a raw pointer has no origins (02-memory §15).
 6. Builtins that move views: the result of `@replace(&mut p, v)` has the origin set of a
    read of `p` before the store, and the store of `v` is a widening store through the
    borrow (4.4). `@swap(&mut a, &mut b)` is two such stores. `@forget(x)` is a move of

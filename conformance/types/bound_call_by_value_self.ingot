@@ -1,0 +1,66 @@
+//! expect: run
+//! section: 4.4, 8
+
+// A call through an interface bound reaches the impl's method, and the interface's
+// `Self` is the receiver's type in every position of the signature: by value as the
+// receiver, as another parameter and as the result, for a sized and a zero-size type.
+// An inherent generic method with the interface method's name is a different function.
+
+import std.Env;
+
+interface Mix: Copy {
+    fn mix(self: Self, other: Self, k: i64) -> Self;
+    fn weight(self: Self) -> i64;
+}
+
+copy struct Pair {
+    a: i64,
+    b: i64,
+}
+
+copy struct Unit {}
+
+impl Mix for Pair {
+    fn mix(self: Self, other: Self, k: i64) -> Self {
+        return Pair.{ a: self.a + other.a * k, b: self.b + other.b * k };
+    }
+
+    fn weight(self: Self) -> i64 {
+        return self.a * 10 + self.b;
+    }
+}
+
+impl Mix for Unit {
+    fn mix(self: Self, other: Self, k: i64) -> Self {
+        return Unit.{};
+    }
+
+    fn weight(self: Self) -> i64 {
+        return 7;
+    }
+}
+
+struct Pool {
+    base: i64,
+}
+
+impl Pool {
+    fn mix[T: Copy](self: &Pool, value: T) -> T {
+        return value;
+    }
+}
+
+fn blend[M: Mix](x: M, y: M) -> i64 {
+    let z = x.mix(y, 2);
+    return z.weight() + M.weight(y);
+}
+
+pub fn main(env: &Env) -> u8 {
+    @assert(
+        blend(Pair.{ a: 1, b: 2 }, Pair.{ a: 3, b: 4 }) == 7 * 10 + 10 + 34,
+    );
+    @assert(blend(Unit.{}, Unit.{}) == 14);
+    let pool = Pool.{ base: 0 };
+    @assert(pool.mix(5) == 5 + pool.base);
+    return 0;
+}

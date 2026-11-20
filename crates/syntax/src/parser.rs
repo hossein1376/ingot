@@ -494,16 +494,6 @@ impl<'a> Parser<'a> {
         self.expect_ident()
     }
 
-    /// `align` is a contextual keyword after a type; it is still a useful
-    /// parameter name in allocator signatures.
-    fn param_name(&mut self) -> (String, Span) {
-        if self.at_kw(Kw::Align) {
-            let span = self.bump().span;
-            return ("align".to_string(), span);
-        }
-        self.expect_ident()
-    }
-
     fn expect_type_ident(&mut self) -> (String, Span) {
         match self.kind().clone() {
             TokenKind::TypeIdent(name) => {
@@ -911,7 +901,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let start = self.span().start;
-            let (name, name_span) = self.param_name();
+            let (name, name_span) = self.expect_ident();
             self.expect(Colon);
             let ty = self.ty();
             let mut into = None;
@@ -1014,7 +1004,7 @@ impl<'a> Parser<'a> {
         self.bump(); // struct
         let (name, name_span) = self.expect_type_ident();
         let generics = self.generics();
-        let align = if self.at_kw(Kw::Align) {
+        let align = if self.at_ident("align") {
             Some(self.align_expr())
         } else {
             None
@@ -1029,7 +1019,7 @@ impl<'a> Parser<'a> {
             let (fname, fspan) = self.expect_ident();
             self.expect(Colon);
             let ty = self.ty();
-            let align = if self.at_kw(Kw::Align) {
+            let align = if self.at_ident("align") {
                 Some(self.align_expr())
             } else {
                 None
@@ -1062,6 +1052,9 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `align(n)`, where `align` is a keyword only after a struct's name and generic
+    /// parameters, or after the type of a field or a `static` (section 1); everywhere
+    /// else it is an ordinary name.
     fn align_expr(&mut self) -> Expr {
         self.bump(); // align
         self.expect(LParen);
@@ -1300,7 +1293,7 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.expect_ident();
         self.expect(Colon);
         let ty = self.ty();
-        let align = if self.at_kw(Kw::Align) {
+        let align = if self.at_ident("align") {
             Some(self.align_expr())
         } else {
             None
