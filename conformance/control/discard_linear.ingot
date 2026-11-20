@@ -1,9 +1,14 @@
 //! expect: reject
 //! section: 6.3, 7.2
 
-linear struct L { x: i64 }
+linear struct L {
+    x: i64,
+}
 
-enum E { a: L, b }
+enum E {
+    a: L,
+    b,
+}
 
 fn f(e: E) -> i64 {
     return match e {

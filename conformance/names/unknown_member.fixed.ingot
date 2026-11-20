@@ -1,7 +1,9 @@
 //! expect: accept
 //! section: 4.2, 5.5
 
-struct Tally { count: i64 }
+struct Tally {
+    count: i64,
+}
 
 fn read(t: &Tally) -> i64 {
     return t.count;

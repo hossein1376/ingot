@@ -5,7 +5,9 @@ interface Named {
     fn name(self: &Self) -> i64;
 }
 
-copy struct Item { n: i64 }
+copy struct Item {
+    n: i64,
+}
 
 fn get(x: &dyn Named) -> i64 {
     return x.name();

@@ -4,7 +4,6 @@
 import std.Env;
 
 pub fn main(env: &Env) -> u8 {
-
     let o: ?i64 = @zero;
     match o {
         .none => { return 0; }

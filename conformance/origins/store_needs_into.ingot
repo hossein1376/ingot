@@ -1,7 +1,10 @@
 //! expect: reject
 //! section: 13.2
 
-struct Lexer { src: []u8, pos: i64 }
+struct Lexer {
+    src: []u8,
+    pos: i64,
+}
 
 fn set_input(l: &mut Lexer, text: []u8) {
     l.src = text; //~ E1204

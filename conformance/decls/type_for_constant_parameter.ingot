@@ -1,6 +1,11 @@
 //! expect: reject
 //! section: 8
 
-struct Ring[T, const n: i64] { items: [n]T, head: i64 }
+struct Ring[T, const n: i64] {
+    items: [n]T,
+    head: i64,
+}
 
-struct Buffers { small: Ring[u8, i64] } //~ E0813
+struct Buffers {
+    small: Ring[u8, i64], //~ E0813
+}

@@ -672,7 +672,7 @@ fn use_fill(xs: []mut []u8, v: []u8) {
 }
 ",
         &[
-            "E1204 the view from `v` is stored where it reaches `xs` `fill(xs, v);\n` signature=`v` fix=` into xs`",
+            "E1204 the view from `v` is stored where it reaches `xs` `fill(xs, v);` signature=`v` fix=` into xs`",
         ],
     );
     expect(

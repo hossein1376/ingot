@@ -4,7 +4,6 @@
 import std.Env;
 
 pub fn main(env: &Env) -> u8 {
-
     var n: i64 = 0;
     {
         defer { n = n * 10 + 1; }

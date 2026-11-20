@@ -8,18 +8,31 @@ interface Shape {
     fn tag(self: &Self) -> i64;
 }
 
-struct Square { n: i64 }
-
-impl Shape for Square {
-    fn area(self: &Square) -> i64 { return self.n * self.n; }
-    fn tag(self: &Square) -> i64 { return 1; }
+struct Square {
+    n: i64,
 }
 
-struct Rect { w: i64, h: i64 }
+impl Shape for Square {
+    fn area(self: &Square) -> i64 {
+        return self.n * self.n;
+    }
+    fn tag(self: &Square) -> i64 {
+        return 1;
+    }
+}
+
+struct Rect {
+    w: i64,
+    h: i64,
+}
 
 impl Shape for Rect {
-    fn area(self: &Rect) -> i64 { return self.w * self.h; }
-    fn tag(self: &Rect) -> i64 { return 2; }
+    fn area(self: &Rect) -> i64 {
+        return self.w * self.h;
+    }
+    fn tag(self: &Rect) -> i64 {
+        return 2;
+    }
 }
 
 fn total(s: &dyn Shape) -> i64 {

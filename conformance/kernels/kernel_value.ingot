@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 27.1
 
-kernel fn k(i: Idx) {
-}
+kernel fn k(i: Idx) {}
 
 fn f() {
     let p = k; //~ E1515

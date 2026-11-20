@@ -6,5 +6,7 @@ extern "c" {
 }
 
 fn show(code: u8) -> i32 {
-    return unsafe("the format string is a NUL-terminated literal") { printf(c"%d\n", code) }; //~ E1602
+    return unsafe("the format string is a NUL-terminated literal") {
+        printf(c"%d\n", code) //~ E1602
+    };
 }

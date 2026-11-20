@@ -1,13 +1,18 @@
 //! expect: reject
 //! section: 6.4
 
-enum E { e }
+enum E {
+    e,
+}
 
 fn g() -> i64 ! E {
     return 1;
 }
 
 fn f() -> i64 ! E {
-    defer { let x = try g(); @assert(x == 1); } //~ E0708
+    defer {
+        let x = try g(); //~ E0708
+        @assert(x == 1);
+    }
     return 0;
 }

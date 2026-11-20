@@ -1,7 +1,9 @@
 //! expect: accept
 //! section: 4.4
 
-struct S[T: Eq] { x: T }
+struct S[T: Eq] {
+    x: T,
+}
 
 struct H {
     bytes: S[[]u8],

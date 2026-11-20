@@ -2,9 +2,7 @@
 //! section: 6.1, 13.5
 
 fn f(a: []u8) -> i64 {
-    let c = fn [a]() -> []u8 {
-        return a;
-    };
+    let c = fn [a]() -> []u8 { return a; };
     let r = c();
     return r.len;
 }

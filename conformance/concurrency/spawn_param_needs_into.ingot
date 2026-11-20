@@ -3,7 +3,9 @@
 
 import std.task.Scope;
 
-struct Queue { n: i64 }
+struct Queue {
+    n: i64,
+}
 
 fn work(q: &Queue) {
     _ = q.n;

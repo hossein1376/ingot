@@ -5,4 +5,6 @@ interface Visitor {
     fn visit[T](self: &Self, value: T);
 }
 
-struct Holder { v: &dyn Visitor } //~ E0510
+struct Holder {
+    v: &dyn Visitor, //~ E0510
+}

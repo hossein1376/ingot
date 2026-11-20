@@ -1,7 +1,10 @@
 //! expect: reject
 //! section: 12, 14.3
 
-struct Buf { items: [4]i64, len: i64 }
+struct Buf {
+    items: [4]i64,
+    len: i64,
+}
 
 impl Buf {
     fn view(self: &Buf) -> []i64 from self {

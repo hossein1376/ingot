@@ -7,8 +7,13 @@ interface Area {
     fn area(self: &Self) -> i64;
 }
 
-struct Sq { s: i64 }
-struct Rect { w: i64, h: i64 }
+struct Sq {
+    s: i64,
+}
+struct Rect {
+    w: i64,
+    h: i64,
+}
 
 impl Area for Sq {
     fn area(self: &Self) -> i64 {

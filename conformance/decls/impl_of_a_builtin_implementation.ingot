@@ -1,7 +1,11 @@
 //! expect: reject
 //! section: 4.4
 
-enum Color { red, green, blue }
+enum Color {
+    red,
+    green,
+    blue,
+}
 
 impl Eq for Color { //~ E0507
     fn eq(self: &Color, other: &Color) -> bool {

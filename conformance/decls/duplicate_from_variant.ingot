@@ -1,6 +1,12 @@
 //! expect: reject
 //! section: 4.3
 
-enum ParseErr { empty, overflow }
+enum ParseErr {
+    empty,
+    overflow,
+}
 
-enum LoadErr { parse: from ParseErr, retry: from ParseErr } //~ E0504
+enum LoadErr {
+    parse: from ParseErr,
+    retry: from ParseErr, //~ E0504
+}

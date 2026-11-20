@@ -3,4 +3,4 @@
 
 import std.Env;
 
-fn main(env: &Env) { } //~ E0514
+fn main(env: &Env) {} //~ E0514

@@ -206,3 +206,78 @@ fn a_static_origin_spans_only_its_keyword() {
     let texts: Vec<&str> = f.from.iter().map(|o| source.text_of(o.span)).collect();
     assert_eq!(texts, vec!["static", "a"]);
 }
+
+fn text_of(source: &Source, span: ingot_diag::source::Span) -> &str {
+    &source.text[span.start..span.end]
+}
+
+#[test]
+fn an_expression_statement_ends_at_its_semicolon() {
+    let text = "fn f() {\n    g(1);\n\n    // a comment\n    h();\n}\n";
+    let (source, ast) = module(text);
+    let body = body_of(&ast, "f");
+    assert_eq!(text_of(&source, body[0].span()), "g(1);");
+    assert_eq!(text_of(&source, body[1].span()), "h();");
+}
+
+#[test]
+fn a_function_without_a_body_ends_at_its_semicolon() {
+    let text = "interface I {\n    fn a(self: &Self);\n\n    // next\n    fn b(self: &Self) -> i64;\n}\n\
+                extern \"c\" {\n    fn x();\n\n    fn y(...);\n}\n";
+    let (source, ast) = module(text);
+    let Item::Interface(interface) = &ast.items[0] else {
+        panic!("an interface");
+    };
+    let spans: Vec<&str> = interface
+        .members
+        .iter()
+        .map(|m| text_of(&source, m.span()))
+        .collect();
+    assert_eq!(spans, ["fn a(self: &Self);", "fn b(self: &Self) -> i64;"]);
+    let Item::Extern(block) = &ast.items[1] else {
+        panic!("an extern block");
+    };
+    let spans: Vec<&str> = block
+        .functions
+        .iter()
+        .map(|f| text_of(&source, f.span))
+        .collect();
+    assert_eq!(spans, ["fn x();", "fn y(...);"]);
+}
+
+#[test]
+fn list_items_and_when_items_end_with_their_last_token() {
+    let text = "struct S { a: i64, b: [2]i64 }\nenum E { x, y: i64 = 3 }\n\
+                fn f[T: Copy, U](p: T, q: U) {}\n\
+                when @target.os == .linux { fn a() {} } else { fn b() {} }\nfn g() {}\n";
+    let (source, ast) = module(text);
+    let Item::Struct(s) = &ast.items[0] else {
+        panic!("a struct");
+    };
+    let fields: Vec<&str> = s.fields.iter().map(|f| text_of(&source, f.span)).collect();
+    assert_eq!(fields, ["a: i64", "b: [2]i64"]);
+    let Item::Enum(e) = &ast.items[1] else {
+        panic!("an enum");
+    };
+    let variants: Vec<&str> = e
+        .variants
+        .iter()
+        .map(|v| text_of(&source, v.span))
+        .collect();
+    assert_eq!(variants, ["x", "y: i64 = 3"]);
+    let Item::Fn(f) = &ast.items[2] else {
+        panic!("a function");
+    };
+    let generics: Vec<&str> = f
+        .generics
+        .iter()
+        .map(|g| text_of(&source, g.span))
+        .collect();
+    assert_eq!(generics, ["T: Copy", "U"]);
+    let params: Vec<&str> = f.params.iter().map(|p| text_of(&source, p.span)).collect();
+    assert_eq!(params, ["p: T", "q: U"]);
+    assert_eq!(
+        text_of(&source, ast.items[3].span()),
+        "when @target.os == .linux { fn a() {} } else { fn b() {} }"
+    );
+}

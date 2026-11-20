@@ -1,7 +1,10 @@
 //! expect: reject
 //! section: 18
 
-struct Pair { a: i64, b: i64 }
+struct Pair {
+    a: i64,
+    b: i64,
+}
 
 fn bump(x: &mut i64) {
     x.* += 1;

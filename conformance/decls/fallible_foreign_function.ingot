@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 29
 
-enum Oops { bad }
+enum Oops {
+    bad,
+}
 
 extern "c" {
     fn run() -> i32 ! Oops; //~ E1601

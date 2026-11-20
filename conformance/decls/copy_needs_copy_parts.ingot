@@ -1,6 +1,10 @@
 //! expect: reject
 //! section: 4.2, 10
 
-struct Holder { x: i64 }
+struct Holder {
+    x: i64,
+}
 
-copy struct Wrapper { h: Holder } //~ E0501
+copy struct Wrapper {
+    h: Holder, //~ E0501
+}

@@ -1,7 +1,9 @@
 //! expect: cost
 //! section: 31
 
-struct Big { v: [9]i64 }
+struct Big {
+    v: [9]i64,
+}
 
 fn store(p: &mut Big, b: Big) -> void {
     p.* = b; //~ copy

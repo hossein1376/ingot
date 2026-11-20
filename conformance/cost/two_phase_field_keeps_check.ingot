@@ -1,7 +1,9 @@
 //! expect: cost
 //! section: 31
 
-struct W { k: i64 }
+struct W {
+    k: i64,
+}
 
 fn bump(x: &mut i64, y: i64) -> i64 {
     x.* = 100;

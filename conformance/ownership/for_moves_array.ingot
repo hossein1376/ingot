@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 11
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
 fn sum(a: [2]Buf) -> i64 {
     return a[0].len + a[1].len;

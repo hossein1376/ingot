@@ -1,6 +1,11 @@
 //! expect: reject
 //! section: 4.3, 10
 
-struct Holder { x: i64 }
+struct Holder {
+    x: i64,
+}
 
-copy enum Shape { holder: Holder, empty } //~ E0501
+copy enum Shape {
+    holder: Holder, //~ E0501
+    empty,
+}

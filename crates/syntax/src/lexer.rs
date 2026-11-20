@@ -99,16 +99,31 @@ pub const BUILTINS: &[&str] = &[
     "zero",
 ];
 
+/// A `//` comment, with its exact source text and whether it is a `///` doc comment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Comment {
+    pub span: Span,
+    pub text: String,
+    pub doc: bool,
+}
+
 pub fn lex(source: &Source) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (tokens, _, diagnostics) = lex_with_comments(source);
+    (tokens, diagnostics)
+}
+
+/// Lex a source and keep its comments, for `ingot fmt`. `lex` is unchanged.
+pub fn lex_with_comments(source: &Source) -> (Vec<Token>, Vec<Comment>, Vec<Diagnostic>) {
     let mut lexer = Lexer {
         source,
         bytes: source.text.as_bytes(),
         pos: 0,
         tokens: Vec::new(),
+        comments: Vec::new(),
         diagnostics: Vec::new(),
     };
     lexer.run();
-    (lexer.tokens, lexer.diagnostics)
+    (lexer.tokens, lexer.comments, lexer.diagnostics)
 }
 
 struct Lexer<'a> {
@@ -116,6 +131,7 @@ struct Lexer<'a> {
     bytes: &'a [u8],
     pos: usize,
     tokens: Vec<Token>,
+    comments: Vec<Comment>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -147,6 +163,12 @@ impl<'a> Lexer<'a> {
                     while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
                         self.pos += 1;
                     }
+                    let text = self.source.text[start..self.pos].to_string();
+                    self.comments.push(Comment {
+                        span: Span::new(start, self.pos),
+                        doc: text.starts_with("///") && !text.starts_with("////"),
+                        text,
+                    });
                 }
                 b'/' if self.peek(1) == Some(b'*') => {
                     self.error(

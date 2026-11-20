@@ -83,7 +83,13 @@ impl[T: AtomicValue] Atomic[T] {
         failure: LoadOrder,
     ) -> T ! T {
         unsafe("the cell holds a live, aligned T for the whole borrow of self") {
-            return try @atomic_cmpxchg(self.value.get(), expected, new, success, failure);
+            return try @atomic_cmpxchg(
+                self.value.get(),
+                expected,
+                new,
+                success,
+                failure,
+            );
         }
     }
 
@@ -95,7 +101,13 @@ impl[T: AtomicValue] Atomic[T] {
         failure: LoadOrder,
     ) -> T ! T {
         unsafe("the cell holds a live, aligned T for the whole borrow of self") {
-            return try @atomic_cmpxchg_weak(self.value.get(), expected, new, success, failure);
+            return try @atomic_cmpxchg_weak(
+                self.value.get(),
+                expected,
+                new,
+                success,
+                failure,
+            );
         }
     }
 

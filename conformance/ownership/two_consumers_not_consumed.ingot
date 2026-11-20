@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 10
 
-linear struct Pair { n: i64 }
+linear struct Pair {
+    n: i64,
+}
 
 impl Pair {
     fn left(self: Pair) -> i64 {

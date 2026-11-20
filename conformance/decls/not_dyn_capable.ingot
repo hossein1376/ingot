@@ -5,4 +5,4 @@ interface Duplicable {
     fn dup(self: &Self) -> Self;
 }
 
-fn show(d: &dyn Duplicable) { } //~ E0510
+fn show(d: &dyn Duplicable) {} //~ E0510

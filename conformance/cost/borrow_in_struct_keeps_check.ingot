@@ -1,7 +1,9 @@
 //! expect: cost
 //! section: 31
 
-struct W { r: &mut i64 }
+struct W {
+    r: &mut i64,
+}
 
 fn set(w: &mut W) {
     w.r.* = 100;

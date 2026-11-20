@@ -1,9 +1,13 @@
 //! expect: reject
 //! section: 6.3
 
-enum A { a }
+enum A {
+    a,
+}
 
-enum B { b }
+enum B {
+    b,
+}
 
 fn first() -> i64 ! A {
     fail .a;

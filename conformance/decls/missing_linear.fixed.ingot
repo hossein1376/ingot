@@ -1,6 +1,10 @@
 //! expect: accept
 //! section: 4.2, 10
 
-linear struct Token { id: i32 }
+linear struct Token {
+    id: i32,
+}
 
-linear struct Holder { t: Token }
+linear struct Holder {
+    t: Token,
+}

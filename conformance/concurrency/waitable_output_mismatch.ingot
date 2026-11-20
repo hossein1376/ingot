@@ -4,9 +4,13 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-struct Service { n: i64 }
+struct Service {
+    n: i64,
+}
 
-struct Op { n: i64 }
+struct Op {
+    n: i64,
+}
 
 impl Wait for Op {
     type Output = bool;

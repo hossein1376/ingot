@@ -1,7 +1,9 @@
 //! expect: accept
 //! section: 13.3
 
-struct Box1[T: Discard] { item: T }
+struct Box1[T: Discard] {
+    item: T,
+}
 
 impl[T: Discard] Box1[T] {
     fn put(self: &mut Box1[T], item: T) {

@@ -7,13 +7,31 @@
 
 import std.Env;
 
-enum Tok { num: i64, plus, minus, star, slash, open, close, end }
+enum Tok {
+    num: i64,
+    plus,
+    minus,
+    star,
+    slash,
+    open,
+    close,
+    end,
+}
 
-enum LexErr { bad_byte: i64 }
+enum LexErr {
+    bad_byte: i64,
+}
 
-enum SyntaxErr { lex: from LexErr, unexpected: i64, unclosed: i64 }
+enum SyntaxErr {
+    lex: from LexErr,
+    unexpected: i64,
+    unclosed: i64,
+}
 
-enum EvalErr { syntax: from SyntaxErr, div_by_zero: i64 }
+enum EvalErr {
+    syntax: from SyntaxErr,
+    div_by_zero: i64,
+}
 
 fn is_digit(c: u8) -> bool {
     return c >= '0' && c <= '9';
@@ -68,9 +86,7 @@ fn factor(src: []u8, at: &mut i64) -> i64 ! EvalErr {
     let t = try next(src, start);
     at.* = t.1;
     match t.0 {
-        .num(v) => {
-            return v;
-        }
+        .num(v) => { return v; }
         .minus => {
             let v = try factor(src, at);
             return -v;
@@ -83,14 +99,10 @@ fn factor(src: []u8, at: &mut i64) -> i64 ! EvalErr {
                     at.* = c.1;
                     return v;
                 }
-                _ => {
-                    fail .syntax(.unclosed(t.1 - 1));
-                }
+                _ => { fail .syntax(.unclosed(t.1 - 1)); }
             }
         }
-        _ => {
-            fail .syntax(.unexpected(start));
-        }
+        _ => { fail .syntax(.unexpected(start)); }
     }
 }
 
@@ -112,9 +124,7 @@ fn term(src: []u8, at: &mut i64) -> i64 ! EvalErr {
                 }
                 acc = acc / d;
             }
-            _ => {
-                return acc;
-            }
+            _ => { return acc; }
         }
     }
     @unreachable();
@@ -135,9 +145,7 @@ fn expr(src: []u8, at: &mut i64) -> i64 ! EvalErr {
                 let r = try term(src, at);
                 acc = acc - r;
             }
-            _ => {
-                return acc;
-            }
+            _ => { return acc; }
         }
     }
     @unreachable();
@@ -148,12 +156,8 @@ fn eval(src: []u8) -> i64 ! EvalErr {
     let v = try expr(src, &mut at);
     let t = try next(src, at);
     match t.0 {
-        .end => {
-            return v;
-        }
-        _ => {
-            fail .syntax(.unexpected(at));
-        }
+        .end => { return v; }
+        _ => { fail .syntax(.unexpected(at)); }
     }
 }
 
@@ -162,29 +166,19 @@ fn eval(src: []u8) -> i64 ! EvalErr {
 /// scan began.
 fn error_code(src: []u8) -> i64 {
     match eval(src) {
-        .ok(_) => {
-            return 0;
-        }
+        .ok(_) => { return 0; }
         .err(e) => {
             match e {
-                .div_by_zero(p) => {
-                    return 100 + p;
-                }
+                .div_by_zero(p) => { return 100 + p; }
                 .syntax(s) => {
                     match s {
                         .lex(l) => {
                             match l {
-                                .bad_byte(p) => {
-                                    return 200 + p;
-                                }
+                                .bad_byte(p) => { return 200 + p; }
                             }
                         }
-                        .unexpected(p) => {
-                            return 300 + p;
-                        }
-                        .unclosed(p) => {
-                            return 400 + p;
-                        }
+                        .unexpected(p) => { return 300 + p; }
+                        .unclosed(p) => { return 400 + p; }
                     }
                 }
             }

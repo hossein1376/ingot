@@ -3,7 +3,11 @@
 
 import std.Env;
 
-enum E: u16 { a = 3, b = 9, c }
+enum E: u16 {
+    a = 3,
+    b = 9,
+    c,
+}
 
 fn tag(e: E) -> u16 {
     return e as u16;

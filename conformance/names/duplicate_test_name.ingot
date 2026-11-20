@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 4.6
 
-test "adds" {
-}
+test "adds" {}
 
 test "adds" { //~ E1707
 }

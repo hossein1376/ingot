@@ -5,10 +5,14 @@ interface Named {
     fn name(self: &Self) -> i64;
 }
 
-copy struct Item { n: i64 }
+copy struct Item {
+    n: i64,
+}
 
 impl Named for Item {
-    fn name(self: &Item) -> i64 { return self.n; }
+    fn name(self: &Item) -> i64 {
+        return self.n;
+    }
 }
 
 fn get(x: &dyn Named) -> i64 {
@@ -28,7 +32,9 @@ fn binding(s: &Item) -> i64 {
     return d.name();
 }
 
-struct Holder { n: &dyn Named }
+struct Holder {
+    n: &dyn Named,
+}
 
 fn field(s: &Item) -> Holder from s {
     return Holder.{ n: s };
@@ -38,14 +44,21 @@ fn mutable(s: &mut Item) -> &mut dyn Named from s {
     return s;
 }
 
-copy struct Other { n: i64 }
+copy struct Other {
+    n: i64,
+}
 
 impl Named for Other {
-    fn name(self: &Other) -> i64 { return self.n; }
+    fn name(self: &Other) -> i64 {
+        return self.n;
+    }
 }
 
 fn branches(c: bool, s: &Item, o: &Other) -> i64 {
     let d: &dyn Named = if c { s } else { o };
-    let e: &dyn Named = match c { true => o, false => s };
+    let e: &dyn Named = match c {
+        true => o,
+        false => s,
+    };
     return d.name() + e.name();
 }

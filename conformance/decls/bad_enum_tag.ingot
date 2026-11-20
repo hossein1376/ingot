@@ -1,4 +1,8 @@
 //! expect: reject
 //! section: 4.3
 
-enum Color { red = 1, green, blue } //~ E0505
+enum Color {
+    red = 1, //~ E0505
+    green,
+    blue,
+}

@@ -5,10 +5,14 @@ interface Named {
     fn name(self: &Self) -> i64;
 }
 
-struct Item { n: i64 }
+struct Item {
+    n: i64,
+}
 
 impl Named for Item {
-    fn name(self: &Item) -> i64 { return self.n; }
+    fn name(self: &Item) -> i64 {
+        return self.n;
+    }
 }
 
 fn call_named(x: &dyn Named) -> i64 {

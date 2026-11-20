@@ -19,32 +19,20 @@ fn maybe_ref(ok: bool, p: &i64) -> ?&i64 from p {
 
 pub fn main(env: &Env) -> u8 {
     match maybe_slice(true) {
-        .some(s) => {
-            @assert(s.len == 3);
-        }
-        .none => {
-            @assert(false);
-        }
+        .some(s) => { @assert(s.len == 3); }
+        .none => { @assert(false); }
     }
     match maybe_slice(false) {
-        .some(_) => {
-            @assert(false);
-        }
+        .some(_) => { @assert(false); }
         .none => {}
     }
     let n: i64 = 9;
     match maybe_ref(true, &n) {
-        .some(p) => {
-            @assert(p.* == 9);
-        }
-        .none => {
-            @assert(false);
-        }
+        .some(p) => { @assert(p.* == 9); }
+        .none => { @assert(false); }
     }
     match maybe_ref(false, &n) {
-        .some(_) => {
-            @assert(false);
-        }
+        .some(_) => { @assert(false); }
         .none => {}
     }
     return 0;

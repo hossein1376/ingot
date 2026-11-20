@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 4.6, 13.2
 
-struct Holder { s: []u8 }
+struct Holder {
+    s: []u8,
+}
 
 fn f(h: &mut Holder, s: []u8) {
     var target = h;

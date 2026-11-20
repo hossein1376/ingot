@@ -10,7 +10,5 @@ fn write(xs: []mut i64) {
 }
 
 fn read(xs: [4]i64) -> i64 {
-    unsafe("the index is in bounds") {
-        return @unchecked_index(xs, 0);
-    }
+    unsafe("the index is in bounds") { return @unchecked_index(xs, 0); }
 }

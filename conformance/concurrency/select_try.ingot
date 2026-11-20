@@ -4,11 +4,17 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-enum AppErr { bad }
+enum AppErr {
+    bad,
+}
 
-struct Service { n: i64 }
+struct Service {
+    n: i64,
+}
 
-struct Op { n: i64 }
+struct Op {
+    n: i64,
+}
 
 impl Wait for Op {
     type Output = Result[i64, AppErr];

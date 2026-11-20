@@ -39,12 +39,8 @@ impl Ord for Pt {
 
 fn is_greater(o: Ordering) -> bool {
     match o {
-        .greater => {
-            return true;
-        }
-        _ => {
-            return false;
-        }
+        .greater => { return true; }
+        _ => { return false; }
     }
 }
 
@@ -55,7 +51,10 @@ fn swap[T: Copy](xs: []mut T, i: i64, j: i64) {
 }
 
 /// Sorts so that `before(a, b)` never holds for a later `a` and an earlier `b`.
-fn insertion_sort_by[T: Copy, F: FnMut(&T, &T) -> bool](xs: []mut T, before: F) {
+fn insertion_sort_by[T: Copy, F: FnMut(&T, &T) -> bool](
+    xs: []mut T,
+    before: F,
+) {
     for i in 1..xs.len {
         var j = i;
         while j > 0 && before(&xs[j], &xs[j - 1]) {
@@ -149,14 +148,20 @@ fn check_ints() {
     var ys: [6]i64 = [6]i64.{ 4, 1, 6, 2, 5, 3 };
     let pivot: i64 = 0;
     var comparisons: i64 = 0;
-    insertion_sort_by(&mut ys[0..6], fn [pivot, &mut comparisons](a: &i64, b: &i64) -> bool {
-        comparisons.* += 1;
-        return a.* - pivot > b.* - pivot;
-    });
+    insertion_sort_by(
+        &mut ys[0..6],
+        fn [pivot, &mut comparisons](a: &i64, b: &i64) -> bool {
+            comparisons.* += 1;
+            return a.* - pivot > b.* - pivot;
+        },
+    );
     @assert(ys[0] == 6 && ys[5] == 1);
     @assert(comparisons > 0);
 
-    var heap = MaxHeap[i64, 8].{ items: [8]i64.{ 0, 0, 0, 0, 0, 0, 0, 0 }, len: 0 };
+    var heap = MaxHeap[i64, 8].{
+        items: [8]i64.{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        len: 0,
+    };
     heap.push(3);
     heap.push(11);
     heap.push(-2);
@@ -179,11 +184,17 @@ fn check_points() {
     @assert(is_sorted(&ps[0..5]));
     @assert(ps[0].x == 0 && ps[4].x == 2 && ps[4].y == 1);
 
-    insertion_sort_by(&mut ps[0..5], fn [](a: &Pt, b: &Pt) -> bool { return a.y < b.y; });
+    insertion_sort_by(
+        &mut ps[0..5],
+        fn [](a: &Pt, b: &Pt) -> bool { return a.y < b.y; },
+    );
     @assert(ps[0].y == 0 && ps[4].y == 9);
 
     let zero = Pt.{ x: 0, y: 0 };
-    var heap = MaxHeap[Pt, 4].{ items: [4]Pt.{ zero, zero, zero, zero }, len: 0 };
+    var heap = MaxHeap[Pt, 4].{
+        items: [4]Pt.{ zero, zero, zero, zero },
+        len: 0,
+    };
     heap.push(Pt.{ x: 1, y: 1 });
     heap.push(Pt.{ x: 3, y: 0 });
     heap.push(Pt.{ x: 3, y: 5 });

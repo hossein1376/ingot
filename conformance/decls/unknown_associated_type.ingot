@@ -5,7 +5,9 @@ interface Source {
     type Item;
 }
 
-struct Counter { n: i64 }
+struct Counter {
+    n: i64,
+}
 
 impl Source for Counter {
     type Item = i64;

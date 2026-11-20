@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 19
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
 fn f(b: Buf) {
     par for i in 0..4 {

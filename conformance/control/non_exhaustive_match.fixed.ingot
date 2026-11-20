@@ -1,7 +1,11 @@
 //! expect: accept
 //! section: 7.2
 
-enum Dir { north, south, east }
+enum Dir {
+    north,
+    south,
+    east,
+}
 
 fn code(d: Dir) -> i64 {
     return match d {

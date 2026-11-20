@@ -5,4 +5,6 @@ interface Shape {
     fn area(self: &Self) -> i64;
 }
 
-struct Holder { shape: Shape } //~ E0524
+struct Holder {
+    shape: Shape, //~ E0524
+}

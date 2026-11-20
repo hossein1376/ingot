@@ -1,18 +1,28 @@
 //! expect: reject
 //! section: 10
 
-linear struct Token { id: i32 }
-
-impl Token {
-    fn make(id: i32) -> Token { return Token.{ id: id }; }
-    fn release(self: Token) { let Token.{ id: _ } = self; }
+linear struct Token {
+    id: i32,
 }
 
-enum E { no }
+impl Token {
+    fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+    fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+enum E {
+    no,
+}
 
 fn f(ok: bool) -> void ! E {
     let t = Token.make(1);
     errdefer { t.release(); }
     t.release(); //~ E1005
-    if !ok { fail .no; }
+    if !ok {
+        fail .no;
+    }
 }

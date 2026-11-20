@@ -1,4 +1,6 @@
 //! expect: reject
 //! section: 3
 
-struct Table { cells: [-1]i64 } //~ E0521
+struct Table {
+    cells: [-1]i64, //~ E0521
+}

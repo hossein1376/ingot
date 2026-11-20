@@ -3,11 +3,28 @@
 
 import std.Env;
 
-struct Rgb { r: u8, g: u8, b: u8 }
-struct Fp { x: f64, y: f64 }
-struct Big { a: i64, b: i64, c: i64, d: [5]i32 }
-struct Inner { k: [2]u16 }
-struct Outer { i: Inner, t: (i8, i64) }
+struct Rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+struct Fp {
+    x: f64,
+    y: f64,
+}
+struct Big {
+    a: i64,
+    b: i64,
+    c: i64,
+    d: [5]i32,
+}
+struct Inner {
+    k: [2]u16,
+}
+struct Outer {
+    i: Inner,
+    t: (i8, i64),
+}
 
 fn sum(c: Rgb) -> i64 {
     return c.r as i64 + c.g as i64 + c.b as i64;

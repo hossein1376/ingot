@@ -4,7 +4,6 @@
 import std.Env;
 
 pub fn main(env: &Env) -> u8 {
-
     let a: [4]f32 = [4]f32.{ 1.0, 2.0, 3.0, 4.0 };
     let b: [4]f32 = [4]f32.{ 4.0, 3.0, 2.0, 1.0 };
     let va = @load(f32x4, &a[0..4], 0);

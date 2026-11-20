@@ -12,17 +12,11 @@ fn maybe(ok: bool) -> ?[4]i64 {
 
 pub fn main(env: &Env) -> u8 {
     match maybe(true) {
-        .some(a) => {
-            @assert(a[3] == 4);
-        }
-        .none => {
-            @assert(false);
-        }
+        .some(a) => { @assert(a[3] == 4); }
+        .none => { @assert(false); }
     }
     match maybe(false) {
-        .some(_) => {
-            @assert(false);
-        }
+        .some(_) => { @assert(false); }
         .none => {}
     }
     return 0;

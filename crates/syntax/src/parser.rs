@@ -766,7 +766,10 @@ impl<'a> Parser<'a> {
             self.expect_semi();
             None
         };
-        let end = body.as_ref().map(|b| b.span.end).unwrap_or(self.span().end);
+        let end = body
+            .as_ref()
+            .map(|b| b.span.end)
+            .unwrap_or_else(|| self.prev_end().max(start));
         FnDecl {
             name,
             name_span,
@@ -829,7 +832,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            let end = self.span().end;
+            let end = self.prev_end().max(start);
             out.push(GenericParam {
                 name,
                 name_span,
@@ -916,7 +919,7 @@ impl<'a> Parser<'a> {
                 let (pname, pspan) = self.expect_ident();
                 into = Some((pname, pspan));
             }
-            let end = self.span().end;
+            let end = self.prev_end().max(start);
             out.push(Param {
                 name,
                 name_span,
@@ -1031,7 +1034,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let end = self.span().end;
+            let end = self.prev_end().max(fstart);
             fields.push(FieldDecl {
                 name: fname,
                 name_span: fspan,
@@ -1092,7 +1095,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let end = self.span().end;
+            let end = self.prev_end().max(vstart);
             variants.push(VariantDecl {
                 name: vname,
                 name_span: vspan,
@@ -1404,10 +1407,7 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
-        let end = otherwise
-            .last()
-            .map(|i| i.span().end)
-            .unwrap_or(self.span().end);
+        let end = self.prev_end().max(start);
         WhenItems {
             condition,
             then,
@@ -1544,7 +1544,7 @@ impl<'a> Parser<'a> {
                 let mutable = self.eat_kw(Kw::Mut);
                 if self.eat_kw(Kw::Dyn) {
                     let interface = self.bound();
-                    let end = self.span().end;
+                    let end = self.prev_end().max(start);
                     return Ty::Dyn {
                         interface: Box::new(interface),
                         mutable,
@@ -1918,15 +1918,15 @@ impl<'a> Parser<'a> {
                 expr.span,
             );
         }
-        let end_span = if self.eat(Semicolon) {
-            self.peek().span
+        let ended = self.eat(Semicolon);
+        if !ended && !trailing_branch_expr {
+            self.expect_semi();
+        }
+        let end = if ended {
+            self.prev_end()
         } else {
-            if !trailing_branch_expr {
-                self.expect_semi();
-            }
-            self.peek().span
+            expr.span.end
         };
-        let end = expr.span.end.max(end_span.start);
         Stmt::Expr {
             expr,
             span: Span::new(start, end),
@@ -2293,7 +2293,7 @@ impl<'a> Parser<'a> {
         if ranges.len() == 1 {
             ranges.pop().unwrap()
         } else {
-            let span = Span::new(start, self.span().end);
+            let span = Span::new(start, self.prev_end().max(start));
             Expr::new(
                 ExprKind::Tuple {
                     elems: ranges,
@@ -2432,7 +2432,7 @@ impl<'a> Parser<'a> {
                         fields: Vec::new(),
                         rest: false,
                         rest_span: Span::default(),
-                        span: Span::new(start, self.span().end),
+                        span: Span::new(start, self.prev_end().max(start)),
                     }
                 }
             }
@@ -3284,7 +3284,7 @@ impl<'a> Parser<'a> {
                     } else {
                         None
                     };
-                    let span = Span::new(start, self.span().end);
+                    let span = Span::new(start, self.prev_end().max(start));
                     Expr::new(
                         ExprKind::EnumLit {
                             path: None,

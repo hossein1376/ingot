@@ -3,11 +3,20 @@
 
 import std.Env;
 
-struct OkPay { a: i64, b: i64 }
+struct OkPay {
+    a: i64,
+    b: i64,
+}
 
-struct ErrPay { x: i64, y: i64, z: i64 }
+struct ErrPay {
+    x: i64,
+    y: i64,
+    z: i64,
+}
 
-enum E { bad: ErrPay }
+enum E {
+    bad: ErrPay,
+}
 
 fn value(ok: bool) -> OkPay ! E {
     if !ok {
@@ -18,9 +27,7 @@ fn value(ok: bool) -> OkPay ! E {
 
 fn on_err(e: E) -> OkPay {
     match e {
-        .bad(p) => {
-            return OkPay.{ a: p.z, b: 0 };
-        }
+        .bad(p) => { return OkPay.{ a: p.z, b: 0 }; }
     }
 }
 
@@ -30,22 +37,14 @@ pub fn main(env: &Env) -> u8 {
     let b = value(false) catch e => on_err(e);
     @assert(b.a == 5);
     match value(true) {
-        .ok(v) => {
-            @assert(v.a == 1);
-        }
-        .err(_) => {
-            @assert(false);
-        }
+        .ok(v) => { @assert(v.a == 1); }
+        .err(_) => { @assert(false); }
     }
     match value(false) {
-        .ok(_) => {
-            @assert(false);
-        }
+        .ok(_) => { @assert(false); }
         .err(e) => {
             match e {
-                .bad(p) => {
-                    @assert(p.x == 3 && p.y == 4);
-                }
+                .bad(p) => { @assert(p.x == 3 && p.y == 4); }
             }
         }
     }

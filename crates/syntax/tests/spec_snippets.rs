@@ -18,6 +18,16 @@ use std::path::{Path, PathBuf};
 /// ```ingot blocks, reason)`.
 const ALLOWLIST: &[(&str, usize, &str)] = &[
     (
+        "docs/05-tooling.md",
+        1,
+        "§34.2 lists one-line blocks side by side, among them a `match` arm, which is neither a statement nor an item",
+    ),
+    (
+        "docs/05-tooling.md",
+        4,
+        "§34.3 shows a broken function header alone, without its body or closing brace",
+    ),
+    (
         "docs/04-hardware.md",
         1,
         "kernel items followed by top-level `dispatch` statements; neither a file nor a fn body holds both",

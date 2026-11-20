@@ -1,1 +1,1 @@
-pub fn help() { } //~ E1705
+pub fn help() {} //~ E1705

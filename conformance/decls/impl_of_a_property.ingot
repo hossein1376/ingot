@@ -1,6 +1,8 @@
 //! expect: reject
 //! section: 4.4, 8, 10
 
-struct Token { id: i64 }
+struct Token {
+    id: i64,
+}
 
 impl Copy for Token {} //~ E0525

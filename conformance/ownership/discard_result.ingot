@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 6.2, 7
 
-enum E { e }
+enum E {
+    e,
+}
 
 fn f() -> i64 ! E {
     return 1;

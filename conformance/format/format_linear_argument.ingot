@@ -1,7 +1,9 @@
 //! expect: accept
 //! section: 35
 
-linear struct L { x: i64 }
+linear struct L {
+    x: i64,
+}
 
 // An argument of `@debug` is read through a shared borrow, not moved: `l` is printed
 // twice and still consumed once afterwards.

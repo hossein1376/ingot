@@ -4,7 +4,6 @@
 import std.Env;
 
 pub fn main(env: &Env) -> u8 {
-
     let big: i64 = 300;
     @assert(@wrap(u8, big) == 44);
     @assert(@sat(u8, big) == 255);

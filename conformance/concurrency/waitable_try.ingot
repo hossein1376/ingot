@@ -4,7 +4,9 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-enum AppErr { bad }
+enum AppErr {
+    bad,
+}
 
 fn check(n: i64) -> i64 ! AppErr {
     if n < 0 {
@@ -13,9 +15,13 @@ fn check(n: i64) -> i64 ! AppErr {
     return n;
 }
 
-struct S { n: i64 }
+struct S {
+    n: i64,
+}
 
-struct Op { n: i64 }
+struct Op {
+    n: i64,
+}
 
 impl Wait for Op {
     type Output = Result[void, AppErr];

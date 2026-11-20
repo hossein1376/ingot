@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 13.1
 
-struct Window { buf: []mut u8 }
+struct Window {
+    buf: []mut u8,
+}
 
 impl Window {
     fn head(self: &mut Window) -> []mut u8 from self.* {

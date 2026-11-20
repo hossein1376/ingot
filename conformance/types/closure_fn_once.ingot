@@ -1,13 +1,15 @@
 //! expect: reject
 //! section: 5.6
 
-linear struct L { x: i64 }
+linear struct L {
+    x: i64,
+}
 
 fn want[F: Fn() -> i64](f: F) -> i64 {
     return f();
 }
 
 fn f(l: L) -> i64 {
-    let closure = fn[l]() -> i64 { return l.x; };
+    let closure = fn [l]() -> i64 { return l.x; };
     return want(closure); //~ E0801
 }

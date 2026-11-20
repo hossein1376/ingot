@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 8
 
-struct Buf { n: i64 }
+struct Buf {
+    n: i64,
+}
 
 fn twice[T: Copy](a: T) -> (T, T) {
     return (a, a);

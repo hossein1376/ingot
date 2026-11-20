@@ -4,7 +4,9 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-struct Ready[T] { v: ?T }
+struct Ready[T] {
+    v: ?T,
+}
 
 impl[T] Wait for Ready[T] {
     type Output = T;
@@ -14,7 +16,9 @@ impl[T] Wait for Ready[T] {
     }
 }
 
-struct S { n: i64 }
+struct S {
+    n: i64,
+}
 
 impl S {
     waitable fn get(self: &S) -> &i64 from self {
@@ -30,7 +34,9 @@ fn leak(d: &i64) -> &i64 from d {
 fn leak2(d: &i64) -> &i64 from d {
     let s = S.{ n: 1 };
     select {
-        r = s.get() => { return r; } //~ E1203
+        r = s.get() => {
+            return r; //~ E1203
+        }
     }
 }
 

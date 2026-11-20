@@ -659,17 +659,21 @@ fn run_fix(case: &Case) -> Result<(), String> {
     }
 }
 
-/// README "Fix tests": drop directive lines, marker comments and trailing
-/// white space from both texts before comparing.
+/// README "Fix tests": drop directive lines and marker comments from both texts and
+/// put both in the canonical `ingot fmt` layout before comparing.
 fn normalize(text: &str) -> String {
-    text.lines()
+    let stripped = text
+        .lines()
         .filter(|line| !line.trim_start().starts_with("//!"))
         .map(|line| match line.find("//~") {
             Some(i) => line[..i].trim_end(),
             None => line.trim_end(),
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    // A fix is an edit, not a reformat: the text it leaves is laid out as the
+    // original was, so both sides go through the formatter.
+    ingot_syntax::fmt::format_text(&stripped).unwrap_or(stripped)
 }
 
 fn diagnostics_markers(analysis: &Analysis) -> BTreeSet<Marker> {

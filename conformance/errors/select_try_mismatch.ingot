@@ -4,12 +4,20 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-enum First { one }
-enum Second { two }
+enum First {
+    one,
+}
+enum Second {
+    two,
+}
 
-struct Service { n: i64 }
+struct Service {
+    n: i64,
+}
 
-struct Op { n: i64 }
+struct Op {
+    n: i64,
+}
 
 impl Wait for Op {
     type Output = Result[i64, First];
@@ -27,6 +35,8 @@ impl Service {
 
 fn chosen(s: &Service) -> i64 ! Second {
     select {
-        v = try s.wait() => { return v; } //~ E0703
+        v = try s.wait() => { //~ E0703
+            return v;
+        }
     }
 }

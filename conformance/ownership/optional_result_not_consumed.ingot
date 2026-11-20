@@ -1,15 +1,23 @@
 //! expect: reject
 //! section: 10, 11
 
-linear struct Token { id: i32 }
+linear struct Token {
+    id: i32,
+}
 
 impl Token {
-    fn make(id: i32) -> Token { return Token.{ id: id }; }
-    fn release(self: Token) { let Token.{ id: _ } = self; }
+    fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+    fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
 }
 
 fn maybe(ok: bool) -> ?Token {
-    if ok { return .some(Token.make(1)); }
+    if ok {
+        return .some(Token.make(1));
+    }
     return .none;
 }
 

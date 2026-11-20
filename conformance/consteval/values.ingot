@@ -72,7 +72,10 @@ fn id[T](x: T) -> T {
     return x;
 }
 
-copy enum Color: u8 { red, green }
+copy enum Color: u8 {
+    red,
+    green,
+}
 
 fn green() -> Color {
     return .green;
@@ -89,7 +92,9 @@ interface Named {
     fn name(self: &Self) -> i64;
 }
 
-copy struct Item { n: i64 }
+copy struct Item {
+    n: i64,
+}
 
 impl Named for Item {
     fn name(self: &Item) -> i64 {
@@ -178,7 +183,9 @@ fn bools() -> i64 {
     b[0] = false;
     var n: i64 = 0;
     for x in b {
-        if x { n += 1; }
+        if x {
+            n += 1;
+        }
     }
     return n;
 }
@@ -228,10 +235,19 @@ fn f() {
     @static_assert(through_refs() == 6, "std iterator");
     @static_assert(through_value() == 3, "function value");
     @static_assert(plus_one(2) == 3, "constant function value");
-    @static_assert(widen(1) == 4294967296, "integer widening keeps the destination type");
+    @static_assert(
+        widen(1) == 4294967296,
+        "integer widening keeps the destination type",
+    );
     @static_assert(fwiden() == 0.5, "float widening converts the bits");
-    @static_assert(generic_size() == 4, "generic arguments substitute through a call");
-    @static_assert(closure_generic(1) == 9, "generic arguments substitute into a closure");
+    @static_assert(
+        generic_size() == 4,
+        "generic arguments substitute through a call",
+    );
+    @static_assert(
+        closure_generic(1) == 9,
+        "generic arguments substitute into a closure",
+    );
     @static_assert(closure_caps(10) == 11, "closure captures");
     @static_assert(floats() == 1.75, "packed f32");
     @static_assert(bools() == 2, "packed bool");

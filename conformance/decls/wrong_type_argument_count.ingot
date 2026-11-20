@@ -1,6 +1,11 @@
 //! expect: reject
 //! section: 8
 
-struct Pair[A, B] { a: A, b: B }
+struct Pair[A, B] {
+    a: A,
+    b: B,
+}
 
-struct Holder { p: Pair[i64] } //~ E0804
+struct Holder {
+    p: Pair[i64], //~ E0804
+}

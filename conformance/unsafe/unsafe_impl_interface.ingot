@@ -1,9 +1,10 @@
 //! expect: reject
 //! section: 15, 20
 
-interface Marker {
-}
+interface Marker {}
 
-struct Item { n: i64 }
+struct Item {
+    n: i64,
+}
 
 unsafe impl Marker for Item {} //~ E1303

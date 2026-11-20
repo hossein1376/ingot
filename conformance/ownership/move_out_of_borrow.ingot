@@ -1,9 +1,13 @@
 //! expect: reject
 //! section: 11
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
-struct Holder { b: Buf }
+struct Holder {
+    b: Buf,
+}
 
 fn steal(h: &Holder) -> Buf {
     return h.b; //~ E1002

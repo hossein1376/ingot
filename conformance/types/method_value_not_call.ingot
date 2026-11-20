@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 4.4
 
-struct P { x: i64 }
+struct P {
+    x: i64,
+}
 
 impl P {
     fn get(self: &P) -> i64 {

@@ -4,7 +4,9 @@
 import std.Env;
 
 fn fib(n: i64) -> i64 {
-    if n < 2 { return n; }
+    if n < 2 {
+        return n;
+    }
     scope s {
         let left = spawn fib(n - 1) in s;
         let right = fib(n - 2);

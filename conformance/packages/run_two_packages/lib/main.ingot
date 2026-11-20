@@ -1,4 +1,6 @@
-pub struct Point { pub x: i64 }
+pub struct Point {
+    pub x: i64,
+}
 
 pub struct Pair[T] {
     pub first: T,

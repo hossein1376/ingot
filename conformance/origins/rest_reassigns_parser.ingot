@@ -1,7 +1,10 @@
 //! expect: accept
 //! section: 13.1
 
-struct Parser { src: []u8, pos: i64 }
+struct Parser {
+    src: []u8,
+    pos: i64,
+}
 
 impl Parser {
     fn rest(self: &Parser) -> []u8 from self.* {

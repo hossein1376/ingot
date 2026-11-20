@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 15
 
-unsafe fn danger() {
-}
+unsafe fn danger() {}
 
 fn f() {
     let p = danger; //~ E1305

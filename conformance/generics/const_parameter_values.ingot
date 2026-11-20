@@ -1,18 +1,23 @@
 //! expect: accept
 //! section: 1, 8
 
-struct Ring[T, const n: i64] { items: [n]T, head: i64 }
+struct Ring[T, const n: i64] {
+    items: [n]T,
+    head: i64,
+}
 
 const max_depth: i64 = 8;
 
 fn sum[const n: i64]() -> i64 {
     @static_assert(n > 0, "positive");
     var s: i64 = 0;
-    for i in 0..n { s += i; }
+    for i in 0..n {
+        s += i;
+    }
     return s;
 }
 
-fn f(r: Ring[u8, max_depth], s: Ring[u8, 16], t: Ring[u8, {2 * 4}]) -> i64 {
+fn f(r: Ring[u8, max_depth], s: Ring[u8, 16], t: Ring[u8, { 2 * 4 }]) -> i64 {
     _ = r;
     _ = s;
     _ = t;

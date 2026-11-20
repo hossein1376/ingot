@@ -1,17 +1,27 @@
 //! expect: accept
 //! section: 6.4, 10
 
-linear struct Token { id: i32 }
-
-impl Token {
-    fn make(id: i32) -> Token { return Token.{ id: id }; }
-    fn release(self: Token) { let Token.{ id: _ } = self; }
+linear struct Token {
+    id: i32,
 }
 
-enum E { no }
+impl Token {
+    fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+    fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+enum E {
+    no,
+}
 
 fn check(ok: bool) -> void ! E {
-    if !ok { fail .no; }
+    if !ok {
+        fail .no;
+    }
 }
 
 fn open(ok: bool) -> Token ! E {

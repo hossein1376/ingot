@@ -1,1 +1,1 @@
-export fn run() { } //~ E1604
+export fn run() {} //~ E1604

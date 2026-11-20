@@ -4,12 +4,9 @@
 import std.Env;
 
 pub fn main(env: &Env) -> u8 {
-
     var x: i64 = 5;
     let p = &mut x as *mut i64;
-    unsafe("p points at x, which is live and not borrowed here") {
-        p.* = 6;
-    }
+    unsafe("p points at x, which is live and not borrowed here") { p.* = 6; }
     @assert(x == 6);
     return 0;
 }

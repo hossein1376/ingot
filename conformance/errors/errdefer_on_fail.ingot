@@ -3,7 +3,9 @@
 
 import std.Env;
 
-enum E { bad }
+enum E {
+    bad,
+}
 
 fn low(ok: bool, runs: &mut i64) -> i64 ! E {
     errdefer { runs.* += 1; }

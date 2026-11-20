@@ -8,6 +8,7 @@ pub mod conformance;
 pub mod deps;
 pub mod files;
 pub mod fix;
+pub mod fmt;
 pub mod loader;
 pub mod manifest;
 pub mod pipeline;

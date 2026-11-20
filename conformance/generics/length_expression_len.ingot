@@ -1,7 +1,9 @@
 //! expect: accept
 //! section: 1, 8
 
-fn f[const n: i64](x: [n + 1]u8) -> i64 { return x.len; }
+fn f[const n: i64](x: [n + 1]u8) -> i64 {
+    return x.len;
+}
 
 fn run() -> i64 {
     let a: [4]u8 = [4]u8.{ 0, 0, 0, 0 };

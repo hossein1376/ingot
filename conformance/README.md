@@ -68,9 +68,10 @@ Columns and message text are not compared. Related spans are compared only where
 ## Fix tests
 
 `name.fixed.ingot` next to `name.ingot` is the expected result of `ingot fix` on the
-original. The two are compared after removing directive lines, marker comments and
-trailing white space from both. The fixed file is also a test of its own and expects
-`accept`.
+original. Both texts are compared after removing directive lines and marker comments
+and putting both in the canonical `ingot fmt` layout, so a fix is not required to
+reproduce the layout of the original. The fixed file is also a test of its own and
+expects `accept`.
 
 ## Rules for writing tests
 

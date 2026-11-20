@@ -2,4 +2,6 @@ pub interface Measure {
     fn measure(self: &Self) -> i64;
 }
 
-pub struct Square { pub side: i64 }
+pub struct Square {
+    pub side: i64,
+}

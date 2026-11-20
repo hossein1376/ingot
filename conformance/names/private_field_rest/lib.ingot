@@ -1,4 +1,7 @@
-pub struct Ticket { pub id: i32, note: i32 }
+pub struct Ticket {
+    pub id: i32,
+    note: i32,
+}
 
 pub fn issue() -> Ticket {
     return Ticket.{ id: 1, note: 2 };

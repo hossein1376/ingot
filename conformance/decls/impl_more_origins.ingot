@@ -5,7 +5,9 @@ interface Pick {
     fn pick(self: &Self, other: []u8) -> []u8 from other;
 }
 
-struct Holder { n: i64 }
+struct Holder {
+    n: i64,
+}
 
 impl Pick for Holder {
     fn pick(self: &Holder, other: []u8) -> []u8 from self, other { //~ E0509

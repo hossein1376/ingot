@@ -1,2 +1,1 @@
-fn secret() {
-}
+fn secret() {}

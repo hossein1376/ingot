@@ -10,6 +10,10 @@ fn f(x: ?i64) -> i64 {
 }
 
 fn g(c: bool) -> i64 {
-    let v = if c { 1 } else { return 2; };
+    let v = if c {
+        1
+    } else {
+        return 2;
+    };
     return v;
 }

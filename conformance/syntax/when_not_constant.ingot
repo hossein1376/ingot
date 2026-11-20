@@ -4,6 +4,5 @@
 const limit: i64 = 64;
 
 when limit == 64 { //~ E0612
-    fn big() {
-    }
+    fn big() {}
 }

@@ -1,7 +1,10 @@
 //! expect: accept
 //! section: 29
 
-copy struct Pair { a: i32, b: i32 }
+copy struct Pair {
+    a: i32,
+    b: i32,
+}
 
 extern "c" {
     fn add(p: Pair, n: i32) -> Pair;

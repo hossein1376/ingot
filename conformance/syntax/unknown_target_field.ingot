@@ -2,6 +2,5 @@
 //! section: 24.3
 
 when @target.cores == 8 { //~ E1606
-    fn many() {
-    }
+    fn many() {}
 }

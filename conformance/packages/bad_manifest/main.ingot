@@ -1,5 +1,4 @@
 //! expect: reject
 //! section: 33
 
-fn f() {
-}
+fn f() {}

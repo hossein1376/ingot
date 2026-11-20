@@ -3,8 +3,14 @@
 
 import std.Env;
 
-struct F32s { x: f32, y: f32 }
-struct F64s { x: f64, y: f64 }
+struct F32s {
+    x: f32,
+    y: f32,
+}
+struct F64s {
+    x: f64,
+    y: f64,
+}
 
 const one32: f32 = 0.1;
 const one64: f64 = 0.1;

@@ -1,8 +1,7 @@
 //! expect: cost
 //! section: 31
 
-fn touch(s: &mut []mut i64) {
-}
+fn touch(s: &mut []mut i64) {}
 
 fn pick(p: []mut i64) -> i64 {
     var s = p;

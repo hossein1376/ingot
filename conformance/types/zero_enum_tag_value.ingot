@@ -3,7 +3,10 @@
 
 import std.Env;
 
-copy enum M: u8 { a = 5, b = 0 }
+copy enum M: u8 {
+    a = 5,
+    b = 0,
+}
 
 pub fn main(env: &Env) -> u8 {
     let n: u8 = @zero(M) as u8;

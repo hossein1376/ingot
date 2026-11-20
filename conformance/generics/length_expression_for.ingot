@@ -3,7 +3,9 @@
 
 fn sum[const n: i64](x: [n + 1]u8) -> i64 {
     var s: i64 = 0;
-    for v in x { s += v as i64; }
+    for v in x {
+        s += v as i64;
+    }
     return s;
 }
 

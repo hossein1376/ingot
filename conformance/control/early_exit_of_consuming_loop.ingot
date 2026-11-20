@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 7.1
 
-linear struct Token { id: i64 }
+linear struct Token {
+    id: i64,
+}
 
 impl Token {
     fn spend(self: Token) -> i64 {

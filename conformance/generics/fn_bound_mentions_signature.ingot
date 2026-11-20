@@ -14,10 +14,10 @@ fn call_mut[R, A: FnMut() -> R](a: A) -> R {
 }
 
 fn f() -> i64 {
-    let c1 = fn[]() -> i64 { return 3; };
-    let c2 = fn[]() -> i64 { return 4; };
+    let c1 = fn []() -> i64 { return 3; };
+    let c2 = fn []() -> i64 { return 4; };
     var n: i64 = 0;
-    let c3 = fn[&mut n]() -> i64 {
+    let c3 = fn [&mut n]() -> i64 {
         n.* += 1;
         return n.*;
     };

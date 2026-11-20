@@ -1,8 +1,8 @@
 //! expect: accept
 //! section: 32
 
-import std.testing.TestEnv;
 import std.testing.ManualClock;
+import std.testing.TestEnv;
 
 test "the environment" {
     let t = @test_env();

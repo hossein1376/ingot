@@ -8,7 +8,12 @@ copy enum Color: u8 {
     green,
 }
 
-fn kinds(a: Atomic[i64], b: Atomic[bool], c: Atomic[*mut u8], d: Atomic[Color]) {
+fn kinds(
+    a: Atomic[i64],
+    b: Atomic[bool],
+    c: Atomic[*mut u8],
+    d: Atomic[Color],
+) {
     a.store(1, .relaxed);
     b.store(true, .relaxed);
     let p = c.load(.relaxed);

@@ -6,7 +6,9 @@ interface Make {
     fn pair(a: Self, b: Self) -> i64;
 }
 
-copy struct P { x: i64 }
+copy struct P {
+    x: i64,
+}
 
 impl Make for P {
     fn make(x: i64) -> P {

@@ -4,10 +4,16 @@
 import std.task.Wait;
 import std.task.WaitCx;
 
-struct Service { n: i64 }
+struct Service {
+    n: i64,
+}
 
-struct A { n: i64 }
-struct B { n: i64 }
+struct A {
+    n: i64,
+}
+struct B {
+    n: i64,
+}
 
 impl Wait for A {
     type Output = i64;

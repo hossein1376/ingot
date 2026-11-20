@@ -1,9 +1,13 @@
 //! expect: reject
 //! section: 21
 
-enum AppErr { bad }
+enum AppErr {
+    bad,
+}
 
-struct S { n: i64 }
+struct S {
+    n: i64,
+}
 
 impl S {
     waitable fn wait(self: &S) -> void ! AppErr {

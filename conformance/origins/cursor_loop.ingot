@@ -1,7 +1,10 @@
 //! expect: accept
 //! section: 12, 13.1
 
-struct Node { value: i64, next: ?&mut Node }
+struct Node {
+    value: i64,
+    next: ?&mut Node,
+}
 
 fn get_mut(n: &mut Node) -> &mut Node from n {
     return n;

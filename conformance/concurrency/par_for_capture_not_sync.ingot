@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 19, 20
 
-struct Boxy { p: *mut i64 }
+struct Boxy {
+    p: *mut i64,
+}
 
 fn f(b: Boxy) {
     par for i in 0..4 {

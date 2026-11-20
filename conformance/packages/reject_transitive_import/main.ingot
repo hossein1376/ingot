@@ -2,7 +2,6 @@
 //! section: 2
 
 import leaf; //~ E0301
-
 fn f() -> i64 {
     return leaf.one();
 }

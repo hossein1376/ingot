@@ -1,7 +1,10 @@
 //! expect: reject
 //! section: 13.1
 
-struct Parser { src: []u8, pos: i64 }
+struct Parser {
+    src: []u8,
+    pos: i64,
+}
 
 impl Parser {
     fn pos_mut(self: &mut Parser) -> &mut i64 from self {

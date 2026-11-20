@@ -3,7 +3,10 @@
 
 import std.Env;
 
-struct Point { x: i64, y: i64 }
+struct Point {
+    x: i64,
+    y: i64,
+}
 
 const table: [4]u32 = [4]u32.{ 1, 2, 3, 4 };
 const origin: Point = Point.{ x: 3, y: 4 };

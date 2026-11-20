@@ -1,6 +1,10 @@
 //! expect: reject
 //! section: 8
 
-struct Plain { x: i64 }
+struct Plain {
+    x: i64,
+}
 
-struct Holder { p: Plain[i64] } //~ E0805
+struct Holder {
+    p: Plain[i64], //~ E0805
+}

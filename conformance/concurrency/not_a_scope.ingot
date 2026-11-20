@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 18
 
-fn work() {
-}
+fn work() {}
 
 fn f(x: i64) {
     spawn work() in x; //~ E1405

@@ -3,7 +3,10 @@
 
 import std.Env;
 
-copy struct Pt { x: i64, y: i64 }
+copy struct Pt {
+    x: i64,
+    y: i64,
+}
 
 impl Eq for Pt {
     fn eq(self: &Pt, other: &Pt) -> bool {
@@ -13,10 +16,18 @@ impl Eq for Pt {
 
 impl Ord for Pt {
     fn cmp(self: &Pt, other: &Pt) -> Ordering {
-        if self.x < other.x { return .less; }
-        if self.x > other.x { return .greater; }
-        if self.y < other.y { return .less; }
-        if self.y > other.y { return .greater; }
+        if self.x < other.x {
+            return .less;
+        }
+        if self.x > other.x {
+            return .greater;
+        }
+        if self.y < other.y {
+            return .less;
+        }
+        if self.y > other.y {
+            return .greater;
+        }
         return .equal;
     }
 }

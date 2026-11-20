@@ -57,7 +57,13 @@ fn add_int[T: AtomicValue + Int](p: *mut T, n: T) -> T {
     return unsafe("p points at a live T") { @atomic_add(p, n, .relaxed) };
 }
 
-fn orders(a: &Atomic[i64], p: *mut i64, l: LoadOrder, s: StoreOrder, o: AtomicOrder) -> i64 {
+fn orders(
+    a: &Atomic[i64],
+    p: *mut i64,
+    l: LoadOrder,
+    s: StoreOrder,
+    o: AtomicOrder,
+) -> i64 {
     let x = a.load(l);
     a.store(x, s);
     _ = a.swap(x, o);

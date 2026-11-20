@@ -1,11 +1,14 @@
 //! expect: reject
 //! section: 27.1
 
-enum E { a, b: i32 }
+enum E {
+    a,
+    b: i32,
+}
 
 kernel fn k(i: Idx) {
     match E.a { //~ E1511
-        .a => { }
-        .b(_) => { }
+        .a => {}
+        .b(_) => {}
     }
 }

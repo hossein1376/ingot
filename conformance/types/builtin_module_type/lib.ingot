@@ -1,1 +1,4 @@
-pub copy struct Pair { a: i64, b: i64 }
+pub copy struct Pair {
+    a: i64,
+    b: i64,
+}

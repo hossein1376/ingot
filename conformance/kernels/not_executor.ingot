@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 27.2
 
-kernel fn k(i: Idx, x: []f32) {
-}
+kernel fn k(i: Idx, x: []f32) {}
 
 fn f(x: []f32) {
     dispatch k(x) over 0..4 on 5; //~ E1516

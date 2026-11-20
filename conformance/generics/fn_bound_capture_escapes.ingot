@@ -7,6 +7,6 @@ fn pick[R, A: FnOnce() -> R](a: A) -> R {
 
 fn f() -> &i64 from static {
     let x: i64 = 3;
-    let c = fn[&x]() -> &i64 { return x; };
+    let c = fn [&x]() -> &i64 { return x; };
     return pick(c); //~ E1203
 }

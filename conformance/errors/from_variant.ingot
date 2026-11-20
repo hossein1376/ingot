@@ -3,12 +3,19 @@
 
 import std.Env;
 
-enum Inner { bad }
+enum Inner {
+    bad,
+}
 
-enum Outer { inner: from Inner, other }
+enum Outer {
+    inner: from Inner,
+    other,
+}
 
 fn low(ok: bool) -> i64 ! Inner {
-    if !ok { fail .bad; }
+    if !ok {
+        fail .bad;
+    }
     return 1;
 }
 

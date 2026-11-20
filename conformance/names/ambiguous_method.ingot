@@ -9,14 +9,20 @@ interface Volume {
     fn size(self: &Self) -> i64;
 }
 
-struct Block { side: i64 }
+struct Block {
+    side: i64,
+}
 
 impl Area for Block {
-    fn size(self: &Block) -> i64 { return self.side * self.side; }
+    fn size(self: &Block) -> i64 {
+        return self.side * self.side;
+    }
 }
 
 impl Volume for Block {
-    fn size(self: &Block) -> i64 { return self.side * self.side * self.side; }
+    fn size(self: &Block) -> i64 {
+        return self.side * self.side * self.side;
+    }
 }
 
 fn measure(b: &Block) -> i64 {

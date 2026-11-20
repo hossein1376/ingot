@@ -1,14 +1,22 @@
 //! expect: accept
 //! section: 11
 
-linear struct Token { id: i32 }
-
-impl Token {
-    fn make(id: i32) -> Token { return Token.{ id: id }; }
-    fn release(self: Token) { let Token.{ id: _ } = self; }
+linear struct Token {
+    id: i32,
 }
 
-linear struct Box { t: Token }
+impl Token {
+    fn make(id: i32) -> Token {
+        return Token.{ id: id };
+    }
+    fn release(self: Token) {
+        let Token.{ id: _ } = self;
+    }
+}
+
+linear struct Box {
+    t: Token,
+}
 
 fn f() {
     var b = Box.{ t: Token.make(1) };

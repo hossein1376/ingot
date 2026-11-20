@@ -1,9 +1,14 @@
 //! expect: reject
 //! section: 11
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
-struct S { a: Buf, b: i64 }
+struct S {
+    a: Buf,
+    b: i64,
+}
 
 fn take(s: S) -> i64 {
     return s.b;

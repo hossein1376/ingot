@@ -1,8 +1,13 @@
 //! expect: accept
 //! section: 25
 
-struct Slot align(@target.cache_line) { x: i64 }
+struct Slot align(@target.cache_line) {
+    x: i64,
+}
 
-struct Counters { hits: i64 align(64), misses: i64 align(64) }
+struct Counters {
+    hits: i64 align(64),
+    misses: i64 align(64),
+}
 
 static ticks: i64 align(16) = 0;

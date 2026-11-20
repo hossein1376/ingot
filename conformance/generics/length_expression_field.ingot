@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 1, 8
 
-struct Buf[const n: i64] { data: [n + 1]u8 }
+struct Buf[const n: i64] {
+    data: [n + 1]u8,
+}
 
 fn call() -> i64 {
     let b = Buf[3].{ data: @zero([3]u8) }; //~ E0401

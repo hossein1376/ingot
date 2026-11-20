@@ -6,9 +6,13 @@ import std.task.WaitCx;
 
 linear struct Ticket {}
 
-struct Service { n: i64 }
+struct Service {
+    n: i64,
+}
 
-struct Op { n: i64 }
+struct Op {
+    n: i64,
+}
 
 impl Wait for Op {
     type Output = i64;

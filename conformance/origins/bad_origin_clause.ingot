@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 13.1, 13.2
 
-struct Lexer { src: []u8 }
+struct Lexer {
+    src: []u8,
+}
 
 fn longest(a: []u8, b: []u8) -> []u8 from c { //~ E1206
     return a;

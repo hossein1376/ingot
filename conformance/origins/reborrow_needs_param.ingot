@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 13.1
 
-struct S { n: i64 }
+struct S {
+    n: i64,
+}
 
 fn field(p: &S) -> &i64 from p.* {
     return &p.n; //~ E1202

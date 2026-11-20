@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 18, 20
 
-fn poke(p: *mut i64) {
-}
+fn poke(p: *mut i64) {}
 
 fn f() {
     var x: i64 = 0;

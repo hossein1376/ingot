@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 11
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
 fn f(a: [2]Buf) -> i64 {
     let x = a[0]; //~ E1002

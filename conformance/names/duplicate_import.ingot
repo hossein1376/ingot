@@ -3,6 +3,4 @@
 
 import std.Env;
 import std.Env; //~ E0302
-
-fn f(env: &Env) {
-}
+fn f(env: &Env) {}

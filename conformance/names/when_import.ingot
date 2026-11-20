@@ -4,10 +4,8 @@
 import std.Env;
 
 when @target.os == .linux {
-    fn open(env: &Env) {
-    }
+    fn open(env: &Env) {}
 }
-
 fn answer() -> i64 {
     return 42;
 }

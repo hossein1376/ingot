@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 13.2
 
-struct Holder { s: []u8 }
+struct Holder {
+    s: []u8,
+}
 
 fn keep(h: &mut Holder) {
     let a: [4]u8 = @zero;

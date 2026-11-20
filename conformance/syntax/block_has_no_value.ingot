@@ -2,5 +2,10 @@
 //! section: 5.7
 
 fn pick(c: bool) -> i64 {
-    return if c { let y: i64 = 1; y } else { 2 }; //~ E0207
+    return if c { //~ E0207
+        let y: i64 = 1;
+        y
+    } else {
+        2
+    };
 }

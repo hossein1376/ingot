@@ -1,8 +1,8 @@
 //! expect: run
 //! section: 33.2
 
-import std.Env;
 import lib;
+import std.Env;
 
 pub fn main(env: &Env) -> void {
     @assert(lib.twice(3) == 6);

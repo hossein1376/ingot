@@ -1,4 +1,7 @@
 //! expect: accept
 //! section: 4.2, 25
 
-struct Node { next: *Node, value: i64 }
+struct Node {
+    next: *Node,
+    value: i64,
+}

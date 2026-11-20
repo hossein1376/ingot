@@ -1,7 +1,10 @@
 //! expect: reject
 //! section: 7
 
-copy enum Color: u8 { red = 1, green }
+copy enum Color: u8 {
+    red = 1,
+    green,
+}
 
 fn f() -> Color {
     return @zero; //~ E0409

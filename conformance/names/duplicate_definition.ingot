@@ -1,8 +1,7 @@
 //! expect: reject
 //! section: 4.1
 
-fn twice() {
-}
+fn twice() {}
 
 fn twice() { //~ E0308
 }

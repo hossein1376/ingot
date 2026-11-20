@@ -1,8 +1,21 @@
 //! expect: accept
 //! section: 4.3
 
-enum Level: u8 { low = 1, mid, high = 10, top }
+enum Level: u8 {
+    low = 1,
+    mid,
+    high = 10,
+    top,
+}
 
-enum Signed: i8 { below = -2, zero = 0, above }
+enum Signed: i8 {
+    below = -2,
+    zero = 0,
+    above,
+}
 
-enum Plain { first, second, third }
+enum Plain {
+    first,
+    second,
+    third,
+}

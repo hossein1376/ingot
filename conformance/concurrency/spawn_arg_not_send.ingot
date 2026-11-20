@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 18, 20
 
-struct Boxy { p: *mut i64 }
+struct Boxy {
+    p: *mut i64,
+}
 
 fn take(b: Boxy) {
     _ = b.p;

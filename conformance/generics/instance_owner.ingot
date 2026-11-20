@@ -10,7 +10,9 @@ impl[const n: i64] S[n] {
         return 0;
     }
 
-    fn b(self: &S[n]) -> i64 { return n; }
+    fn b(self: &S[n]) -> i64 {
+        return n;
+    }
 }
 
 fn run() -> i64 {

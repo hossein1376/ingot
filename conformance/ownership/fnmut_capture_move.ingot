@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 5.6, 11
 
-struct Buf { len: i64 }
+struct Buf {
+    len: i64,
+}
 
 fn f() -> i64 {
     var b = Buf.{ len: 1 };

@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 7.1
 
-struct Item { v: i64 }
+struct Item {
+    v: i64,
+}
 
 fn total(xs: []Item) -> i64 {
     var t: i64 = 0;

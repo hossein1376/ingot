@@ -3,7 +3,9 @@
 
 import std.Env;
 
-enum E { bad }
+enum E {
+    bad,
+}
 
 fn low(ok: bool) -> i64 ! E {
     if !ok {

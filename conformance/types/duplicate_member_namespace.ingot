@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 4.4
 
-struct P { x: i64 }
+struct P {
+    x: i64,
+}
 
 impl P {
     fn x(self: P) -> i64 { //~ E0308
@@ -9,7 +11,10 @@ impl P {
     }
 }
 
-enum E { a, b }
+enum E {
+    a,
+    b,
+}
 
 impl E {
     fn a() -> E { //~ E0308
@@ -17,7 +22,9 @@ impl E {
     }
 }
 
-struct Q { y: i64 }
+struct Q {
+    y: i64,
+}
 
 impl Q {
     const y: i64 = 1; //~ E0308

@@ -3,7 +3,9 @@
 
 import std.sync.Mutex;
 
-struct Boxy[T] { ptr: *mut T }
+struct Boxy[T] {
+    ptr: *mut T,
+}
 
 fn hold(m: &Mutex[Boxy[[]u8]]) -> i64 { //~ E0801
     return 1;

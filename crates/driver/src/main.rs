@@ -36,7 +36,7 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<u8, String> {
     let Some(command) = args.first().map(String::as_str) else {
         return Err(
-            "usage: ingot <check|fix|query|api|audit|explain|layout|targets|deps|build|run|serve|conformance> [options] [path]".to_string(),
+            "usage: ingot <check|fix|fmt|query|api|audit|explain|layout|targets|deps|build|run|serve|conformance> [options] [path]".to_string(),
         );
     };
     let json = has_flag(args, "--json");
@@ -103,6 +103,19 @@ fn run(args: &[String]) -> Result<u8, String> {
                 fix::write_back(&outcome).map_err(|e| e.to_string())?;
             }
             Ok(if ok { 0 } else { 1 })
+        }
+        "fmt" => {
+            let started = Instant::now();
+            if has_flag(args, "--stdin") {
+                let (text, exit) = ingot_driver::fmt::stdin(started);
+                print!("{text}");
+                return Ok(exit);
+            }
+            let path = path_arg(args, &[])?;
+            let check = has_flag(args, "--check");
+            let output = ingot_driver::fmt::run(&path, check, started);
+            print_output(&output, json);
+            Ok(output.exit)
         }
         "explain" => {
             let started = Instant::now();

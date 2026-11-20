@@ -3,7 +3,10 @@
 
 import std.Env;
 
-struct Pair { a: i64, b: i64 }
+struct Pair {
+    a: i64,
+    b: i64,
+}
 
 fn sum(limit: i64) -> i64 {
     var total: i64 = 0;

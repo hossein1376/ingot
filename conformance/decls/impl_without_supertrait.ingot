@@ -1,7 +1,9 @@
 //! expect: reject
 //! section: 4.4, 8
 
-struct Money { cents: i64 }
+struct Money {
+    cents: i64,
+}
 
 impl Ord for Money { //~ E0801
     fn cmp(self: &Money, other: &Money) -> Ordering {
