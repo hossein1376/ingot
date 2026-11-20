@@ -530,9 +530,9 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | B1 | relay | `ingot-codegen`: 11b, layouts per instance, mangling, IR for scalars, control flow, calls, aggregates, checks and trap sites; `rt` core in Ingot (entry, `trap`, `write`, `exit`); linking on `aarch64-macos-m4` | done (fe9f223) |
 | B2 | relay | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | done (352a45e, 917c624) |
 | B3 | Sonnet | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | done (e1b6b42, 7760b5f) |
-| R1a | Sonnet | What R1 needs from the compiler: a type parameter that reached the back end unsubstituted, `@offset` in the checker and the back end, no E1004 through a raw pointer, `align` as a contextual keyword | their conformance tests |
-| R1b | Sonnet | `std.mem` (`Heap` on the system allocator, `Vm`, `Arena`, `FixedBuf`, `Box`, `copy`, `fill`, `eq`) with `test` blocks; `ingot test std` in the gate | `test` blocks in std pass under both pipelines |
-| R1c | Sonnet | `std.list` and `std.str` (`docs/std/list.md`, `str.md`) with `test` blocks | a `run` test with an arena and a list |
+| R1a | Sonnet | What R1 needs from the compiler: a type parameter that reached the back end unsubstituted, `@offset` in the checker and the back end, no E1004 through a raw pointer, `align` as a contextual keyword | done (b471845) |
+| R1b | Sonnet | `std.mem` (`Heap` on the system allocator, `Vm`, `Arena`, `FixedBuf`, `Box`, `copy`, `fill`, `eq`) with `test` blocks; `ingot test std` in the gate | done (73bb77d) |
+| R1c | Sonnet | `std.list` and `std.str` (`docs/std/list.md`, `str.md`) with `test` blocks | done (b5a9da4) |
 | B4, B5 | — | Vectors, masks and the §26 builtins; the kernel IR, `exec.seq`, `exec.simd` | `simd/*`, `kernels/saxpy` |
 | R2 | — | Atomics in the back end; `Cell`, `Atomic`, `Mutex`; the inline scheduler | all 19 run/trap tests |
 | R3, R4 | — | Parking (stacks, switch, wait queues, `select`, `Chan`, timers, `--seed`, T11, T13); workers and `exec.par` | new concurrency run tests |
