@@ -410,6 +410,35 @@ code alone.
   which needs no install on macOS but is a fork that rejects LLVM 22's textual IR (and
   LLVM 22 rejects Apple's: `frame-pointer` and stack-probe attributes), and has no Linux
   or Windows counterpart. Found: `alwaysinline` is honored at `-O0` on LLVM 22.
+* **`ingot test` builds with `--fast`; `--opt` optimizes** (*user*, 2026-11-19, B3;
+  05 §33, tools.md §3). Tests are the edit-and-test loop, and both pipelines promise the
+  same semantics. *Rejected:* the optimizing default of `ingot build` (slower for the
+  common case), and `--fast` with no way out.
+* **Without `--seed`, `ingot test` draws a seed and reports it** (*user*, 2026-11-19,
+  B3; tools.md §1, §3). Once the scheduler exists, a different seed each run explores
+  other `select` orders and placements; a failure still names its seed. The cost:
+  `seed` joins `ms` as a field exempt from determinism. *Rejected:* a fixed default
+  (every run explores the same choices), and a seed only under `--seed` (a failure
+  would name nothing to replay).
+* **The structural form in B3 covers every type but floats** (*user*, 2026-11-19).
+  Integers, `bool`, enums, structs, tuples, arrays, slices (`[]u8` as a string
+  literal), optionals. Floats, pointers, references, `&dyn` and closures are `not
+  implemented` until `std.fmt` (R5), whose shortest round-trip float printing is a
+  project of its own; error types rarely hold them. Types are named as declared with
+  their generic arguments, without the module path (05 §35).
+* **The `main` error line prints as `main`'s module sees the value** (*user*,
+  2026-11-19; 05 §35), and a failed test as its module does: one visibility rule for
+  every use of the structural form. *Rejected:* printing every field because the line is
+  the process's own report.
+* **A test receives its `TestEnv` as a hidden parameter** (B3, 2026-11-19; rt.md §1,
+  tools.md §3). `rt.test_env() -> &TestEnv` would have needed process-global mutable
+  state, which `std` cannot have before atomics (R2), and 05 §32 already says the result
+  borrows the harness's storage for the block. `rt.test_start(env, tests)` builds the
+  `TestEnv` on its frame and calls the selected test. The harness passes the index and
+  the temporary directory as arguments and owns the directory.
+* **A test process that ends other than by 0, 1 or 101 is `crashed`** (B3,
+  2026-11-19; tools.md §3), with its `exit` or `signal`. A fourth status rather than
+  folding it into `trapped`, which promises a trap line.
 
 ## 11. Standard library conventions
 

@@ -484,7 +484,7 @@ to the runtime's design document (`docs/std/rt.md`). The compiler needs:
 
 | Need | Used by |
 |---|---|
-| process entry: the compiler generates `entry: fn(&Env) -> i32` for the root package (for `ingot test`, a wrapper that runs the one test named on the command line) and emits the target's process entry symbol, which calls `rt.start`, or `rt.start_tasks` when any scheduler entry is reachable, with it. `start` builds `Env`, calls `entry` and exits with its status | every executable |
+| process entry: the compiler generates `entry: fn(&Env) -> i32` for the root package (for `ingot test`, a wrapper that passes the tests to `rt.test_start`, which runs the one the harness names; tools.md §3) and emits the target's process entry symbol, which calls `rt.start`, or `rt.start_tasks` when any scheduler entry is reachable, with it. `start` builds `Env`, calls `entry` and exits with its status | every executable |
 | `trap(site: &TrapSite, a: i64, b: i64, c: i64) -> never`, with the code, position and fixed text in the static `TrapSite` (§7) | every check |
 | scope enter, spawn (function pointer plus an argument record), handle join, scope wait, scope cancel | `scope`, `spawn` |
 | split-and-run over a range with a body function and a captures record | `par for`, `exec.par` |

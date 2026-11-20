@@ -157,8 +157,9 @@ libs = ["vulkan-1"]
   other systems. Building for another target is possible from any host once that
   target's system libraries are available to the linker.
 * There is one language and two pipelines. `ingot build` optimizes. `ingot build --fast`
-  compiles quickly with little optimization, for the edit-and-test loop. Both have
-  identical semantics, traps included. There is no build mode that removes checks.
+  compiles quickly with little optimization, for the edit-and-test loop. `ingot test`
+  uses the `--fast` pipeline unless given `--opt`. Both have identical semantics, traps
+  included. There is no build mode that removes checks.
 * Commands: `build`, `run`, `check`, `fix`, `test`, `bench`, `fmt`, `explain`, `api`,
   `cost`, `audit`, `layout`, `asm`, `targets`, `deps` (section 33.2), `query` (definition, references, type,
   live borrows, symbols), `rename` and `serve` (one long-running process that answers
@@ -497,9 +498,13 @@ returns) is a known gap, to be settled with `std.io`.
 It is not an `impl` and not an item: the compiler generates it per printed instance
 (phase 11), `ingot api` does not show it, and a type opts out by implementing `Format`.
 It writes the value as the language writes it: `ParseErr.bad_digit(120)`,
-`Point.{ x: 1, y: 2 }`, `(1, 2)`, `[1, 2]`, `.none`. Outside the type's module it
-prints only the fields visible there, and `..` for the rest, so `@debug` cannot read
-private state.
+`Point.{ x: 1, y: 2 }`, `(1, 2)`, `[1, 2]`, `.none`. A type is named as declared, with
+its generic arguments and without its module path (`Pair[i64, bool].{ a: 1, b: true }`).
+A `[]u8` is a string literal with escapes (`"a\n"`); other slices and arrays are
+`[a, b]`. Outside the type's module it prints only the fields visible there, and `..`
+for the rest, so `@debug` cannot read private state. The `main` error line (section
+33.1) and a failed test (section 32) print as the module that declares `main`, or the
+test, sees the value.
 
 Library conventions that every module follows:
 

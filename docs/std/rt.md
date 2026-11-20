@@ -19,7 +19,7 @@ that never blocks or spawns does not link the scheduler:
 |---|---|---|
 | core | entry, `trap`, stack probe | every executable |
 | sched | scope, task, park/wake, select, `par for` | a `scope`, `spawn`, `par for`, `select`, or a blocking std call is reachable |
-| test | `test_env`, the manual clock | `ingot test` |
+| test | `test_start`, the manual clock | `ingot test` |
 | os | the `extern` declarations of the three systems | the group that uses it |
 
 `std.sys.rt.os` is selected with `when @target.os == ...`. Only its declarations are
@@ -55,15 +55,24 @@ pub noinline fn stack_probe(bytes: i64) -> void
 pub fn stack_overflow() -> never
 
 /// The process entry when no scheduler entry is reachable. `entry` is the
-/// compiler-generated `fn(&Env) -> i32` for the root package (for `ingot test`, the
-/// wrapper that runs the one test named on the command line). The compiler emits the
+/// compiler-generated `fn(&Env) -> i32` for the root package (for `ingot test`, a
+/// wrapper that calls `test_start` with the package's tests). The compiler emits the
 /// target's process entry symbol, which calls this (pipeline §8).
 pub fn start(argc: i32, argv: *mut *mut u8, envp: *mut *mut u8, entry: fn(&Env) -> i32) -> never
 
-/// The test harness's environment, with its manual clock and temporary directory.
-/// Only reachable through the `@test_env` builtin, in a `test` block.
-pub fn test_env() -> &testing.TestEnv
+/// Runs the one test the harness named: `env.args[1]` is its index in `tests`, in
+/// decimal, and `env.args[2]` its temporary directory. Builds the test's `Env` (the
+/// same capabilities, `args` holding `argv[0]` only) and its `TestEnv` on this frame,
+/// calls the test, and returns its status: 0 passed, 1 failed.
+pub fn test_start(env: &Env, tests: []fn(&testing.TestEnv) -> i32) -> i32
 ```
+
+A test block is compiled as a function `fn(&testing.TestEnv) -> i32`, and
+`@test_env()` is its parameter (tools.md §3, `ingot test`): the `TestEnv` lives in
+`test_start`'s frame for the whole test, so no global state holds it. A `try` that
+leaves the block prints `error: ` and the structural form of its error to standard
+error, then returns 1. Arguments the harness did not write (a wrong count, an index
+out of range, a non-decimal index) are a harness bug: `test_start` returns 2.
 
 `start` builds the process's `Env` from `argc`, `argv` and `envp`, installs the
 guard-page handler, and calls `entry` once. It exits with status 101 after `trap` and

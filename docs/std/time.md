@@ -197,7 +197,7 @@ through the scheduler; that is a named runtime failure, not a `std.time` trap.
 - `rt.park` provides the monotonic deadline and the waiter. `std.time` owns the timer
   list and wakes tasks whose deadlines have passed; the scheduler owns the park/wake
   path.
-- The test clock is a runtime object behind `std.sys.rt.test_env`, controlled through
+- The test clock is a runtime object built by `std.sys.rt.test_start`, controlled through
   `testing.ManualClock`; it is not a second `Clock` type, because `Env.clock` has one
   static type.
 

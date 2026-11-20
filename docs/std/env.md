@@ -23,7 +23,7 @@ import std.time.Clock;
 /// Everything the process was given (section 33.1). The compiler knows this type by
 /// path: it is the parameter of `main`, and `@test_env()` gives one inside a
 /// `TestEnv`. The capability types have `pub(pkg)` constructors, so `rt.start` and
-/// `rt.test_env` can build them and programs cannot (01-core §2, §4.2).
+/// `rt.test_start` can build them and programs cannot (01-core §2, §4.2).
 pub struct Env {
     pub args: [][]u8,
     pub vars: &Vars,
@@ -104,8 +104,9 @@ pub struct TestEnv {
 }
 ```
 
-The test environment is built by `std.sys.rt.test_env` and is not constructible by
-safe code. `t.env` has:
+The test environment is built by `std.sys.rt.test_start`, on its own frame, and is
+not constructible by safe code; `@test_env()` is the parameter through which the test
+receives it (rt.md §1). `t.env` has:
 
 - a file system rooted in a fresh temporary directory, `t.dir`, removed after the test;
 - a clock whose wall and monotonic time move only when the test calls
@@ -137,7 +138,7 @@ test-only need is a field or a method of `TestEnv` (review 2, L2).
   `TestEnv`, a capability only the test harness makes; test-only operations are its
   fields and methods.
 - **L2. Capability visibility.** Settled by review 2 (01-core §2): the capability types'
-  constructors are `pub(pkg)`, so the rest of `std` (`rt.start`, `rt.test_env`) can
+  constructors are `pub(pkg)`, so the rest of `std` (`rt.start`, `rt.test_start`) can
   build them and programs cannot.
 - **L3. Test environment cleanup.** The temporary directory is removed after the test;
   a test that hands a path to a foreign thread or a spawned task may still use it. The

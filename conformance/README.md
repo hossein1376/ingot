@@ -38,7 +38,8 @@ Each test starts with directive lines:
 | `//! expect: accept` | `ingot check` reports nothing |
 | `//! expect: reject` | `ingot check` reports exactly the diagnostics marked in the file |
 | `//! expect: run` | the program builds, runs, and exits with the status given by `//! exit:` (default 0) |
-| `//! expect: trap` | the program builds, runs, prints one trap line and exits with status 101 |
+| `//! expect: trap` | the program builds, runs, prints one trap line and exits with status 101. Both pipelines print the same line, byte for byte |
+| `//! stderr: TEXT` | in a `run` test, one expected line of standard error. When present, the program's standard error must be exactly these lines, in order, under both pipelines. Absent: standard error is not compared |
 | `//! expect: cost` | `ingot check` reports nothing, and `ingot cost` reports exactly the marked cost items |
 | `//! section: N, M` | the specification sections the test exercises |
 | `//! target: NAME` | run only for that target. Absent: all targets |

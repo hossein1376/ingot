@@ -42,7 +42,8 @@ Section 33 of the specification lists the commands. This file fixes their output
 * Without `--json` a command prints text meant for a person. That text is not specified
   and must not be parsed.
 * **Determinism.** The same inputs give the same lines in the same order, except for
-  timing fields (`ms`, `ns_per_iter`).
+  timing fields (`ms`, `ns_per_iter`) and the `seed` that `ingot test` draws when
+  `--seed` is not given.
 
 ## 2. Checking and fixing
 
@@ -131,9 +132,15 @@ and `target`.
 Builds, then runs the program with its standard streams inherited. It has no JSON mode.
 An agent that wants structured output runs `ingot build --json` and then the artifact.
 
-### `ingot test [PATH] [--filter TEXT] [--seed N]`
+### `ingot test [PATH] [--filter TEXT] [--seed N] [--opt]`
 
-Build diagnostics first, if any. Then one line per test, in source order:
+Builds the `test` blocks of the package at `PATH` (default: the current directory; a
+single file as in §1) with the `--fast` pipeline, or with the optimizing one under
+`--opt`. Tests in a dependency are not built. `--filter TEXT` keeps the tests whose
+name contains `TEXT`; the others print no line.
+
+Build diagnostics first, if any; when the build fails no test runs. Then one line per
+test, in source order (modules by path, then tests by position):
 
 ```json
 {"type":"test","name":"find reports the first match","module":"t.search",
@@ -144,12 +151,31 @@ Build diagnostics first, if any. Then one line per test, in source order:
  "status":"failed","error":"ParseErr.bad_digit(120)","seed":7731}
 ```
 
-* `status` is `ok`, `failed` (an error value reached the end of the test block) or
-  `trapped`. `error` is the error value as `{}` formatting prints it.
+* `module` is the module's full path; `span` is the whole `test` item.
+* `status` is `ok`, `failed` (an error value reached the end of the test block),
+  `trapped`, or `crashed` (the process ended any other way: a signal, or an exit status
+  other than 0, 1 and 101; the line carries `exit` or `signal`, an integer). `error` is
+  the error value in the structural form of 05 §35, printed as the test's module sees
+  it. `trap` is the trap line: its code, the text after `trap Tnn: `, and the span of
+  its position.
 * `seed` is present on a test that did not pass, so the run can be repeated with
-  `--seed`.
-* Summary fields: `passed`, `failed`, `seed`.
-* Each test runs in its own process, so a trap in one does not hide the others.
+  `--seed`. Without `--seed`, the seed is drawn from the operating system's entropy once
+  per run. Until the scheduler exists (COMPILER.md R3) it changes nothing.
+* Summary fields: `passed`, `failed` (every test that did not pass), `seed`. `ok` is
+  true when the build succeeded and no test failed.
+* Each test runs in its own process, so a trap in one does not hide the others. Its
+  standard streams are captured; the text form prints them for a test that did not
+  pass. The harness makes the test's temporary directory (`TestEnv.dir`) before the
+  process starts and removes it after the process ends, whatever the outcome.
+
+**The test executable.** One executable holds every selected test. Its generated entry
+(pipeline §8) calls `std.sys.rt.test_start` with the tests as a table of functions in
+the order above; the harness runs it once per test with two arguments, the test's index
+in that table and its temporary directory. The test's `env.args` holds `argv[0]` only.
+A test block is compiled as a function that takes the `&TestEnv` and returns 0 when it
+passes; a `try` that leaves the block prints `error: ` and the structural form of its
+error to standard error and returns 1. `@test_env()` is that parameter, so repeated
+calls give the same `&TestEnv` and no global state is needed.
 
 ### `ingot bench [PATH] [--filter TEXT]`
 
