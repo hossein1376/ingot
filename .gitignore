@@ -1,5 +1,5 @@
-# Cargo build output
-/target/
+# Cargo build output, and `ingot build`/`ingot test` output under each package root
+target/
 
 # Local scratch folder for trying the compiler by hand
 /ingot/

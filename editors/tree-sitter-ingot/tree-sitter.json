@@ -25,6 +25,7 @@
   "metadata": {
     "version": "0.1.0",
     "description": "Tree-sitter grammar for the Ingot language",
+    "license": "MIT OR Apache-2.0",
     "authors": [
       {
         "name": "Hossein Yazdani",

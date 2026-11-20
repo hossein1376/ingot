@@ -72,28 +72,32 @@ pub fn main(env: &Env) -> void ! AppErr {
 
 ## Status
 
-**Ingot builds and runs small programs on the M4 Pro.** The bootstrap compiler, written
-in Rust, checks programs for all three targets, and compiles them to native code for
-`aarch64-macos-m4` through LLVM 22: generics, closures, `&dyn`, errors and `try`
+**Ingot builds, runs and tests small programs on the M4 Pro.** The bootstrap compiler,
+written in Rust, checks programs for all three targets, and compiles them to native code
+for `aarch64-macos-m4` through LLVM 22: generics, closures, `&dyn`, errors and `try`
 included. Tasks, vectors and most of the standard library are still missing.
 
 | Works today | Not yet |
 |---|---|
 | Lexing, parsing and error recovery | Tasks, `spawn`, `par for` and `select` at run time (the scheduler) |
-| Names, types, generics, interfaces and constant evaluation | `ingot test`, and byte-identical executables |
-| Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | Vectors, masks and kernels in generated code |
+| Names, types, generics, interfaces and constant evaluation | Vectors, masks and kernels in generated code |
+| Visibility (`pub(pkg)`), `unsafe`, raw pointers, atomics, waitable operations and `select` | Atomics, `Cell` and locks in generated code |
 | Lowering to a CFG, and the ownership checker: moves, origins, loans, tasks | The Linux and Windows targets |
-| Check removal, and every cost item `ingot cost` reports: checks, allocations, indirect calls, copies, spawns, locks, park points | Atomics, `Cell` and locks in generated code |
-| Instance discovery (phase 11a): every generic instance, its depth and its symbol name | Dependencies between packages, and the report tools (`api`, `audit`, `layout`) |
-| `ingot build` and `ingot run` on `aarch64-macos-m4`: generic instances, closures, `&dyn`, `T ! E` with `try`/`catch`, constants and statics, and every check with its trap line | Most of the standard library, `@format` and `Hash` |
-| `check`, `fix`, `query`, `serve` and an LSP server for editors | |
+| Check removal, and every cost item `ingot cost` reports: checks, allocations, indirect calls, copies, spawns, locks, park points | Most of the standard library, `@format`, `Hash` and printing floats |
+| Instance discovery (phase 11a): every generic instance, its depth and its symbol name | |
+| `ingot build` and `ingot run` on `aarch64-macos-m4`: generic instances, closures, `&dyn`, `T ! E` with `try`/`catch`, constants and statics, every check with its trap line, and the `error:` line of a `main` that fails | |
+| `ingot test`: `test` blocks, `@test_env()`, each test in its own process, under either pipeline | |
+| Byte-identical executables from either pipeline, wherever the package sits | |
+| Packages: path and git dependencies pinned by hash, workspaces, `ingot deps` | |
+| `check`, `fix`, `fmt`, `query`, `serve`, the reports (`api`, `audit`, `layout`, `explain`, `targets`) and an LSP server for editors | |
 
 The example above does not compile yet either: it needs `std.fs`, `std.simd` and the
 arena of `std.mem`, which are still being designed in [docs/std/](docs/std/). `Atomic`
-and `Cell` in `std.sync` are the first standard library types with real bodies. Most of the
-[conformance suite](conformance/README.md) passes, its `run` and `trap` tests under both
-build pipelines; the tests that still fail need the scheduler, atomics, vectors or
-`@format`. [COMPILER.md](COMPILER.md) lists the build steps and which are done.
+and `Cell` in `std.sync` and the runtime core in `std.sys.rt` are the first standard
+library code with real bodies. Most of the [conformance suite](conformance/README.md)
+passes, its `run` and `trap` tests under both build pipelines; the tests that still fail
+need the scheduler, vectors or `@format`. [COMPILER.md](COMPILER.md) lists the build
+steps and which are done, and [docs/later.md](docs/later.md) what waits until after v1.
 
 ## Trying it
 
@@ -110,7 +114,15 @@ target/release/ingot cost conformance/cost/call_borrow_keeps_second_check.ingot
 ```
 
 ```sh
-target/release/ingot build conformance/types/aggregate_arguments.ingot -o /tmp/aggregate_arguments
+target/release/ingot build conformance/types/aggregate_arguments.ingot -o target/aggregate_arguments
+```
+
+```sh
+target/release/ingot test conformance/names/testing_env.ingot
+```
+
+```sh
+target/release/ingot fmt --check std
 ```
 
 ```sh
@@ -118,10 +130,11 @@ target/release/ingot conformance
 ```
 
 `check` prints diagnostics (add `--json` for the machine form), `cost` lists the
-checks that survived check removal, `build` writes an executable (it needs Homebrew's
-`llvm@22`: `brew install llvm@22`), and `conformance` runs the whole suite. Before a
-commit, `scripts/verify.sh` runs formatting, Clippy, the tests, the conformance
-ratchet and a determinism check.
+checks that survived check removal, `build` writes an executable, `test` builds and
+runs the `test` blocks, `fmt` puts source in the canonical layout, and `conformance`
+runs the whole suite. `build`, `test` and the suite's `run` tests need Homebrew's
+`llvm@22` (`brew install llvm@22`). Before a commit, `scripts/verify.sh` runs
+formatting, Clippy, the tests, the conformance ratchet and a determinism check.
 
 For editors, `cargo build --release --bin ingot-lsp` builds the language server, and
 [editors/](editors/README.md) has the Tree-sitter grammar and a Zed extension.
@@ -134,12 +147,12 @@ For editors, `cargo build --release --bin ingot-lsp` builds the language server,
 | [docs/impl/](docs/impl/README.md) | How to implement it: glossary, error and trap catalog, compiler pipeline, ownership checker, tools |
 | [docs/std/](docs/std/) | Standard library design drafts, under review |
 | [conformance/](conformance/README.md) | The programs every implementation must agree on |
-| `crates/` | The compiler: `syntax`, `sema`, `cfg` (CFG, ownership, check removal), `diag`, `driver` (the `ingot` command) and `lsp` |
-| `std/` | Declaration stubs the compiler loads as `std` until the real library exists |
+| `crates/` | The compiler: `syntax`, `sema`, `cfg` (CFG, ownership, check removal), `codegen` (LLVM IR), `diag`, `driver` (the `ingot` command) and `lsp` |
+| `std/` | The standard library the compiler loads as `std`: the runtime core and `std.sync` have bodies, the rest are declaration stubs |
 | [editors/](editors/README.md) | Tree-sitter grammar and Zed extension |
 | [COMPILER.md](COMPILER.md) | How this compiler is built, its rules and its step plan |
 | [LSP.md](LSP.md) | The language server plan |
-| [ROADMAP.md](ROADMAP.md) | The longer-term plan |
+| [ROADMAP.md](ROADMAP.md) | The longer-term plan; [docs/later.md](docs/later.md) has what waits until after v1 |
 
 ## Reading the specification
 
@@ -160,3 +173,17 @@ the tree when the specification in `docs/` became the definition of Ingot. It is
 history at commit `ab090de`. A first MVP of the current compiler is tagged
 `mvp-reference`; its lexer, parser, diagnostics and fix engine were kept, and the rest
 was rebuilt from the specification.
+
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual
+licensed as above, without any additional terms or conditions.
