@@ -529,7 +529,7 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | F1 | relay + Sonnet | `ingot fmt` (05 §34, tools.md §2): the canonical layout, `--check`, `--stdin` | done (99df709) |
 | B1 | relay | `ingot-codegen`: 11b, layouts per instance, mangling, IR for scalars, control flow, calls, aggregates, checks and trap sites; `rt` core in Ingot (entry, `trap`, `write`, `exit`); linking on `aarch64-macos-m4` | done (fe9f223) |
 | B2 | relay | Results and optionals, `try`, `catch`, `defer`, generic instances, closures, calls through bounds, `&dyn`, slices and strings, `for` forms, constants and statics as data | done (352a45e, 917c624) |
-| B3 | — | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | the gate |
+| B3 | Sonnet | `ingot test`, `@test_env` with a minimal `Env`, the `main` error line; both pipelines in the gate; byte-identical executables | done (e1b6b42, 7760b5f) |
 | R1 | — | `std.mem` (`Heap`, `Vm`, `Arena`, `FixedBuf`, `Box`), `list`, `str` | `test` blocks in std; a `run` test with an arena and a list |
 | B4, B5 | — | Vectors, masks and the §26 builtins; the kernel IR, `exec.seq`, `exec.simd` | `simd/*`, `kernels/saxpy` |
 | R2 | — | Atomics in the back end; `Cell`, `Atomic`, `Mutex`; the inline scheduler | all 19 run/trap tests |
