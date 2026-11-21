@@ -116,6 +116,8 @@ pub fn scope_enter(state: *mut ScopeState) -> void
 
 /// Starts `start(args)` as a task in `state`. Arguments are copied into scope memory
 /// now; the result slot begins at the first suitably aligned offset after them.
+/// `detached` is true for a statement-form `spawn`, which has no handle: its record is
+/// recycled when the task finishes.
 pub fn spawn(
     state: *mut ScopeState,
     start: fn(*mut u8),
@@ -124,9 +126,12 @@ pub fn spawn(
     args_align: i64,
     result_size: i64,
     result_align: i64,
+    detached: bool,
 ) -> TaskRef
 
 /// Waits for this task and releases its record. Does not observe cancellation.
+/// `Task.join` calls `task_wait`, moves the result out of `result`, and only then calls
+/// this, so the result is never read from a recycled record.
 pub fn task_join(task: TaskRef) -> void
 
 /// Waits for this task without consuming the handle. The `waitable` primitive behind
@@ -174,7 +179,8 @@ forgotten, and statement-form spawns have `void` results.
 
 A task record is recycled at `task_join`, or when the task finishes if it came from a
 statement-form `spawn`, so a scope that keeps spawning (an accept loop) does not grow
-(03-concurrency §23). A scope child may also be an OS thread, started by
+(03-concurrency §23). A handle given to `@forget` is never joined; its record is
+recycled by the scope's wait. A scope child may also be an OS thread, started by
 `thread_spawn(state, start, args, ...)` with the same record layout; the scope's wait
 joins it.
 
