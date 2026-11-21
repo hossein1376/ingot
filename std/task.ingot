@@ -1,13 +1,66 @@
-// std.task (spec sections 18 and 35).
+// std.task (docs/std/task.md; spec sections 18, 21 and 22). `scope s { ... }` is the
+// only way to make a `Scope` and `spawn` the only way to make a `Task`: the compiler
+// builds both, so their fields are private and a program cannot construct either.
 
-/// The view of a `scope s { ... }` block that tasks are spawned into.
-pub struct Scope {}
+import std.sync.Atomic;
+import std.sync.Cell;
+import std.sys.rt;
+
+/// The scope of a `scope s { ... }` block. Lowering declares one per block and binds
+/// `s = &σ`, a shared borrow (spec section 18), so `s` cannot outlive the block.
+pub struct Scope {
+    state: Cell[rt.ScopeState],
+}
+
+impl Scope {
+    /// Sets the cancel flag for this scope and for every scope opened inside it.
+    pub fn cancel(self: &Scope) -> void {
+        rt.scope_cancel(self.state.get());
+    }
+
+    /// Reads the cancel flag, of this scope or of one it is nested in. Never waits.
+    pub fn is_canceled(self: &Scope) -> bool {
+        return rt.scope_canceled(self.state.get() as *rt.ScopeState);
+    }
+}
+
+// The runtime's state is written under its own rules (a scope's list, its flag), so an
+// `&Scope` may go to another task. `Scope` holds a `Cell` and raw pointers, which no
+// rule derives these from.
+unsafe impl Send for Scope {}
+
+unsafe impl Sync for Scope {}
 
 /// A spawned task whose result has type `R`. Linear (spec sections 10 and 18): it must
 /// be joined. It is a view of the scope it was spawned in (section 18), which it
 /// holds as a borrow, so it cannot leave the scope's block.
 pub linear struct Task[R] {
     owner: &Scope,
+    task: rt.TaskRef,
+}
+
+impl[R] Task[R] {
+    /// Waits for the task, moves its result out and recycles the task record. Does not
+    /// observe cancellation (spec section 22).
+    pub fn join(self: Task[R]) -> R from self {
+        let Task[R].{ owner: _, task } = self;
+        rt.task_wait(task);
+        let result = task.result as *mut R;
+        let value = unsafe("task_wait returned, so the task has written its result at result, aligned for R, and nothing reads it again") {
+            result.*
+        };
+        rt.task_join(task);
+        return value;
+    }
+}
+
+// The runtime makes the result visible to the joiner (it ran on this thread, or, later,
+// synchronizes completion), and the result is `Send`.
+unsafe impl[R: Send] Send for Task[R] {}
+
+/// Whether the current task's scope is canceled. For CPU-bound code that cannot block.
+pub fn canceled() -> bool {
+    return rt.task_canceled();
 }
 
 /// What a `std.task.Wait` operation's `poll` is given (spec sections 21 and 22).
@@ -21,4 +74,80 @@ pub interface Wait {
     /// `.none` means it is not ready: nothing was consumed, nothing that another task
     /// can observe was changed, and `cx` was told what to wait for.
     fn poll(self: &mut Self, cx: &mut WaitCx) -> ?Self.Output;
+}
+
+fn square(n: i64) -> i64 {
+    return n * n;
+}
+
+fn add_to(x: &mut i64, by: i64) -> void {
+    x.* += by;
+}
+
+fn watch(seen: &Atomic[i64]) -> void {
+    while !canceled() {}
+    seen.store(1, .release);
+}
+
+test "join gives the result of the task" {
+    scope s {
+        let a = spawn square(7) in s;
+        let b = spawn square(9) in s;
+        // Joined in the other order: each task runs when it is first needed.
+        @assert(b.join() == 81);
+        @assert(a.join() == 49);
+    }
+}
+
+test "a statement-form spawn has run by the end of the scope" {
+    var total: i64 = 0;
+    scope s {
+        spawn add_to(&mut total, 5) in s;
+    }
+    @assert(total == 5);
+}
+
+test "a forgotten handle is waited for by the scope" {
+    var total: i64 = 0;
+    scope s {
+        let h = spawn add_to(&mut total, 3) in s;
+        @forget(h);
+    }
+    @assert(total == 3);
+}
+
+test "records are recycled at join" {
+    var sum: i64 = 0;
+    scope s {
+        var i: i64 = 0;
+        while i < 50000 {
+            let h = spawn square(i % 10) in s;
+            sum += h.join();
+            i += 1;
+        }
+    }
+    // 285 is the sum of the squares of 0..10.
+    @assert(sum == 5000 * 285);
+}
+
+test "cancel is seen by the scope and by a task of it" {
+    let seen = Atomic[i64].init(0);
+    scope s {
+        @assert(!s.is_canceled());
+        spawn watch(&seen) in s;
+        s.cancel();
+        @assert(s.is_canceled());
+    }
+    @assert(seen.load(.acquire) == 1);
+}
+
+test "a scope opened inside a canceled scope is canceled" {
+    scope outer {
+        outer.cancel();
+        scope inner {
+            @assert(inner.is_canceled());
+            @assert(canceled());
+        }
+    }
+    @assert(!canceled());
 }

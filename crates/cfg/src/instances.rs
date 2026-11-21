@@ -52,8 +52,17 @@ pub enum InstanceBody {
         ty: TypeId,
         kind: ingot_sema::ty::FnKind,
     },
-    /// A `spawn` thunk: `block.index` in the owner's CFG.
-    SpawnThunk { block: u32, index: u32 },
+    /// The thunk of the `spawn` that ends block `block` of the owner's body `within`
+    /// (`fn(*mut u8)`: it reads the copied arguments and writes the result, rt.md §2).
+    /// Every `spawn` has one, because the runtime starts a task through a pointer. The
+    /// record layout depends on the types of the operands, so the back end writes the
+    /// thunk where it emits the `spawn`; this variant only names it (pipeline §7).
+    SpawnThunk { within: BodyKey, block: u32 },
+    /// The chunk function of a `par for`: the `fn(captures, lo, hi)` the runtime calls
+    /// (rt.md §4). It loops over its part of the iteration space and calls the
+    /// per-item body `ParFor` of the same statement. Written and named by the back end,
+    /// like a spawn thunk.
+    ParForChunk(ingot_sema::hir::StmtId),
 }
 
 /// One instance: a body and the substitution of its generic parameters.
@@ -464,7 +473,7 @@ impl<'a> Discovery<'a> {
             return edges;
         };
         let subst = key.subst.clone();
-        for (block_index, block) in cfg.blocks.iter().enumerate() {
+        for block in cfg.blocks.iter() {
             let span = block.term_span;
             match &block.term {
                 Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => {
@@ -474,21 +483,6 @@ impl<'a> Discovery<'a> {
                         for edge in &edges[before..] {
                             self.call_edges.push((key.clone(), edge.0.clone(), edge.1));
                         }
-                    }
-                    if let Terminator::Spawn { target, .. } = &block.term
-                        && self.spawn_needs_thunk(target)
-                    {
-                        edges.push((
-                            InstanceKey {
-                                owner: key.owner,
-                                body: InstanceBody::SpawnThunk {
-                                    block: block_index as u32,
-                                    index: 0,
-                                },
-                                subst: subst.clone(),
-                            },
-                            span,
-                        ));
                     }
                 }
                 Terminator::ParFor { body, .. } => {
@@ -696,13 +690,6 @@ impl<'a> Discovery<'a> {
         self.cfgs
             .has(id)
             .then(|| (self.cfgs.get(id).key, id, self.cfgs.get(id)))
-    }
-
-    fn spawn_needs_thunk(&self, target: &CallTarget) -> bool {
-        match target {
-            CallTarget::Fn { fn_ref, .. } => !fn_ref.args.is_empty(),
-            CallTarget::Value { kind, .. } => matches!(kind, ValueKind::Closure(_)),
-        }
     }
 
     fn call_edges(
@@ -1296,9 +1283,15 @@ pub fn mangle_key(decls: &Declarations, sema: &Sema, key: &InstanceKey) -> Strin
         InstanceBody::DynFnTable { ty, kind } => {
             item = format!("{{fn table {} {:?}}}", spell_type(decls, sema, *ty), kind);
         }
-        InstanceBody::SpawnThunk { block, index } => {
-            item.push_str(&format!(".{{spawn {block}.{index}}}"));
+        InstanceBody::SpawnThunk { within, block } => {
+            match within {
+                BodyKey::Item => {}
+                BodyKey::Closure(e) => item.push_str(&format!(".{{closure {}}}", e.0)),
+                BodyKey::ParFor(s) => item.push_str(&format!(".{{par for {}}}", s.0)),
+            }
+            item.push_str(&format!(".{{spawn {block}}}"));
         }
+        InstanceBody::ParForChunk(s) => item.push_str(&format!(".{{par for {} chunk}}", s.0)),
     }
     out.push_str(&seg(&item));
     for arg in key.subst.map.values() {

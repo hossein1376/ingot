@@ -165,6 +165,7 @@ fn std_has_only_capability_constructors_outside_sync() {
     // `sync.ingot` has the first real bodies (`Cell` and `Atomic`, P1b), and `mem.ingot`
     // is a real module since R1b (allocators, arenas, `Box`, the bulk operations), so
     // neither is in this list: their bodies are what the `test` blocks of `std` check.
+    // `task.ingot` has real bodies since R2b (`Scope`, `Task.join`), checked the same way.
     // The capability modules add one `pub(pkg) fn init` each, which `rt.start` uses to
     // build `Env` (docs/std/env.md); they must not grow another body. `testing.ingot`
     // (B3) has constructors that take their parts, and a private `unit` that gives the
@@ -177,7 +178,6 @@ fn std_has_only_capability_constructors_outside_sync() {
         "rand.ingot",
         "io.ingot",
         "gpu.ingot",
-        "task.ingot",
         "testing.ingot",
         "exec.ingot",
     ] {

@@ -1,0 +1,77 @@
+//! expect: run
+//! section: 19
+
+import std.Env;
+import std.sync.Atomic;
+
+copy struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn scale(xs: []mut i64, k: i64) {
+    par for x in xs {
+        x.* = x.* * k;
+    }
+}
+
+fn total(xs: []i64, sum: &Atomic[i64]) {
+    par for x in xs {
+        _ = sum.add(x, .relaxed);
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    var data: [10]i64 = @zero;
+    var i: i64 = 0;
+    while i < 10 {
+        data[i] = i + 1;
+        i += 1;
+    }
+
+    // By `&mut`: each item is a borrow of its own element, and the loop captures `k`.
+    scale(&mut data[0..10], 3);
+    @assert(data[0] == 3 && data[9] == 30);
+
+    // By value (a copy of each element) from a shared slice.
+    let sum = Atomic[i64].init(0);
+    total(&data[0..10], &sum);
+    @assert(sum.load(.relaxed) == 165);
+
+    // The index, with the item.
+    var out: [10]i64 = @zero;
+    let table: [10]i64 = data;
+    par for n, x in &mut out[0..10] {
+        x.* = table[n] + n;
+    }
+    @assert(out[0] == 3 && out[9] == 39);
+
+    // Items that are structs, a part of a slice, and an empty slice.
+    var pairs: [4]Pair = @zero;
+    par for p in &mut pairs[1..4] {
+        p.a = 1;
+        p.b = 2;
+    }
+    @assert(pairs[0].a == 0 && pairs[1].a == 1 && pairs[3].b == 2);
+    let ps: [4]Pair = pairs;
+    let sum_a = Atomic[i64].init(0);
+    par for _, p in &ps[0..4] {
+        _ = sum_a.add(p.a + p.b, .relaxed);
+    }
+    @assert(sum_a.load(.relaxed) == 9);
+    let none = Atomic[i64].init(0);
+    par for _ in &mut out[4..4] {
+        _ = none.add(1, .relaxed);
+    }
+    @assert(none.load(.relaxed) == 0);
+
+    // A grain, and captured variables of several kinds.
+    let bias: i64 = 100;
+    let weight = Atomic[i64].init(0);
+    par (grain: 3) for n, x in &mut out[0..10] {
+        x.* = x.* + bias;
+        _ = weight.add(n, .relaxed);
+    }
+    @assert(out[0] == 103 && weight.load(.relaxed) == 45);
+    return 0;
+}

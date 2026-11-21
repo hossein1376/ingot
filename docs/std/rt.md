@@ -117,8 +117,10 @@ pub fn scope_enter(state: *mut ScopeState) -> void
 /// Starts `start(args)` as a task in `state`. Arguments are copied into scope memory
 /// now; the result slot begins at the first suitably aligned offset after them.
 /// `detached` is true for a statement-form `spawn`, which has no handle: its record is
-/// recycled when the task finishes.
-pub fn spawn(
+/// recycled when the task finishes. (`spawn` and `scope` are keywords, so no function
+/// or field of `rt` can have either name; the runtime's spawn entry is `task_spawn`, in
+/// the family of `task_wait` and `task_join`.)
+pub fn task_spawn(
     state: *mut ScopeState,
     start: fn(*mut u8),
     args: *u8,
@@ -166,10 +168,10 @@ The compiler allocates one `std.task.Scope` (with its `Cell` and `ScopeState`) p
 `scope` block, calls `scope_enter` with the address of that state, and uses the address
 as the `Scope` behind `s`. `scope_wait` is the lowering of `scope_wait(s)` and is
 emitted after the block's locals have ended. On an error exit the compiler emits
-`scope_cancel` before it. `spawn` never returns a failure: if the runtime cannot get a
+`scope_cancel` before it. `task_spawn` never returns a failure: if the runtime cannot get a
 task record or stack, it traps T12.
 
-`spawn` copies `args_size` bytes from `args`, aligned to `args_align`, into memory owned
+`task_spawn` copies `args_size` bytes from `args`, aligned to `args_align`, into memory owned
 by the scope, and computes `result` at the next offset aligned to `result_align`. The
 generated thunk has type `fn(*mut u8)` and takes the address of that copy; it writes the
 return value at `result`. The compiler knows the same offset, so `Task.join` casts
@@ -192,7 +194,7 @@ target in `std.sys` (`[link.<target>] asm` in std's manifest, 05-tooling §33.2)
 save the callee-saved registers and swap the stack pointer, and on Windows also the
 stack bounds in the thread block.
 
-The scheduler owns per-worker caches for task records and stacks. `spawn` and parking
+The scheduler owns per-worker caches for task records and stacks. `task_spawn` and parking
 must not call the general heap. A `scope` whose state is left without `scope_wait` is a
 compiler bug, not a user-visible condition.
 
@@ -254,12 +256,12 @@ call of a waitable function is a `select` over one arm with no `else`.
 ## 4. `par for`
 
 ```ingot
-/// The compiler-generated body runs one chunk: it iterates `lo..hi` (with the loop's
-/// step) itself, so the hot loop has no indirect call per item and can be vectorized.
+/// The compiler-generated body runs one chunk: it iterates the indices `lo..hi` itself,
+/// forming each item from its index, so the hot loop has no indirect call per item and
+/// can be vectorized.
 pub fn par_for_range(
     lo: i64,
     hi: i64,
-    step: i64,
     grain: i64,
     body: fn(captures: *mut u8, lo: i64, hi: i64),
     captures: *mut u8,
@@ -278,10 +280,18 @@ pub fn par_for_split[S: Split, C: Sync](
 
 A `par for` over a range or a slice uses `par_for_range`. Phase 8 lowers the loop body
 to a function of one item (the capture record, the item, the index when written); the
-back end generates the chunk function `body` from it, which loops over `lo..hi` with the
-loop's step and calls the item body, inlined. For a slice the range is `0..len`, the
-slice is a field of the capture record, and the chunk function forms each item (`&mut
-xs[i]`, `&xs[i]` or the element) itself. Only a `par.Split` uses `par_for_split`.
+back end generates the chunk function `body` from it, which loops over its indices
+`lo..hi` and calls the item body, inlined. The runtime is given the index space, never
+the loop's own bounds: the compiler counts the iterations, `n`, and calls
+`par_for_range(0, n, grain, ...)`. A range `a..b step k` is `n = ceil((b - a) / k)`
+indices, an inclusive one `(b - a) / k + 1`, both computed in 64 bits after widening the
+bounds, so a range that ends at the largest value of its type neither overflows nor
+runs forever. The range's start and step travel in the capture record, and the chunk
+function forms item `i` as `a + i * k`, in the range's own type. For a slice the index
+space is `0..len`, the slice is a field of the capture record, and the chunk function
+forms each item (`&mut xs[i]`, or the element `xs[i]`) itself. The index a loop writes
+(`par for i, x in xs`) is the same `i`. A range of more than `i64::MAX` iterations is
+cut to that many: it cannot finish. Only a `par.Split` uses `par_for_split`.
 
 `exec.par` uses the same chunk shape, each chunk run as `exec.simd`. Both return after
 every iteration has finished. The body may run on any worker and in
@@ -309,7 +319,7 @@ The following are the OS layer, declared in `std.sys.rt.os` under `when`:
 | `sigaction` / `AddVectoredExceptionHandler` | guard-page handler, an `export fn` that runs outside any task |
 | `pthread_getspecific` / `pthread_setspecific` / `TlsGetValue` / `TlsSetValue` | the current worker and task |
 
-`trap` itself, `stack_probe`, the scope functions, `spawn`, `task_join`, `task_wait`,
+`trap` itself, `stack_probe`, the scope functions, `task_spawn`, `task_join`, `task_wait`,
 `park`, `wake`, `select` and both `par_for` entries are Ingot. The compiler never emits
 an `extern` call directly; it calls the Ingot entry, and only that entry's body is
 allowed to be the unsafe OS layer.

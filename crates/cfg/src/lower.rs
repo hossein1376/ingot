@@ -5717,6 +5717,8 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         let tuple_ty = self.cx.decls.types.intern(TyKind::Tuple(capture_tys));
         let body_ref = self.body;
         let index_spec = index_local.map(|l| (l, self.local_ty(l)));
+        let binds_item = !var_locals.is_empty();
+        let binds_index = index_local.is_some();
         let result = self.cx.lower_par_for(
             body_ref,
             stmt,
@@ -5743,6 +5745,8 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             capture_names,
             iterand,
             grain: grain_op,
+            binds_item,
+            binds_index,
             next,
         });
         self.kill();

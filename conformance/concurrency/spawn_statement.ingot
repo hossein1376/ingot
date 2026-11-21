@@ -1,0 +1,35 @@
+//! expect: run
+//! section: 18
+
+import std.Env;
+import std.task.Scope;
+
+fn bump(x: &mut i64) {
+    x.* += 1;
+}
+
+fn add(x: &mut i64, by: i64) {
+    x.* += by;
+}
+
+// A scope passed to a helper: spawning through it is a store into the scope, so the
+// signature says which argument the scope keeps.
+fn start_adder(s: &Scope, total: &mut i64 into s, by: i64) {
+    spawn add(total, by) in s;
+}
+
+pub fn main(env: &Env) -> u8 {
+    var total: i64 = 0;
+    scope s {
+        spawn bump(&mut total) in s;
+    }
+    // The task ran before the scope ended.
+    @assert(total == 1);
+
+    var sum: i64 = 0;
+    scope s {
+        start_adder(s, &mut sum, 40);
+    }
+    @assert(sum == 40);
+    return 0;
+}

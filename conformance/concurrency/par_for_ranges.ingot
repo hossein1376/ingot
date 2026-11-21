@@ -1,0 +1,103 @@
+//! expect: run
+//! section: 19
+
+import std.Env;
+import std.sync.Atomic;
+
+pub fn main(env: &Env) -> u8 {
+    let sum = Atomic[i64].init(0);
+    let runs = Atomic[i64].init(0);
+
+    // Exclusive and inclusive.
+    par for i in 0..100 {
+        _ = sum.add(i, .relaxed);
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == 4950);
+    @assert(runs.load(.relaxed) == 100);
+    sum.store(0, .relaxed);
+    par for i in 0..=100 {
+        _ = sum.add(i, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == 5050);
+
+    // A step, and a start that is not zero.
+    sum.store(0, .relaxed);
+    par for i in 10..40 step 7 {
+        _ = sum.add(i, .relaxed);
+    }
+    // 10, 17, 24, 31, 38
+    @assert(sum.load(.relaxed) == 120);
+    sum.store(0, .relaxed);
+    par for i in 10..=38 step 7 {
+        _ = sum.add(i, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == 120);
+    sum.store(0, .relaxed);
+    par for i in 10..=37 step 7 {
+        _ = sum.add(i, .relaxed);
+    }
+    // 10, 17, 24, 31
+    @assert(sum.load(.relaxed) == 82);
+
+    // A negative start.
+    sum.store(0, .relaxed);
+    par for i in -5..5 {
+        _ = sum.add(i, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == -5);
+
+    // Empty ranges run no iteration: an end below the start, an equal end.
+    runs.store(0, .relaxed);
+    let five: i64 = 5;
+    par for _ in five..3 {
+        _ = runs.add(1, .relaxed);
+    }
+    par for _ in five..five {
+        _ = runs.add(1, .relaxed);
+    }
+    par for _ in 0..0 {
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(runs.load(.relaxed) == 0);
+    // An inclusive range of one value runs once.
+    par for _ in five..=five {
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(runs.load(.relaxed) == 1);
+
+    // An inclusive end at the largest value of the type does not wrap, whatever the type.
+    let top: u8 = 255;
+    let low: u8 = 250;
+    sum.store(0, .relaxed);
+    runs.store(0, .relaxed);
+    par for i in low..=top {
+        _ = sum.add(i as i64, .relaxed);
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(runs.load(.relaxed) == 6);
+    @assert(sum.load(.relaxed) == 1515);
+
+    let max: i64 = 9223372036854775807;
+    runs.store(0, .relaxed);
+    par for _ in (max - 3)..=max {
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(runs.load(.relaxed) == 4);
+
+    let min: i8 = -128;
+    let high: i8 = 127;
+    runs.store(0, .relaxed);
+    par for _ in min..=high {
+        _ = runs.add(1, .relaxed);
+    }
+    @assert(runs.load(.relaxed) == 256);
+
+    // A grain splits the range into chunks without changing what runs.
+    sum.store(0, .relaxed);
+    par (grain: 7) for i in 0..100 {
+        _ = sum.add(i, .relaxed);
+    }
+    @assert(sum.load(.relaxed) == 4950);
+    return 0;
+}

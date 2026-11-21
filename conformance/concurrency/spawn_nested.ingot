@@ -1,0 +1,60 @@
+//! expect: run
+//! section: 18
+
+import std.Env;
+import std.task.Scope;
+
+fn fill(xs: &mut [4]i64, base: i64) {
+    var i: i64 = 0;
+    while i < 4 {
+        xs[i] = base + i;
+        i += 1;
+    }
+}
+
+fn add_to(x: &mut i64, by: i64) {
+    x.* += by;
+}
+
+// A task that spawns into the scope it runs in: the scope's wait runs what it spawned.
+fn spawn_more(s: &Scope, x: &mut i64 into s) {
+    spawn add_to(x, 10) in s;
+}
+
+fn spawner(s: &Scope, x: &mut i64 into s) {
+    spawn spawn_more(s, x) in s;
+}
+
+fn sum_tree(depth: i64) -> i64 {
+    if depth == 0 {
+        return 1;
+    }
+    scope s {
+        let a = spawn sum_tree(depth - 1) in s;
+        let b = spawn sum_tree(depth - 1) in s;
+        return a.join() + b.join();
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    var a: [4]i64 = @zero;
+    var b: [4]i64 = @zero;
+    // Two scopes, one inside the other: the inner one ends first.
+    scope outer {
+        spawn fill(&mut a, 10) in outer;
+        scope inner {
+            spawn fill(&mut b, 20) in inner;
+        }
+        @assert(b[3] == 23);
+    }
+    @assert(a[0] == 10 && a[3] == 13);
+
+    var x: i64 = 0;
+    scope s {
+        spawner(s, &mut x);
+    }
+    @assert(x == 10);
+
+    @assert(sum_tree(10) == 1024);
+    return 0;
+}

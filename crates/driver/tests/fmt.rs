@@ -47,6 +47,17 @@ fn a_long_result_breaks_the_parameters_first() {
 }
 
 #[test]
+fn a_comment_in_the_body_stays_in_the_body_of_a_broken_signature() {
+    // The closing parenthesis of the parameters must not be matched with the last `)`
+    // of the body (`f(b)` here), which would place the comment before it.
+    case(
+        "comment_after_params",
+        "fn spawn_one(state: *mut State, start: fn(*mut u8), args: *u8, args_size: i64) -> i64 {\n    g();\n    // why the next line\n    return f(args_size);\n}\n",
+        "fn spawn_one(\n    state: *mut State,\n    start: fn(*mut u8),\n    args: *u8,\n    args_size: i64,\n) -> i64 {\n    g();\n    // why the next line\n    return f(args_size);\n}\n",
+    );
+}
+
+#[test]
 fn an_operator_chain_breaks_before_the_operator() {
     case(
         "operator",

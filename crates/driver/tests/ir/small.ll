@@ -55,11 +55,11 @@ target triple = "arm64-apple-macosx14.0.0"
 @str.30 = private unnamed_addr constant [24 x i8] c"assertion failed: v == 3"
 @str.31 = private unnamed_addr constant [23 x i8] c"assertion failed: false"
 @str.32 = private unnamed_addr constant [34 x i8] c"index \01 out of bounds for length \02"
-@site.0 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 9, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 202, i32 5, { ptr, i64 } { ptr @str.3, i64 24 } }
-@site.1 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 199, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
-@site.2 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 79, i32 10, { ptr, i64 } { ptr @str.4, i64 21 } }
-@site.3 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 223, i32 21, { ptr, i64 } { ptr @str.22, i64 21 } }
-@site.4 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 250, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.0 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 9, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 206, i32 5, { ptr, i64 } { ptr @str.3, i64 24 } }
+@site.1 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 203, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.2 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 83, i32 10, { ptr, i64 } { ptr @str.4, i64 21 } }
+@site.3 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 227, i32 21, { ptr, i64 } { ptr @str.22, i64 21 } }
+@site.4 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.2, i64 16 }, i32 254, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
 @site.5 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 2, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 31, i32 13, { ptr, i64 } { ptr @str.4, i64 21 } }
 @site.6 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 31, i32 5, { ptr, i64 } { ptr @str.26, i64 32 } }
 @site.7 = private constant { i8, [7 x i8], { ptr, i64 }, i32, i32, { ptr, i64 } } { i8 7, [7 x i8] zeroinitializer, { ptr, i64 } { ptr @str.25, i64 11 }, i32 32, i32 5, { ptr, i64 } { ptr @str.27, i64 30 } }
@@ -368,66 +368,13 @@ bb27:
 
 define internal void @"_I3:std10:std.sys.rt16:std.sys.rt.start"(i32 %arg0, ptr %arg1, ptr %arg2, ptr %arg3) nounwind cold noreturn #0 {
 bb0:
-  %tmp37 = alloca %t13, align 1
-  %tmp40 = alloca %t14, align 8
   %l0 = alloca i32, align 4
   %l1 = alloca ptr, align 8
   %l2 = alloca ptr, align 8
   %l3 = alloca ptr, align 8
   %l4 = alloca i32, align 4
   %l5 = alloca ptr, align 8
-  %l6 = alloca %t3, align 8
-  %l7 = alloca %t3, align 8
-  %l8 = alloca %t4, align 1
-  %l9 = alloca %t4, align 1
-  %l10 = alloca %t5, align 1
-  %l11 = alloca %t5, align 1
-  %l12 = alloca %t6, align 1
-  %l13 = alloca %t6, align 1
-  %l14 = alloca %t7, align 1
-  %l15 = alloca %t7, align 1
-  %l16 = alloca %t8, align 1
-  %l17 = alloca %t8, align 1
-  %l18 = alloca %t9, align 1
-  %l19 = alloca %t9, align 1
-  %l20 = alloca %t10, align 1
-  %l21 = alloca %t10, align 1
-  %l22 = alloca %t11, align 1
-  %l23 = alloca %t11, align 1
-  %l24 = alloca %t12, align 1
-  %l25 = alloca %t12, align 1
-  %l26 = alloca %t12, align 1
-  %l27 = alloca %t12, align 1
-  %l28 = alloca %t3, align 8
-  %l29 = alloca ptr, align 8
-  %l30 = alloca ptr, align 8
-  %l31 = alloca %t5, align 1
-  %l32 = alloca %t6, align 1
-  %l33 = alloca ptr, align 8
-  %l34 = alloca ptr, align 8
-  %l35 = alloca ptr, align 8
-  %l36 = alloca ptr, align 8
-  %l37 = alloca ptr, align 8
-  %l38 = alloca ptr, align 8
-  %l39 = alloca ptr, align 8
-  %l40 = alloca ptr, align 8
-  %l41 = alloca ptr, align 8
-  %l42 = alloca ptr, align 8
-  %l43 = alloca ptr, align 8
-  %l44 = alloca ptr, align 8
-  %l45 = alloca ptr, align 8
-  %l46 = alloca ptr, align 8
-  %l47 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l47
-  %l48 = alloca [16 x i8], align 8
-  store [16 x i8] zeroinitializer, ptr %l48
-  %l49 = alloca %t14, align 8
-  %l50 = alloca %t14, align 8
-  %l51 = alloca ptr, align 8
-  %l52 = alloca ptr, align 8
-  %l53 = alloca i32, align 4
-  %l54 = alloca i32, align 4
-  %l55 = alloca i32, align 4
+  %l6 = alloca ptr, align 8
   store i32 %arg0, ptr %l0
   store ptr %arg1, ptr %l1
   store ptr %arg2, ptr %l2
@@ -436,168 +383,14 @@ bb0:
   store i32 %tmp0, ptr %l4
   %tmp1 = load ptr, ptr %l1
   store ptr %tmp1, ptr %l5
-  %tmp2 = load i32, ptr %l4
-  %tmp3 = load ptr, ptr %l5
-  %tmp4 = call %t3 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %tmp2, ptr %tmp3)
-  store %t3 %tmp4, ptr %l6
+  %tmp2 = load ptr, ptr %l3
+  store ptr %tmp2, ptr %l6
+  %tmp3 = load i32, ptr %l4
+  %tmp4 = load ptr, ptr %l5
+  %tmp5 = load ptr, ptr %l6
+  call void @"_I3:std10:std.sys.rt20:std.sys.rt.run_entry"(i32 %tmp3, ptr %tmp4, ptr %tmp5)
   br label %bb1
 bb1:
-  %tmp5 = load %t3, ptr %l6
-  store %t3 %tmp5, ptr %l7
-  %tmp6 = call %t4 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"()
-  store %t4 %tmp6, ptr %l8
-  br label %bb2
-bb2:
-  %tmp7 = load %t4, ptr %l8
-  store %t4 %tmp7, ptr %l9
-  %tmp8 = call %t5 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"()
-  store %t5 %tmp8, ptr %l10
-  br label %bb3
-bb3:
-  %tmp9 = load %t5, ptr %l10
-  store %t5 %tmp9, ptr %l11
-  %tmp10 = call %t6 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"()
-  store %t6 %tmp10, ptr %l12
-  br label %bb4
-bb4:
-  %tmp11 = load %t6, ptr %l12
-  store %t6 %tmp11, ptr %l13
-  %tmp12 = call %t7 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"()
-  store %t7 %tmp12, ptr %l14
-  br label %bb5
-bb5:
-  %tmp13 = load %t7, ptr %l14
-  store %t7 %tmp13, ptr %l15
-  %tmp14 = call %t8 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"()
-  store %t8 %tmp14, ptr %l16
-  br label %bb6
-bb6:
-  %tmp15 = load %t8, ptr %l16
-  store %t8 %tmp15, ptr %l17
-  %tmp16 = call %t9 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"()
-  store %t9 %tmp16, ptr %l18
-  br label %bb7
-bb7:
-  %tmp17 = load %t9, ptr %l18
-  store %t9 %tmp17, ptr %l19
-  %tmp18 = call %t10 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"()
-  store %t10 %tmp18, ptr %l20
-  br label %bb8
-bb8:
-  %tmp19 = load %t10, ptr %l20
-  store %t10 %tmp19, ptr %l21
-  %tmp20 = call %t11 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"()
-  store %t11 %tmp20, ptr %l22
-  br label %bb9
-bb9:
-  %tmp21 = load %t11, ptr %l22
-  store %t11 %tmp21, ptr %l23
-  %tmp22 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
-  store %t12 %tmp22, ptr %l24
-  br label %bb10
-bb10:
-  %tmp23 = load %t12, ptr %l24
-  store %t12 %tmp23, ptr %l25
-  %tmp24 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
-  store %t12 %tmp24, ptr %l26
-  br label %bb11
-bb11:
-  %tmp25 = load %t12, ptr %l26
-  store %t12 %tmp25, ptr %l27
-  %tmp26 = load %t3, ptr %l7
-  store %t3 %tmp26, ptr %l28
-  store ptr %l9, ptr %l29
-  %tmp27 = load ptr, ptr %l29
-  store ptr %tmp27, ptr %l30
-  %tmp28 = load %t5, ptr %l11
-  store %t5 %tmp28, ptr %l31
-  %tmp29 = load %t6, ptr %l13
-  store %t6 %tmp29, ptr %l32
-  store ptr %l15, ptr %l33
-  %tmp30 = load ptr, ptr %l33
-  store ptr %tmp30, ptr %l34
-  store ptr %l17, ptr %l35
-  %tmp31 = load ptr, ptr %l35
-  store ptr %tmp31, ptr %l36
-  store ptr %l19, ptr %l37
-  %tmp32 = load ptr, ptr %l37
-  store ptr %tmp32, ptr %l38
-  store ptr %l21, ptr %l39
-  %tmp33 = load ptr, ptr %l39
-  store ptr %tmp33, ptr %l40
-  store ptr %l23, ptr %l41
-  %tmp34 = load ptr, ptr %l41
-  store ptr %tmp34, ptr %l42
-  store ptr %l25, ptr %l43
-  %tmp35 = load ptr, ptr %l43
-  store ptr %tmp35, ptr %l44
-  store ptr %l27, ptr %l45
-  %tmp36 = load ptr, ptr %l45
-  store ptr %tmp36, ptr %l46
-  store %t13 zeroinitializer, ptr %tmp37
-  store i8 0, ptr %tmp37
-  %tmp38 = load %t13, ptr %tmp37
-  store %t13 %tmp38, ptr %l47
-  %tmp39 = load %t13, ptr %l47
-  store %t13 %tmp39, ptr %l48
-  store %t14 zeroinitializer, ptr %tmp40
-  %tmp41 = load %t3, ptr %l28
-  %tmp42 = getelementptr i8, ptr %tmp40, i64 0
-  store %t3 %tmp41, ptr %tmp42
-  %tmp43 = load ptr, ptr %l30
-  %tmp44 = getelementptr i8, ptr %tmp40, i64 16
-  store ptr %tmp43, ptr %tmp44
-  %tmp45 = load %t5, ptr %l31
-  %tmp46 = getelementptr i8, ptr %tmp40, i64 24
-  store %t5 %tmp45, ptr %tmp46
-  %tmp47 = load %t6, ptr %l32
-  %tmp48 = getelementptr i8, ptr %tmp40, i64 24
-  store %t6 %tmp47, ptr %tmp48
-  %tmp49 = load ptr, ptr %l34
-  %tmp50 = getelementptr i8, ptr %tmp40, i64 24
-  store ptr %tmp49, ptr %tmp50
-  %tmp51 = load ptr, ptr %l36
-  %tmp52 = getelementptr i8, ptr %tmp40, i64 32
-  store ptr %tmp51, ptr %tmp52
-  %tmp53 = load ptr, ptr %l38
-  %tmp54 = getelementptr i8, ptr %tmp40, i64 40
-  store ptr %tmp53, ptr %tmp54
-  %tmp55 = load ptr, ptr %l40
-  %tmp56 = getelementptr i8, ptr %tmp40, i64 48
-  store ptr %tmp55, ptr %tmp56
-  %tmp57 = load ptr, ptr %l42
-  %tmp58 = getelementptr i8, ptr %tmp40, i64 56
-  store ptr %tmp57, ptr %tmp58
-  %tmp59 = load ptr, ptr %l44
-  %tmp60 = getelementptr i8, ptr %tmp40, i64 64
-  store ptr %tmp59, ptr %tmp60
-  %tmp61 = load ptr, ptr %l46
-  %tmp62 = getelementptr i8, ptr %tmp40, i64 72
-  store ptr %tmp61, ptr %tmp62
-  %tmp63 = load %t13, ptr %l48
-  %tmp64 = getelementptr i8, ptr %tmp40, i64 80
-  store %t13 %tmp63, ptr %tmp64
-  %tmp65 = load %t14, ptr %tmp40
-  store %t14 %tmp65, ptr %l49
-  %tmp66 = load %t14, ptr %l49
-  store %t14 %tmp66, ptr %l50
-  %tmp67 = load ptr, ptr %l3
-  store ptr %tmp67, ptr %l51
-  store ptr %l50, ptr %l52
-  %tmp68 = load ptr, ptr %l51
-  %tmp69 = load ptr, ptr %l52
-  %tmp70 = call i32 %tmp68(ptr %tmp69)
-  store i32 %tmp70, ptr %l53
-  br label %bb12
-bb12:
-  %tmp71 = load i32, ptr %l53
-  store i32 %tmp71, ptr %l54
-  %tmp72 = load i32, ptr %l54
-  store i32 %tmp72, ptr %l55
-  %tmp73 = load i32, ptr %l55
-  call void @"_I3:std13:std.sys.macos21:std.sys.macos.os_exit"(i32 %tmp73)
-  br label %bb13
-bb13:
   unreachable
 }
 
@@ -1379,6 +1172,239 @@ cont1:
   br label %bb5
 trap0:
   call void @"_I3:std10:std.sys.rt15:std.sys.rt.trap"(ptr @site.2, i64 0, i64 0, i64 0)
+  unreachable
+}
+
+define internal void @"_I3:std10:std.sys.rt20:std.sys.rt.run_entry"(i32 %arg0, ptr %arg1, ptr %arg2) nounwind cold noreturn #0 {
+bb0:
+  %tmp37 = alloca %t13, align 1
+  %tmp40 = alloca %t14, align 8
+  %l0 = alloca i32, align 4
+  %l1 = alloca ptr, align 8
+  %l2 = alloca ptr, align 8
+  %l3 = alloca i32, align 4
+  %l4 = alloca ptr, align 8
+  %l5 = alloca %t3, align 8
+  %l6 = alloca %t3, align 8
+  %l7 = alloca %t4, align 1
+  %l8 = alloca %t4, align 1
+  %l9 = alloca %t5, align 1
+  %l10 = alloca %t5, align 1
+  %l11 = alloca %t6, align 1
+  %l12 = alloca %t6, align 1
+  %l13 = alloca %t7, align 1
+  %l14 = alloca %t7, align 1
+  %l15 = alloca %t8, align 1
+  %l16 = alloca %t8, align 1
+  %l17 = alloca %t9, align 1
+  %l18 = alloca %t9, align 1
+  %l19 = alloca %t10, align 1
+  %l20 = alloca %t10, align 1
+  %l21 = alloca %t11, align 1
+  %l22 = alloca %t11, align 1
+  %l23 = alloca %t12, align 1
+  %l24 = alloca %t12, align 1
+  %l25 = alloca %t12, align 1
+  %l26 = alloca %t12, align 1
+  %l27 = alloca %t3, align 8
+  %l28 = alloca ptr, align 8
+  %l29 = alloca ptr, align 8
+  %l30 = alloca %t5, align 1
+  %l31 = alloca %t6, align 1
+  %l32 = alloca ptr, align 8
+  %l33 = alloca ptr, align 8
+  %l34 = alloca ptr, align 8
+  %l35 = alloca ptr, align 8
+  %l36 = alloca ptr, align 8
+  %l37 = alloca ptr, align 8
+  %l38 = alloca ptr, align 8
+  %l39 = alloca ptr, align 8
+  %l40 = alloca ptr, align 8
+  %l41 = alloca ptr, align 8
+  %l42 = alloca ptr, align 8
+  %l43 = alloca ptr, align 8
+  %l44 = alloca ptr, align 8
+  %l45 = alloca ptr, align 8
+  %l46 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l46
+  %l47 = alloca [16 x i8], align 8
+  store [16 x i8] zeroinitializer, ptr %l47
+  %l48 = alloca %t14, align 8
+  %l49 = alloca %t14, align 8
+  %l50 = alloca ptr, align 8
+  %l51 = alloca ptr, align 8
+  %l52 = alloca i32, align 4
+  %l53 = alloca i32, align 4
+  %l54 = alloca i32, align 4
+  store i32 %arg0, ptr %l0
+  store ptr %arg1, ptr %l1
+  store ptr %arg2, ptr %l2
+  %tmp0 = load i32, ptr %l0
+  store i32 %tmp0, ptr %l3
+  %tmp1 = load ptr, ptr %l1
+  store ptr %tmp1, ptr %l4
+  %tmp2 = load i32, ptr %l3
+  %tmp3 = load ptr, ptr %l4
+  %tmp4 = call %t3 @"_I3:std10:std.sys.rt21:std.sys.rt.args_table"(i32 %tmp2, ptr %tmp3)
+  store %t3 %tmp4, ptr %l5
+  br label %bb1
+bb1:
+  %tmp5 = load %t3, ptr %l5
+  store %t3 %tmp5, ptr %l6
+  %tmp6 = call %t4 @"_I3:std3:std15:std.Vars[].init10:std.Vars[]"()
+  store %t4 %tmp6, ptr %l7
+  br label %bb2
+bb2:
+  %tmp7 = load %t4, ptr %l7
+  store %t4 %tmp7, ptr %l8
+  %tmp8 = call %t5 @"_I3:std7:std.mem19:std.mem.Heap[].init14:std.mem.Heap[]"()
+  store %t5 %tmp8, ptr %l9
+  br label %bb3
+bb3:
+  %tmp9 = load %t5, ptr %l9
+  store %t5 %tmp9, ptr %l10
+  %tmp10 = call %t6 @"_I3:std7:std.mem17:std.mem.Vm[].init12:std.mem.Vm[]"()
+  store %t6 %tmp10, ptr %l11
+  br label %bb4
+bb4:
+  %tmp11 = load %t6, ptr %l11
+  store %t6 %tmp11, ptr %l12
+  %tmp12 = call %t7 @"_I3:std6:std.fs16:std.fs.Fs[].init11:std.fs.Fs[]"()
+  store %t7 %tmp12, ptr %l13
+  br label %bb5
+bb5:
+  %tmp13 = load %t7, ptr %l13
+  store %t7 %tmp13, ptr %l14
+  %tmp14 = call %t8 @"_I3:std7:std.net18:std.net.Net[].init13:std.net.Net[]"()
+  store %t8 %tmp14, ptr %l15
+  br label %bb6
+bb6:
+  %tmp15 = load %t8, ptr %l15
+  store %t8 %tmp15, ptr %l16
+  %tmp16 = call %t9 @"_I3:std8:std.time21:std.time.Clock[].init16:std.time.Clock[]"()
+  store %t9 %tmp16, ptr %l17
+  br label %bb7
+bb7:
+  %tmp17 = load %t9, ptr %l17
+  store %t9 %tmp17, ptr %l18
+  %tmp18 = call %t10 @"_I3:std8:std.rand20:std.rand.Rand[].init15:std.rand.Rand[]"()
+  store %t10 %tmp18, ptr %l19
+  br label %bb8
+bb8:
+  %tmp19 = load %t10, ptr %l19
+  store %t10 %tmp19, ptr %l20
+  %tmp20 = call %t11 @"_I3:std6:std.io20:std.io.Reader[].init15:std.io.Reader[]"()
+  store %t11 %tmp20, ptr %l21
+  br label %bb9
+bb9:
+  %tmp21 = load %t11, ptr %l21
+  store %t11 %tmp21, ptr %l22
+  %tmp22 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
+  store %t12 %tmp22, ptr %l23
+  br label %bb10
+bb10:
+  %tmp23 = load %t12, ptr %l23
+  store %t12 %tmp23, ptr %l24
+  %tmp24 = call %t12 @"_I3:std6:std.io20:std.io.Writer[].init15:std.io.Writer[]"()
+  store %t12 %tmp24, ptr %l25
+  br label %bb11
+bb11:
+  %tmp25 = load %t12, ptr %l25
+  store %t12 %tmp25, ptr %l26
+  %tmp26 = load %t3, ptr %l6
+  store %t3 %tmp26, ptr %l27
+  store ptr %l8, ptr %l28
+  %tmp27 = load ptr, ptr %l28
+  store ptr %tmp27, ptr %l29
+  %tmp28 = load %t5, ptr %l10
+  store %t5 %tmp28, ptr %l30
+  %tmp29 = load %t6, ptr %l12
+  store %t6 %tmp29, ptr %l31
+  store ptr %l14, ptr %l32
+  %tmp30 = load ptr, ptr %l32
+  store ptr %tmp30, ptr %l33
+  store ptr %l16, ptr %l34
+  %tmp31 = load ptr, ptr %l34
+  store ptr %tmp31, ptr %l35
+  store ptr %l18, ptr %l36
+  %tmp32 = load ptr, ptr %l36
+  store ptr %tmp32, ptr %l37
+  store ptr %l20, ptr %l38
+  %tmp33 = load ptr, ptr %l38
+  store ptr %tmp33, ptr %l39
+  store ptr %l22, ptr %l40
+  %tmp34 = load ptr, ptr %l40
+  store ptr %tmp34, ptr %l41
+  store ptr %l24, ptr %l42
+  %tmp35 = load ptr, ptr %l42
+  store ptr %tmp35, ptr %l43
+  store ptr %l26, ptr %l44
+  %tmp36 = load ptr, ptr %l44
+  store ptr %tmp36, ptr %l45
+  store %t13 zeroinitializer, ptr %tmp37
+  store i8 0, ptr %tmp37
+  %tmp38 = load %t13, ptr %tmp37
+  store %t13 %tmp38, ptr %l46
+  %tmp39 = load %t13, ptr %l46
+  store %t13 %tmp39, ptr %l47
+  store %t14 zeroinitializer, ptr %tmp40
+  %tmp41 = load %t3, ptr %l27
+  %tmp42 = getelementptr i8, ptr %tmp40, i64 0
+  store %t3 %tmp41, ptr %tmp42
+  %tmp43 = load ptr, ptr %l29
+  %tmp44 = getelementptr i8, ptr %tmp40, i64 16
+  store ptr %tmp43, ptr %tmp44
+  %tmp45 = load %t5, ptr %l30
+  %tmp46 = getelementptr i8, ptr %tmp40, i64 24
+  store %t5 %tmp45, ptr %tmp46
+  %tmp47 = load %t6, ptr %l31
+  %tmp48 = getelementptr i8, ptr %tmp40, i64 24
+  store %t6 %tmp47, ptr %tmp48
+  %tmp49 = load ptr, ptr %l33
+  %tmp50 = getelementptr i8, ptr %tmp40, i64 24
+  store ptr %tmp49, ptr %tmp50
+  %tmp51 = load ptr, ptr %l35
+  %tmp52 = getelementptr i8, ptr %tmp40, i64 32
+  store ptr %tmp51, ptr %tmp52
+  %tmp53 = load ptr, ptr %l37
+  %tmp54 = getelementptr i8, ptr %tmp40, i64 40
+  store ptr %tmp53, ptr %tmp54
+  %tmp55 = load ptr, ptr %l39
+  %tmp56 = getelementptr i8, ptr %tmp40, i64 48
+  store ptr %tmp55, ptr %tmp56
+  %tmp57 = load ptr, ptr %l41
+  %tmp58 = getelementptr i8, ptr %tmp40, i64 56
+  store ptr %tmp57, ptr %tmp58
+  %tmp59 = load ptr, ptr %l43
+  %tmp60 = getelementptr i8, ptr %tmp40, i64 64
+  store ptr %tmp59, ptr %tmp60
+  %tmp61 = load ptr, ptr %l45
+  %tmp62 = getelementptr i8, ptr %tmp40, i64 72
+  store ptr %tmp61, ptr %tmp62
+  %tmp63 = load %t13, ptr %l47
+  %tmp64 = getelementptr i8, ptr %tmp40, i64 80
+  store %t13 %tmp63, ptr %tmp64
+  %tmp65 = load %t14, ptr %tmp40
+  store %t14 %tmp65, ptr %l48
+  %tmp66 = load %t14, ptr %l48
+  store %t14 %tmp66, ptr %l49
+  %tmp67 = load ptr, ptr %l2
+  store ptr %tmp67, ptr %l50
+  store ptr %l49, ptr %l51
+  %tmp68 = load ptr, ptr %l50
+  %tmp69 = load ptr, ptr %l51
+  %tmp70 = call i32 %tmp68(ptr %tmp69)
+  store i32 %tmp70, ptr %l52
+  br label %bb12
+bb12:
+  %tmp71 = load i32, ptr %l52
+  store i32 %tmp71, ptr %l53
+  %tmp72 = load i32, ptr %l53
+  store i32 %tmp72, ptr %l54
+  %tmp73 = load i32, ptr %l54
+  call void @"_I3:std13:std.sys.macos21:std.sys.macos.os_exit"(i32 %tmp73)
+  br label %bb13
+bb13:
   unreachable
 }
 

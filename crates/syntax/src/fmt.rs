@@ -654,7 +654,8 @@ impl Formatter<'_> {
         docs.push(text("fn ", function.span));
         docs.push(text(function.name.clone(), function.name_span));
         docs.push(self.generics(&function.generics, function.span));
-        let params = self.params(&function.params, function.span);
+        let params_span = self.params_span(function);
+        let params = self.params(&function.params, params_span);
         let result = self.result(
             &function.ret,
             function.error.as_ref(),
@@ -674,6 +675,32 @@ impl Formatter<'_> {
             docs.push(text(";", end_span(function.span)));
         }
         concat(docs)
+    }
+
+    /// The source text from the end of the generic parameters to the start of the
+    /// result or the body: it holds the parameter list's parentheses and nothing after
+    /// them. The list's brackets are found by searching this span, and a comment is
+    /// placed by the bracket it follows, so the whole function's span would credit the
+    /// closing parenthesis with the last `)` of the body and pull a comment of the body
+    /// into the parameter list.
+    fn params_span(&self, function: &ast::FnDecl) -> Span {
+        let start = function
+            .generics
+            .last()
+            .map(|g| g.span.end)
+            .unwrap_or(function.name_span.end);
+        let end = if self.return_written(&function.ret) {
+            function.ret.span().start
+        } else if let Some(body) = &function.body {
+            body.span.start
+        } else {
+            function.span.end
+        };
+        if start < end {
+            Span::new(start, end)
+        } else {
+            function.span
+        }
     }
 
     fn return_written(&self, ty: &Ty) -> bool {

@@ -18,7 +18,8 @@ use ingot_cfg::instances::{
 };
 use ingot_cfg::model::{
     AggregateKind, Block, BlockData, BoundsKind, CallTarget, CastKind, Cfg, Check, CheckKind,
-    Const, Operand, Place, PlaceBase, Projection, Rvalue, StmtKind, Terminator, Trap, ValueKind,
+    Const, LocalKind, Operand, ParIterand, Place, PlaceBase, Projection, Rvalue, StmtKind,
+    Terminator, Trap, ValueKind,
 };
 use ingot_diag::source::{Sources, Span};
 use ingot_sema::defs::{DefId, DefKind, ModuleId, Sema};
@@ -32,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 
+mod concurrency;
 pub mod llvm;
 mod show;
 
@@ -214,11 +216,13 @@ fn body_key(key: &InstanceKey) -> Option<ingot_cfg::BodyKey> {
         InstanceBody::Item => Some(ingot_cfg::BodyKey::Item),
         InstanceBody::Closure(e) => Some(ingot_cfg::BodyKey::Closure(e)),
         InstanceBody::ParFor(s) => Some(ingot_cfg::BodyKey::ParFor(s)),
-        // The table bodies are emitted as globals in `emit_tables`. A `par for`
-        // body and a spawn thunk are R2 work.
+        // The table bodies are emitted as globals in `emit_tables`. A spawn thunk and a
+        // `par for` chunk function have no CFG: `concurrency.rs` writes them where it
+        // emits the terminator that needs them.
         InstanceBody::MethodTable { .. }
         | InstanceBody::DynFnTable { .. }
-        | InstanceBody::SpawnThunk { .. } => None,
+        | InstanceBody::SpawnThunk { .. }
+        | InstanceBody::ParForChunk(_) => None,
     }
 }
 
@@ -269,6 +273,8 @@ struct Codegen<'p> {
     bodies: BTreeMap<String, Body>,
     main_symbol: Option<String>,
     rt_start: DefId,
+    /// `std.sys.rt.start_tasks`: the entry of a program that reaches the scheduler.
+    rt_start_tasks: DefId,
     rt_trap: DefId,
     /// `std.sys.rt.test_start`, in a test build.
     rt_test_start: DefId,
@@ -295,6 +301,11 @@ struct Codegen<'p> {
     tables: BTreeMap<String, String>,
     /// The structural-form printers (05 section 35).
     show: show::ShowState,
+    /// Some body opens a `scope`, spawns or runs a `par for`: the entry is
+    /// `rt.start_tasks` and the scheduler's entry points are roots (rt.md §1, D1).
+    uses_scheduler: bool,
+    /// The thunks and chunk functions already written, by symbol.
+    synthetic: BTreeSet<String>,
 }
 
 impl<'p> Codegen<'p> {
@@ -306,6 +317,7 @@ impl<'p> Codegen<'p> {
             bodies: BTreeMap::new(),
             main_symbol: None,
             rt_start: DefId(0),
+            rt_start_tasks: DefId(0),
             rt_trap: DefId(0),
             rt_test_start: DefId(0),
             symbols: BTreeMap::new(),
@@ -325,6 +337,8 @@ impl<'p> Codegen<'p> {
             builtin_requests: BTreeSet::new(),
             tables: BTreeMap::new(),
             show: show::ShowState::default(),
+            uses_scheduler: false,
+            synthetic: BTreeSet::new(),
         }
     }
 
@@ -341,6 +355,8 @@ impl<'p> Codegen<'p> {
         // though phase 11a's source roots cannot name them.
         self.rt_start = find_module_item(self.program.sema, "std.sys.rt", "start")
             .ok_or_else(|| BuildError::Internal("std.sys.rt.start is missing".to_string()))?;
+        self.rt_start_tasks = find_module_item(self.program.sema, "std.sys.rt", "start_tasks")
+            .ok_or_else(|| BuildError::Internal("std.sys.rt.start_tasks is missing".to_string()))?;
         self.rt_trap = find_module_item(self.program.sema, "std.sys.rt", "trap")
             .ok_or_else(|| BuildError::Internal("std.sys.rt.trap is missing".to_string()))?;
         if self.program.test_build {
@@ -388,12 +404,6 @@ impl<'p> Codegen<'p> {
         let mut queue: Vec<InstanceKey> = Vec::new();
         let mut seen: BTreeSet<InstanceKey> = BTreeSet::new();
         for instance in self.program.instances {
-            if matches!(
-                instance.key.body,
-                InstanceBody::ParFor(_) | InstanceBody::SpawnThunk { .. }
-            ) {
-                return self.ni("par-for bodies and spawn thunks (R2)");
-            }
             let key = instance.key.clone();
             if self.is_builtin_method(key.owner) {
                 // A built-in `Eq`/`Ord` method has no CFG: the back end generates it
@@ -502,6 +512,16 @@ impl<'p> Codegen<'p> {
                 }
                 continue;
             };
+            if !self.uses_scheduler && Self::cfg_uses_scheduler(&cfg) {
+                self.uses_scheduler = true;
+                for root in self.scheduler_roots()? {
+                    if seen.insert(root.clone()) {
+                        let symbol = self.symbol_for_key(&root);
+                        self.symbols.insert(root.clone(), symbol);
+                        queue.push(root);
+                    }
+                }
+            }
             let sig = self.body_sig(&key, &cfg)?;
             let symbol = self
                 .symbols
@@ -538,6 +558,11 @@ impl<'p> Codegen<'p> {
                 .cloned()
                 .ok_or_else(|| BuildError::Internal(format!("no signature for {}", cfg.name)));
         }
+        Ok(Self::sig_from_cfg(key.owner, cfg))
+    }
+
+    /// The signature a CFG's own parameters and result give.
+    fn sig_from_cfg(owner: DefId, cfg: &Cfg) -> FnSig {
         let params = cfg
             .params
             .iter()
@@ -552,8 +577,8 @@ impl<'p> Codegen<'p> {
                 }
             })
             .collect();
-        Ok(FnSig {
-            def: key.owner,
+        FnSig {
+            def: owner,
             parent: None,
             name: cfg.name.clone(),
             name_span: Span::default(),
@@ -570,7 +595,7 @@ impl<'p> Codegen<'p> {
             abi: None,
             has_body: true,
             span: Span::default(),
-        })
+        }
     }
 
     fn collect_calls(
@@ -582,7 +607,20 @@ impl<'p> Codegen<'p> {
         seen: &mut BTreeSet<InstanceKey>,
     ) -> Result<(), BuildError> {
         let target = match term {
-            Terminator::Call { target, .. } => target,
+            Terminator::Call { target, .. } | Terminator::Spawn { target, .. } => target,
+            Terminator::ParFor { body, .. } => {
+                // The per-item body of a `par for` is an instance of its own.
+                let owned = self.program.cfgs.get(*body);
+                if let ingot_cfg::BodyKey::ParFor(stmt) = owned.key.body {
+                    let key = InstanceKey {
+                        owner: caller_key.owner,
+                        body: InstanceBody::ParFor(stmt),
+                        subst: caller_key.subst.clone(),
+                    };
+                    self.add_instance(key, queue, seen)?;
+                }
+                return Ok(());
+            }
             _ => return Ok(()),
         };
         let caller = &caller_key.subst;
@@ -1526,6 +1564,8 @@ struct FnGen<'a, 'p> {
     /// The locals that hold a known variant of an enum at this point of the current
     /// block, by the variant's index. Atomic orders are read from it (`order_arg`).
     known_variants: BTreeMap<ingot_cfg::model::Local, usize>,
+    /// The index in the CFG of the block being emitted: it names a `spawn`'s thunk.
+    block_index: usize,
 }
 
 impl<'p> Codegen<'p> {
@@ -1560,6 +1600,7 @@ impl<'p> Codegen<'p> {
             abi_params,
             entry_allocas: Vec::new(),
             known_variants: BTreeMap::new(),
+            block_index: 0,
         };
         generator.generate()?;
         let text = generator.render();
@@ -2056,6 +2097,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
         self.emit_params()?;
         for (i, block) in cfg.blocks.iter().enumerate() {
             self.cur = i;
+            self.block_index = i;
             self.emit_block(block)?;
         }
         Ok(())
@@ -2366,11 +2408,16 @@ impl<'a, 'p> FnGen<'a, 'p> {
         self.known_variants.clear();
         for stmt in &block.stmts {
             match &stmt.kind {
-                StmtKind::StorageStart(_) | StmtKind::StorageEnd(_) => {}
+                StmtKind::StorageStart(local) => {
+                    if self.body.cfg.local(*local).kind == LocalKind::Scope {
+                        self.scope_enter(*local)?;
+                    }
+                }
+                StmtKind::StorageEnd(_) => {}
                 StmtKind::Assign { place, value } => self.assign(place, value)?,
+                StmtKind::Cancel(local) => self.scope_cancel(*local)?,
                 StmtKind::EnterUnsafe
                 | StmtKind::Variant { .. }
-                | StmtKind::Cancel(_)
                 | StmtKind::Abandon(_)
                 | StmtKind::IterConsumed(_)
                 | StmtKind::Use(_) => {}
@@ -2469,13 +2516,34 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 self.emit("unreachable");
             }
             Terminator::Unreachable => self.emit("unreachable"),
-            Terminator::Spawn { .. }
-            | Terminator::ScopeWait { .. }
-            | Terminator::Select { .. }
-            | Terminator::ParFor { .. }
-            | Terminator::Dispatch { .. } => {
-                return self.cg.ni("concurrency terminators (R2)");
-            }
+            Terminator::ScopeWait { scope, next } => self.scope_wait(*scope, *next)?,
+            Terminator::Spawn {
+                target,
+                args,
+                scope,
+                dest,
+                next,
+            } => self.spawn(target, args, scope, dest.as_ref(), *next)?,
+            Terminator::ParFor {
+                body,
+                captures,
+                iterand,
+                grain,
+                binds_item,
+                binds_index,
+                next,
+                ..
+            } => self.par_for(
+                *body,
+                captures,
+                iterand,
+                grain.as_ref(),
+                *binds_item,
+                *binds_index,
+                *next,
+            )?,
+            Terminator::Select { .. } => return self.cg.ni("`select` (R3)"),
+            Terminator::Dispatch { .. } => return self.cg.ni("`dispatch` (B5)"),
         }
         Ok(())
     }
@@ -6693,9 +6761,19 @@ impl<'p> Codegen<'p> {
         })
     }
 
+    /// The runtime function the process entry calls: `start_tasks` when the program
+    /// reaches the scheduler, `start` otherwise (rt.md §1, D1).
+    fn start_def(&self) -> DefId {
+        if self.uses_scheduler {
+            self.rt_start_tasks
+        } else {
+            self.rt_start
+        }
+    }
+
     fn start_symbol(&self) -> Result<String, BuildError> {
         let key = InstanceKey {
-            owner: self.rt_start,
+            owner: self.start_def(),
             body: InstanceBody::Item,
             subst: Subst::new(),
         };
@@ -8207,12 +8285,12 @@ impl<'p> Codegen<'p> {
         let start_sig = self
             .program
             .decls
-            .fn_sig(self.rt_start)
+            .fn_sig(self.start_def())
             .cloned()
             .ok_or_else(|| BuildError::Internal("no signature for rt.start".to_string()))?;
         if start_sig.params.len() != 4 {
             return Err(BuildError::Internal(
-                "rt.start does not have four parameters".to_string(),
+                "the runtime entry does not have four parameters".to_string(),
             ));
         }
         let mut out = String::new();

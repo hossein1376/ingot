@@ -2,7 +2,7 @@
 //
 // B1 needs the core: the trap record, `trap`, the generated process entry, and
 // the decimal integer printing a trap line uses. B3 adds `test_start`, the entry of
-// a test executable. The scheduler arrives in a later step.
+// a test executable. R2 adds the inline scheduler (the end of this file).
 
 import std.Env;
 import std.Vars;
@@ -13,8 +13,12 @@ import std.mem.Heap;
 import std.mem.Vm;
 import std.net.Net;
 import std.rand.Rand;
+import std.sync.Atomic;
 import std.sys.macos.os_exit;
 import std.sys.macos.os_map;
+import std.sys.macos.os_tls_create;
+import std.sys.macos.os_tls_get;
+import std.sys.macos.os_tls_set;
 import std.sys.macos.os_write;
 import std.testing;
 import std.time.Clock;
@@ -263,6 +267,12 @@ pub fn start(
     envp: *mut *mut u8,
     entry: fn(&Env) -> i32,
 ) -> never {
+    run_entry(argc, argv, entry);
+}
+
+/// What both process entries do once the runtime they need is ready: builds the `Env`,
+/// calls `entry` once and exits with its status.
+fn run_entry(argc: i32, argv: *mut *mut u8, entry: fn(&Env) -> i32) -> never {
     let args = args_table(argc, argv);
     let vars = Vars.init();
     let heap = Heap.init();
@@ -383,4 +393,544 @@ fn print_str(bytes: []u8) -> void {
         i += 1;
     }
     putc(34);
+}
+
+// ------------------------------------------------------------------ the scheduler
+//
+// Stage 1 of docs/std/sched.md: one thread and no stack switch. `task_spawn` copies the
+// arguments into a task record and appends it to its scope; the task runs on the
+// current stack when it is joined, or when its scope is waited for. The current task is
+// found through one OS thread-local slot, so the later stages change no caller.
+
+/// Runtime state behind `std.task.Scope` (rt.md §2). The compiler puts one in the frame
+/// of each `scope` block and calls `scope_enter` before the body.
+pub struct ScopeState {
+    /// The scope this one is nested in, for cancellation: the innermost scope the
+    /// opening task had open, or else the scope the opening task was spawned into. Null
+    /// at the root.
+    parent: *mut ScopeState,
+    /// The scope the opening task had open when this one opened, which is open again
+    /// once this one has been waited for.
+    outer: *mut ScopeState,
+    /// Every record spawned into this scope and not yet recycled, in spawn order.
+    first: *mut TaskRecord,
+    last: *mut TaskRecord,
+    canceled: bool,
+}
+
+/// One task record. The task's argument and result record follow it in the same block
+/// (`task_spawn`). The scheduler allocates and recycles it.
+pub struct TaskRecord {
+    prev: *mut TaskRecord,
+    /// The next record of the scope; while the record is free, the next free one.
+    next: *mut TaskRecord,
+    /// The scope the task was spawned into: null for the root task.
+    home: *mut ScopeState,
+    /// The innermost scope the task's body has opened and not yet waited for, or null.
+    open: *mut ScopeState,
+    /// The task whose stack this one runs on, while it runs.
+    caller: *mut TaskRecord,
+    start: fn(*mut u8),
+    args: *mut u8,
+    state: i64,
+    /// A statement-form spawn: nothing joins it, so the scope's wait recycles it as soon
+    /// as it has run.
+    detached: bool,
+    /// The size class of the block, which a free record goes back to.
+    class: i64,
+}
+
+/// One live task. `result` points into the scope-owned argument record.
+pub copy struct TaskRef {
+    pub record: *mut TaskRecord,
+    pub result: *mut u8,
+}
+
+const task_pending: i64 = 0;
+const task_running: i64 = 1;
+const task_finished: i64 = 2;
+
+/// Records are cut from one region reserved from the operating system, never from the
+/// general heap (03-concurrency §23). The reservation is address space only; pages are
+/// committed a megabyte at a time as records are first handed out.
+const region_size: i64 = 1073741824;
+const commit_chunk: i64 = 1048576;
+/// A record block is `record_min << class` bytes, for the classes below. The largest,
+/// `128 << 23`, is the whole region.
+const record_min: i64 = 128;
+const record_classes: i64 = 24;
+
+/// The scheduler's state. Stage 1 has one, in the frame of `start_tasks`.
+struct Sched {
+    /// The thread-local slot that holds the current task.
+    key: u64,
+    /// The first byte of the region not yet handed out, the end of its committed part,
+    /// and the end of the reservation, as addresses.
+    next: i64,
+    committed: i64,
+    limit: i64,
+    /// Recycled blocks by size class, linked through `TaskRecord.next`.
+    free: [record_classes]*mut TaskRecord,
+}
+
+/// The address of the `Sched` of this process, or 0 before `start_tasks` has made it.
+static sched_at: Atomic[i64] = Atomic[i64].init(0);
+
+fn null_task() -> *mut TaskRecord {
+    return @wrap(u64, 0) as *mut TaskRecord;
+}
+
+fn null_scope() -> *mut ScopeState {
+    return @wrap(u64, 0) as *mut ScopeState;
+}
+
+fn null_bytes() -> *mut u8 {
+    return @wrap(u64, 0) as *mut u8;
+}
+
+fn is_null[T](p: *mut T) -> bool {
+    return p as u64 == 0;
+}
+
+fn address[T](p: *mut T) -> i64 {
+    return @wrap(i64, p as u64);
+}
+
+fn round_up(n: i64, align: i64) -> i64 {
+    return (n + align - 1) / align * align;
+}
+
+fn no_start(args: *mut u8) -> void {}
+
+fn no_task_memory() -> never {
+    let site = TrapSite.{
+        code: .t12,
+        file: "<runtime>",
+        line: 0,
+        col: 0,
+        text: "no memory for a task",
+    };
+    trap(&site, 0, 0, 0);
+}
+
+/// T13: the task that was asked to wait for a task that is running on the same stack.
+/// Another task could run instead in a later stage, but stage 1 has no other.
+fn deadlock(waiting: i64) -> never {
+    let site = TrapSite.{
+        code: .t13,
+        file: "<runtime>",
+        line: 0,
+        col: 0,
+        text: "deadlock: all \x01 tasks are waiting",
+    };
+    trap(&site, waiting, 0, 0);
+}
+
+/// T17: a scope, spawn or `par for` on a thread that is not running a task.
+fn not_on_a_task() -> never {
+    let site = TrapSite.{
+        code: .t17,
+        file: "<runtime>",
+        line: 0,
+        col: 0,
+        text: "blocking operation outside a task",
+    };
+    trap(&site, 0, 0, 0);
+}
+
+fn sched() -> *mut Sched {
+    return @wrap(u64, sched_at.load(.relaxed)) as *mut Sched;
+}
+
+/// The task running on this thread: null when the scheduler is not started, or on a
+/// thread that runs no task.
+fn current() -> *mut TaskRecord {
+    let s = sched();
+    if is_null(s) {
+        return null_task();
+    }
+    unsafe("the Sched outlives every task: it lives in the frame of start_tasks, which never returns") {
+        return os_tls_get(s.*.key) as *mut TaskRecord;
+    }
+}
+
+fn set_current(task: *mut TaskRecord) -> void {
+    let s = sched();
+    unsafe("the Sched outlives every task, and its slot belongs to this thread's tasks") {
+        _ = os_tls_set(s.*.key, task as *mut u8);
+    }
+}
+
+fn require_task() -> *mut TaskRecord {
+    let task = current();
+    if is_null(task) {
+        not_on_a_task();
+    }
+    return task;
+}
+
+/// Reserves the record region, makes the thread-local slot and installs `root` as the
+/// task this thread runs. T12 when the operating system refuses either.
+fn install(s: *mut Sched, root: *mut TaskRecord) -> void {
+    var base: *mut u8 = null_bytes();
+    match Vm.init().reserve(region_size) {
+        .ok(region) => { base = region; }
+        .err(_) => { no_task_memory(); }
+    }
+    var key: u64 = 0;
+    match os_tls_create() {
+        .some(slot) => { key = slot; }
+        .none => { no_task_memory(); }
+    }
+    let start = address(base);
+    unsafe("s and root are the live locals of start_tasks, which nothing else refers to yet") {
+        s.*.key = key;
+        s.*.next = start;
+        s.*.committed = start;
+        s.*.limit = start + region_size;
+        root.*.prev = null_task();
+        root.*.next = null_task();
+        root.*.home = null_scope();
+        root.*.open = null_scope();
+        root.*.caller = null_task();
+        root.*.start = no_start;
+        root.*.args = null_bytes();
+        root.*.state = task_running;
+        root.*.detached = false;
+        root.*.class = 0;
+    }
+    sched_at.store(address(s), .relaxed);
+    set_current(root);
+}
+
+/// The process entry when the scheduler is linked (rt.md §2, decision D1). `entry` runs
+/// as the root task, on the process's own stack.
+pub fn start_tasks(
+    argc: i32,
+    argv: *mut *mut u8,
+    envp: *mut *mut u8,
+    entry: fn(&Env) -> i32,
+) -> never {
+    var state: Sched = @zero;
+    var root = TaskRecord.{
+        prev: null_task(),
+        next: null_task(),
+        home: null_scope(),
+        open: null_scope(),
+        caller: null_task(),
+        start: no_start,
+        args: null_bytes(),
+        state: task_running,
+        detached: false,
+        class: 0,
+    };
+    install(&mut state as *mut Sched, &mut root as *mut TaskRecord);
+    run_entry(argc, argv, entry);
+}
+
+/// The smallest class whose block holds `total` bytes. `total` is at most `region_size`.
+fn size_class(total: i64) -> i64 {
+    var class: i64 = 0;
+    var size: i64 = record_min;
+    while size < total {
+        size = size * 2;
+        class += 1;
+    }
+    return class;
+}
+
+/// Commits the region up to the page boundary at or past `end`, a megabyte at least.
+fn grow(s: *mut Sched, end: i64) -> void {
+    unsafe("s is the live Sched; the committed part is a whole number of chunks from the region's page-aligned start") {
+        let have = s.*.committed;
+        var step = round_up(end - have, commit_chunk);
+        if step > s.*.limit - have {
+            step = s.*.limit - have;
+        }
+        let ok = Vm.init().commit(@wrap(u64, have) as *mut u8, step);
+        if !ok {
+            no_task_memory();
+        }
+        s.*.committed = have + step;
+    }
+}
+
+/// A block of `record_min << class` bytes: a recycled one, or the next from the region.
+fn take_block(s: *mut Sched, class: i64) -> *mut TaskRecord {
+    unsafe("s is the live Sched, and a block on a free list is a record nothing refers to") {
+        let head = s.*.free[class];
+        if !is_null(head) {
+            s.*.free[class] = head.*.next;
+            return head;
+        }
+        let size = record_min << class;
+        if size > s.*.limit - s.*.next {
+            no_task_memory();
+        }
+        let at = s.*.next;
+        if at + size > s.*.committed {
+            grow(s, at + size);
+        }
+        s.*.next = at + size;
+        return @wrap(u64, at) as *mut TaskRecord;
+    }
+}
+
+/// Gives a record's block back to its size class.
+fn release(task: *mut TaskRecord) -> void {
+    let s = sched();
+    unsafe("task is a record nothing refers to any more, and s is the live Sched") {
+        let class = task.*.class;
+        task.*.next = s.*.free[class];
+        s.*.free[class] = task;
+    }
+}
+
+/// The bytes the record's own fields take, a multiple of 16 so that what follows is
+/// aligned for any argument up to 16.
+fn header_size() -> i64 {
+    return round_up(@sizeof(TaskRecord), 16);
+}
+
+fn link(home: *mut ScopeState, task: *mut TaskRecord) -> void {
+    unsafe("home is the state of a scope block that has not been waited for, and task is a fresh record") {
+        let last = home.*.last;
+        task.*.prev = last;
+        task.*.next = null_task();
+        if is_null(last) {
+            home.*.first = task;
+        } else {
+            last.*.next = task;
+        }
+        home.*.last = task;
+    }
+}
+
+fn unlink(task: *mut TaskRecord) -> void {
+    unsafe("task is linked into the scope it was spawned into, which has not been waited for") {
+        let home = task.*.home;
+        let prev = task.*.prev;
+        let next = task.*.next;
+        if is_null(prev) {
+            home.*.first = next;
+        } else {
+            prev.*.next = next;
+        }
+        if is_null(next) {
+            home.*.last = prev;
+        } else {
+            next.*.prev = prev;
+        }
+    }
+}
+
+/// Initializes the state of a `scope` block. Called once, before its body.
+pub fn scope_enter(state: *mut ScopeState) -> void {
+    let task = require_task();
+    unsafe("state is the storage of the scope block, which nothing else refers to yet; task is the live record of this thread's task") {
+        let open = task.*.open;
+        state.*.outer = open;
+        state.*.parent = if is_null(open) { task.*.home } else { open };
+        state.*.first = null_task();
+        state.*.last = null_task();
+        state.*.canceled = false;
+        task.*.open = state;
+    }
+}
+
+/// Starts `start(args)` as a task in `state`. Arguments are copied into a block of the
+/// task's own now; the result slot begins at the first suitably aligned offset after
+/// them. `detached` is true for a statement-form `task_spawn`, which has no handle.
+pub fn task_spawn(
+    state: *mut ScopeState,
+    start: fn(*mut u8),
+    args: *u8,
+    args_size: i64,
+    args_align: i64,
+    result_size: i64,
+    result_align: i64,
+    detached: bool,
+) -> TaskRef {
+    let s = sched();
+    _ = require_task();
+    if args_size > region_size || result_size > region_size {
+        no_task_memory();
+    }
+    // The argument copy and the result slot share one alignment, so the thunk finds the
+    // result at the same offset from the copy that `result_at` gives here.
+    let result_at = round_up(args_size, result_align);
+    var align = 16;
+    if args_align > align {
+        align = args_align;
+    }
+    if result_align > align {
+        align = result_align;
+    }
+    let slack = if align > 16 { align } else { 0 };
+    let total = header_size() + slack + result_at + result_size;
+    if total > region_size {
+        no_task_memory();
+    }
+    let class = size_class(total);
+    let task = take_block(s, class);
+    let args_start = round_up(address(task) + header_size(), align);
+    let copy_to = @wrap(u64, args_start) as *mut u8;
+    var i: i64 = 0;
+    unsafe("copy_to is inside the new block, which has room for args_size bytes there, and args is the caller's record of that size") {
+        while i < args_size {
+            @offset(copy_to, i).* = @offset(args, i).*;
+            i += 1;
+        }
+        task.* = TaskRecord.{
+            prev: null_task(),
+            next: null_task(),
+            home: state,
+            open: null_scope(),
+            caller: null_task(),
+            start: start,
+            args: copy_to,
+            state: task_pending,
+            detached: detached,
+            class: class,
+        };
+    }
+    link(state, task);
+    return TaskRef.{
+        record: task,
+        result: @wrap(u64, args_start + result_at) as *mut u8,
+    };
+}
+
+/// Runs a pending record on the current stack, as the task it is.
+fn run_record(task: *mut TaskRecord) -> void {
+    unsafe("task is a live pending record, and its thunk was made for the argument copy it holds") {
+        let caller = current();
+        task.*.state = task_running;
+        task.*.caller = caller;
+        set_current(task);
+        let thunk = task.*.start;
+        thunk(task.*.args);
+        set_current(caller);
+        task.*.state = task_finished;
+        task.*.caller = null_task();
+    }
+}
+
+fn chain_length(task: *mut TaskRecord) -> i64 {
+    var n: i64 = 0;
+    var at = task;
+    unsafe("the callers of a running task are live records") {
+        while !is_null(at) {
+            n += 1;
+            at = at.*.caller;
+        }
+    }
+    return n;
+}
+
+/// Waits for this task without consuming the handle: it runs now if it has not run.
+/// A task that is running further up this stack cannot finish before this call returns.
+pub fn task_wait(task: TaskRef) -> void {
+    unsafe("the handle is live, so its record is") {
+        let state = task.record.*.state;
+        if state == task_pending {
+            run_record(task.record);
+        } else if state == task_running {
+            deadlock(chain_length(current()));
+        }
+    }
+}
+
+/// Waits for this task and releases its record. `Task.join` calls `task_wait`, moves the
+/// result out of `result`, and only then calls this, so the result is never read from a
+/// recycled record.
+pub fn task_join(task: TaskRef) -> void {
+    task_wait(task);
+    unlink(task.record);
+    release(task.record);
+}
+
+/// Waits for every task spawned in the scope, then closes it. A task may spawn more into
+/// the scope while it runs, and they come after it in the list, so one pass runs them
+/// all. A statement-form record is recycled as soon as it has run; a handle that was
+/// never joined (`@forget`) is recycled at the end.
+pub fn scope_wait(state: *mut ScopeState) -> void {
+    unsafe("state is the live state of the scope block being waited for, and each record in its list is live") {
+        var at = state.*.first;
+        while !is_null(at) {
+            if at.*.state == task_pending {
+                run_record(at);
+            }
+            let next = at.*.next;
+            if at.*.detached {
+                unlink(at);
+                release(at);
+            }
+            at = next;
+        }
+        at = state.*.first;
+        while !is_null(at) {
+            let next = at.*.next;
+            release(at);
+            at = next;
+        }
+        state.*.first = null_task();
+        state.*.last = null_task();
+        current().*.open = state.*.outer;
+    }
+}
+
+/// Sets the scope's cancel flag. A scope opened inside it sees the flag through its
+/// `parent` chain (`scope_canceled`).
+pub fn scope_cancel(state: *mut ScopeState) -> void {
+    unsafe("state is the live state of a scope block") {
+        state.*.canceled = true;
+    }
+}
+
+/// Whether the scope, or a scope it is nested in, was canceled.
+pub fn scope_canceled(state: *ScopeState) -> bool {
+    var at = state as *mut ScopeState;
+    unsafe("state is the live state of a scope block, and so is each scope it is nested in") {
+        while !is_null(at) {
+            if at.*.canceled {
+                return true;
+            }
+            at = at.*.parent;
+        }
+    }
+    return false;
+}
+
+/// Whether the scope the current task is in is canceled: the innermost scope its body
+/// has open, or else the one it was spawned into. False outside any task.
+pub fn task_canceled() -> bool {
+    let task = current();
+    if is_null(task) {
+        return false;
+    }
+    unsafe("task is the live record of this thread's task") {
+        let open = task.*.open;
+        let innermost = if is_null(open) { task.*.home } else { open };
+        return scope_canceled(innermost as *ScopeState);
+    }
+}
+
+/// Runs `body(captures, lo, hi)` over the iteration indices `lo..hi`, in chunks of at
+/// most `grain` (0: all of it at once), in order, on this stack. The compiler's chunk
+/// function turns an index into the loop's item.
+pub fn par_for_range(
+    lo: i64,
+    hi: i64,
+    grain: i64,
+    body: fn(*mut u8, i64, i64),
+    captures: *mut u8,
+) -> void {
+    _ = require_task();
+    var at = lo;
+    while at < hi {
+        let end = if grain > 0 && grain < hi - at { at + grain } else { hi };
+        body(captures, at, end);
+        at = end;
+    }
 }

@@ -1,0 +1,44 @@
+//! expect: run
+//! section: 18, 23
+
+import std.Env;
+import std.sync.Atomic;
+
+fn square(n: i64) -> i64 {
+    return n * n % 7;
+}
+
+fn tick(hits: &Atomic[i64]) {
+    _ = hits.add(1, .relaxed);
+}
+
+pub fn main(env: &Env) -> u8 {
+    // A task's record is recycled at its join, so a scope that spawns and joins a
+    // million tasks one at a time runs out of nothing.
+    var sum: i64 = 0;
+    scope s {
+        var i: i64 = 0;
+        while i < 1000000 {
+            let h = spawn square(i) in s;
+            sum += h.join();
+            i += 1;
+        }
+    }
+    // 0, 1, 4, 2, 2, 4, 1 repeat with period 7 and add up to 14; 142,857 whole periods
+    // and a last 0 make the million.
+    @assert(sum == 142857 * 14);
+
+    // A statement-form spawn has no handle: its task runs at the scope's wait, and the
+    // record goes back to the free list as soon as it has run. In stage 1 the 100,000
+    // records are all live until then.
+    let hits = Atomic[i64].init(0);
+    scope s {
+        var i: i64 = 0;
+        while i < 100000 {
+            spawn tick(&hits) in s;
+            i += 1;
+        }
+    }
+    @assert(hits.load(.relaxed) == 100000);
+    return 0;
+}

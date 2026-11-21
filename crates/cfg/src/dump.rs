@@ -578,6 +578,7 @@ impl<'a> Dumper<'a> {
                 iterand,
                 grain,
                 next,
+                ..
             } => {
                 let mut s = format!("par for body {} ({})", body.0, body_name);
                 if !capture_names.is_empty() {

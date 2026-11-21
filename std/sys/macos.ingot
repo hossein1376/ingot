@@ -22,6 +22,9 @@ extern "c" {
     fn free(ptr: *mut u8) -> void;
     fn malloc_size(ptr: *u8) -> i64;
     fn sysconf(name: i32) -> i64;
+    fn pthread_key_create(key: *mut u64, destructor: *mut u8) -> i32;
+    fn pthread_getspecific(key: u64) -> *mut u8;
+    fn pthread_setspecific(key: u64, value: *mut u8) -> i32;
 }
 
 // The constants below are the macOS SDK's own (`xcrun --show-sdk-path`, then
@@ -29,7 +32,7 @@ extern "c" {
 //
 // `sys/mman.h`: `PROT_NONE 0x00`, `PROT_READ 0x01`, `PROT_WRITE 0x02`,
 // `MAP_PRIVATE 0x0002`, `MAP_ANON 0x1000`, `MAP_FAILED ((void *)-1)`, `MADV_FREE 5`.
-// `unistd.h`: `_SC_PAGESIZE 29`.
+// `unistd.h`: `_SC_PAGESIZE 29`. `pthread.h`: `pthread_key_t` is `unsigned long`.
 const prot_none: i32 = 0;
 const prot_read_write: i32 = 3;
 const map_private_anon: i32 = 0x1002;
@@ -154,5 +157,37 @@ pub(pkg) unsafe fn os_free(ptr: *mut u8) -> void {
 pub(pkg) unsafe fn os_malloc_size(ptr: *mut u8) -> i64 {
     unsafe("the caller guarantees a live block from malloc or posix_memalign") {
         return malloc_size(ptr as *u8);
+    }
+}
+
+/// A new thread-local slot: every thread reads null from it until it sets a value. `.none`
+/// when the system has no slot left.
+pub(pkg) fn os_tls_create() -> ?u64 {
+    var key: u64 = 0;
+    var status: i32 = 0;
+    unsafe("the out-pointer is a live local, and a null destructor means the slot has none") {
+        status = pthread_key_create(
+            &mut key as *mut u64,
+            @wrap(u64, 0) as *mut u8,
+        );
+    }
+    if status != 0 {
+        return .none;
+    }
+    return .some(key);
+}
+
+/// The calling thread's value in a slot that `os_tls_create` returned, or null.
+pub(pkg) fn os_tls_get(key: u64) -> *mut u8 {
+    unsafe("pthread_getspecific reads the calling thread's own value; an unknown key gives null") {
+        return pthread_getspecific(key);
+    }
+}
+
+/// Sets the calling thread's value in a slot that `os_tls_create` returned. False when the
+/// system refused.
+pub(pkg) fn os_tls_set(key: u64, value: *mut u8) -> bool {
+    unsafe("pthread_setspecific stores the pointer for the calling thread only") {
+        return pthread_setspecific(key, value) == 0;
     }
 }

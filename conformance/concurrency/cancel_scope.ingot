@@ -1,0 +1,95 @@
+//! expect: run
+//! section: 18, 22
+
+import std.Env;
+import std.sync.Atomic;
+import std.task;
+
+copy enum Oops: u8 {
+    failed,
+}
+
+// Waits for its scope to be canceled, then says it saw it.
+fn watch(seen: &Atomic[i64]) {
+    while !task.canceled() {}
+    seen.store(1, .release);
+}
+
+fn fails(seen: &Atomic[i64]) -> void ! Oops {
+    scope s {
+        spawn watch(seen) in s;
+        fail .failed;
+    }
+}
+
+fn fails_through_try(seen: &Atomic[i64]) -> void ! Oops {
+    scope s {
+        spawn watch(seen) in s;
+        try fails_at_once();
+    }
+}
+
+fn fails_at_once() -> void ! Oops {
+    fail .failed;
+}
+
+// A task that opens a scope of its own, inside a scope that is canceled.
+fn nested_sees(seen: &Atomic[i64]) {
+    while !task.canceled() {}
+    scope inner {
+        if inner.is_canceled() && task.canceled() {
+            seen.store(2, .release);
+        }
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    // `cancel` sets the flag, which tasks and the scope itself observe.
+    let seen = Atomic[i64].init(0);
+    scope s {
+        @assert(!s.is_canceled());
+        spawn watch(&seen) in s;
+        s.cancel();
+        @assert(s.is_canceled());
+    }
+    @assert(seen.load(.acquire) == 1);
+
+    // Outside any scope there is nothing canceled.
+    @assert(!task.canceled());
+
+    // A scope opened inside a canceled one, in the same body, is canceled too; one
+    // opened beside it is not.
+    scope outer {
+        scope calm {
+            @assert(!calm.is_canceled());
+        }
+        outer.cancel();
+        scope inner {
+            @assert(inner.is_canceled());
+            @assert(task.canceled());
+        }
+    }
+    @assert(!task.canceled());
+
+    // ... and so is a scope opened by a task of the canceled scope.
+    let nested = Atomic[i64].init(0);
+    scope s {
+        spawn nested_sees(&nested) in s;
+        s.cancel();
+    }
+    @assert(nested.load(.acquire) == 2);
+
+    // A scope left by an error cancels, and still waits for its tasks: the watcher
+    // only finishes because of the cancellation.
+    let a = Atomic[i64].init(0);
+    var failed = false;
+    fails(&a) catch _ => { failed = true; };
+    @assert(failed);
+    @assert(a.load(.acquire) == 1);
+    let b = Atomic[i64].init(0);
+    failed = false;
+    fails_through_try(&b) catch _ => { failed = true; };
+    @assert(failed);
+    @assert(b.load(.acquire) == 1);
+    return 0;
+}

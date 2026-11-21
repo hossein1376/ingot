@@ -56,7 +56,7 @@ read-only by the optimizer.
 /// A spawned task. Linear: it must be joined. It borrows its scope, so it cannot leave
 /// the scope's block.
 pub linear struct Task[R] {
-    scope: &Scope,
+    owner: &Scope,
     task: rt.TaskRef,
 }
 
@@ -89,7 +89,8 @@ Properties of `Task[R]`:
 | `Send` | if `R: Send` | `unsafe impl`; the runtime synchronizes completion and the result is `Send` |
 | `Sync` | no | `wait` is the only shared operation, and sharing a handle is not needed |
 
-The compiler builds a `Task` from the `rt.TaskRef` returned by `spawn`; the fields are
+The first field is `owner`, not `scope`, because `scope` is a keyword and cannot name a
+field. The compiler builds a `Task` from the `rt.TaskRef` returned by `rt.task_spawn`; the fields are
 private to `std.task`, and compiler-generated code is not subject to visibility
 (01-core §2). A task record is recycled at `join`, or, for a statement-form `spawn`,
 when the task finishes (03-concurrency §23), so a long-lived scope does not grow.

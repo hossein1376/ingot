@@ -1,0 +1,66 @@
+//! expect: run
+//! section: 18
+
+import std.Env;
+
+struct Four {
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+}
+
+copy enum Bad: u8 {
+    odd,
+}
+
+fn make(n: i64) -> Four {
+    return Four.{ a: n, b: n * 2, c: n * 3, d: n * 4 };
+}
+
+fn half(n: i64) -> i64 ! Bad {
+    if n % 2 != 0 {
+        fail .odd;
+    }
+    return n / 2;
+}
+
+fn nothing() {}
+
+fn double_half(n: i64) -> i64 ! Bad {
+    scope s {
+        let h = spawn half(n) in s;
+        let v = try h.join();
+        return v * 2;
+    }
+}
+
+fn pair(a: u8, b: i64, c: u8) -> i64 {
+    return a as i64 + b + c as i64;
+}
+
+pub fn main(env: &Env) -> u8 {
+    scope s {
+        // A result of more than two registers.
+        let big = spawn make(5) in s;
+        let v = big.join();
+        @assert(v.a == 5 && v.b == 10 && v.c == 15 && v.d == 20);
+
+        // A fallible task: the joined value is a `T ! E`.
+        let ok = spawn half(8) in s;
+        let bad = spawn half(7) in s;
+        @assert((ok.join() catch _ => -1) == 4);
+        @assert((bad.join() catch _ => -1) == -1);
+
+        // A `void` result.
+        let unit = spawn nothing() in s;
+        unit.join();
+
+        // Mixed argument sizes: the record is padded, and the result follows it.
+        let mixed = spawn pair(1, 100, 2) in s;
+        @assert(mixed.join() == 103);
+    }
+    @assert((double_half(10) catch _ => -1) == 10);
+    @assert((double_half(3) catch _ => -1) == -1);
+    return 0;
+}

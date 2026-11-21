@@ -1,3 +1,2 @@
 0	_I6:spawn_6:spawn_10:spawn_.run
 1	_I6:spawn_6:spawn_11:spawn_.work3:i64
-1	_I6:spawn_6:spawn_22:spawn_.run.{spawn 0.0}

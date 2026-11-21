@@ -612,6 +612,11 @@ pub enum Terminator {
         capture_names: Vec<String>,
         iterand: ParIterand,
         grain: Option<Operand>,
+        /// Whether the body takes the loop variable (the item), and whether it takes
+        /// the index, after the capture record: a `_` binds neither. The body's
+        /// parameters are the record, then the item if there is one, then the index.
+        binds_item: bool,
+        binds_index: bool,
         next: Block,
     },
     Dispatch {
