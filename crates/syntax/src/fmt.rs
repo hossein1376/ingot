@@ -204,6 +204,28 @@ fn last_choice(flat: Doc, broken: Doc, force: bool) -> Doc {
     }
 }
 
+/// The parameter list and the result of a function. When the whole signature does not
+/// fit on one line, the parameters break first, one per line, and the result follows
+/// the closing parenthesis; only a result too long even there breaks inside its types.
+/// A parameter list alone is a `last` choice, so without this the line would run to the
+/// first bracket of the return type and break there. The signature is itself `last`, so
+/// generic parameters before it still break only after the parameters.
+fn signature(params: Doc, result: Doc) -> Doc {
+    match params {
+        Doc::Choice {
+            flat,
+            broken,
+            force,
+            ..
+        } => last_choice(
+            concat(vec![*flat, result.clone()]),
+            concat(vec![*broken, result]),
+            force,
+        ),
+        params => concat(vec![params, result]),
+    }
+}
+
 // ---------------------------------------------------------------- render
 
 #[derive(Clone, Debug, Default)]
@@ -633,14 +655,14 @@ impl Formatter<'_> {
         docs.push(text(function.name.clone(), function.name_span));
         docs.push(self.generics(&function.generics, function.span));
         let params = self.params(&function.params, function.span);
-        docs.push(params);
-        docs.push(self.result(
+        let result = self.result(
             &function.ret,
             function.error.as_ref(),
             &function.from,
             function.reduce.as_deref(),
             function.span,
-        ));
+        );
+        docs.push(signature(params, result));
         if function.variadic {
             // Only an extern declaration can be variadic; its parameter list already
             // ends in `...`.

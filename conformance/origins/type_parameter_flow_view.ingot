@@ -1,0 +1,21 @@
+//! expect: reject
+//! section: 13.3
+
+// A `T` with a borrow inside still flows: the elements of `xs` hold views, and copying
+// one into `s` stores them where they reach `s`.
+
+copy struct Word {
+    text: []u8,
+}
+
+struct Slot[T] {
+    v: T,
+}
+
+fn put_first[T: Copy + Discard](s: &mut Slot[T], xs: []T) {
+    s.v = xs[0];
+}
+
+fn words(s: &mut Slot[Word], xs: []Word) {
+    put_first(s, xs); //~ E1204
+}

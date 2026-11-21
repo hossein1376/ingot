@@ -1,0 +1,20 @@
+//! expect: cost
+//! section: 31
+
+// An inner loop that grows a variable inside an outer loop. The analysis reaches a fixed
+// point: `i += 1` is under `i < 300` and keeps no check, while `want *= 2` can overflow.
+
+fn go() -> i64 {
+    var i: i64 = 0;
+    var want: i64 = 4;
+    while i < 300 {
+        i += 1;
+        while want < i {
+            want *= 2; //~ overflow_check
+        }
+        if i == want {
+            i += 0;
+        }
+    }
+    return want;
+}

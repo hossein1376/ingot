@@ -1701,6 +1701,15 @@ impl<'a> Cx<'a> {
         let type_params = self.callee_type_params(fn_ref);
         let mut u_of: Vec<(DefId, OriginSet)> = Vec::new();
         for t in &type_params {
+            // A `T` that this call fixes to a type with no view in it (`u8`, a struct
+            // of scalars) holds no borrow, so nothing flows through it: `l.extend(text)`
+            // copies bytes into `l`, not the view `text` (checker.md §4.5 step 2).
+            if let Some(arg) = self.type_arg(fn_ref, *t)
+                && !self.carries(arg)
+            {
+                u_of.push((*t, OriginSet::new()));
+                continue;
+            }
             let mut parts = Vec::new();
             for (i, p) in sig.params.iter().enumerate() {
                 let mut part = OriginSet::new();
@@ -1755,6 +1764,51 @@ impl<'a> Cx<'a> {
             }
         }
         result
+    }
+
+    /// The type this call gives the callee's type parameter `t`, when it says.
+    fn type_arg(&self, fn_ref: &FnRef, t: DefId) -> Option<TypeId> {
+        let pick = |owner: DefId, args: &[GenericArg]| -> Option<TypeId> {
+            let index = self
+                .decls
+                .generics_of(owner)
+                .iter()
+                .position(|g| g.def == t)?;
+            match args.get(index)? {
+                GenericArg::Ty(ty) => Some(*ty),
+                GenericArg::Const(_) => None,
+            }
+        };
+        if let Some(ty) = pick(fn_ref.def, &fn_ref.args) {
+            return Some(ty);
+        }
+        match &fn_ref.source {
+            FnSource::Free => None,
+            FnSource::Inherent {
+                impl_def,
+                impl_args,
+            } => pick(*impl_def, impl_args),
+            FnSource::Interface {
+                interface,
+                interface_args,
+                self_ty,
+                via,
+            } => {
+                if let Some(ty) = pick(*interface, interface_args) {
+                    return Some(ty);
+                }
+                if let InterfaceVia::Impl {
+                    impl_def,
+                    impl_args,
+                } = via
+                    && let Some(ty) = pick(*impl_def, impl_args)
+                {
+                    return Some(ty);
+                }
+                let sig = self.decls.interface_sig(*interface)?;
+                (sig.self_def == t).then_some(*self_ty)
+            }
+        }
     }
 
     fn callee_type_params(&self, fn_ref: &FnRef) -> Vec<DefId> {

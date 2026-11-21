@@ -336,9 +336,10 @@ impl Arena {
         }
     }
 
-    pub fn alloc_or_return[T](self: &Arena, value: T) -> &mut T ! AllocFail[
-        T,
-    ] from self {
+    pub fn alloc_or_return[T](
+        self: &Arena,
+        value: T,
+    ) -> &mut T ! AllocFail[T] from self {
         let p = self.take(@sizeof(T), @alignof(T)) catch e => {
             fail AllocFail[T].{ error: e, value: value };
         };
@@ -479,9 +480,10 @@ impl FixedBuf {
         }
     }
 
-    pub fn alloc_or_return[T](self: &FixedBuf, value: T) -> &mut T ! AllocFail[
-        T,
-    ] from self {
+    pub fn alloc_or_return[T](
+        self: &FixedBuf,
+        value: T,
+    ) -> &mut T ! AllocFail[T] from self {
         let p = self.take(@sizeof(T), @alignof(T)) catch e => {
             fail AllocFail[T].{ error: e, value: value };
         };

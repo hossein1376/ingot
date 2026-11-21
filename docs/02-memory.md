@@ -224,7 +224,9 @@ For `List[[]u8, Heap]`, `push` adds the item's origins to the list, `pop` return
 value with the list's origins (and does not keep the list borrowed), and `get` returns a
 borrow of the list whose pointee has the list's origins. This is the one place flow is
 derived instead of written, because a generic body cannot tell a view `T` from any
-other `T`.
+other `T`. The caller can: where a call fixes `T` to a type with no borrow in it at any
+depth (`u8`, a struct of scalars), nothing flows through `T`, so `l.extend(text)` on a
+`List[u8, Heap]` needs no `into l` on `text`.
 
 A parameter whose type is a type parameter bounded by `Fn(..) -> R`, `FnMut(..) -> R`
 or `FnOnce(..) -> R` mentions the type parameters of that signature. So

@@ -1,0 +1,26 @@
+//! expect: accept
+//! section: 13.3
+
+// A call that fixes `T` to a type with no borrow in it moves no origins through `T`:
+// copying the elements of `xs` into `s` does not store the view `xs` there.
+
+copy struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Slot[T] {
+    v: T,
+}
+
+fn put_first[T: Copy + Discard](s: &mut Slot[T], xs: []T) {
+    s.v = xs[0];
+}
+
+fn bytes(s: &mut Slot[u8], xs: []u8) {
+    put_first(s, xs);
+}
+
+fn points(s: &mut Slot[Point], xs: []Point) {
+    put_first(s, xs);
+}

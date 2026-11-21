@@ -159,6 +159,11 @@ code alone.
   §10): no `Cell`, raw pointer, `dyn` or type parameter at any depth. "No `Cell` by
   value" is not enough, because a type can reach an arena through a borrow field. Not
   built yet; the precise fix (two origin sets per value) is not planned.
+* **Type-parameter flow stops at a view-free type argument** (R1 follow-up; 02 §13.3,
+  checker §4.5 step 2). A call that fixes `T` to a type with no borrow, slice, `dyn` or
+  type parameter in it adds nothing through `T`. *Why:* `l.extend(text)` on a
+  `List[u8, Heap]` was E1204 without `into l`, though only bytes are copied; a value of
+  such a type has no origins, so the narrower flow loses nothing.
 
 ## 5. `unsafe`, raw pointers and interior mutability
 
@@ -252,6 +257,11 @@ code alone.
 * **The cost items are defined from signatures and the CFG** (review 2, B8; 05 §31):
   `alloc` is a call whose error type is `AllocErr` or converts to it, so it stays a
   property of the checked program; `park_point` is the one non-local item.
+* **A block's entry facts only shrink** (R1 follow-up). Each new merge is met with the
+  block's previous entry state. *Why:* the transfer is not monotone (a local with no
+  facts can leave a block with its type range), so two states fed each other forever
+  around nested loops and the build failed with "did not converge". Dropping facts is
+  always sound, and a shrinking finite set must stop.
 
 ## 8. Constant evaluation and instantiation
 
@@ -369,6 +379,9 @@ code alone.
   input, and a one-item change is a one-line diff. *Rejected:* gofmt's kept line
   breaks (two layouts of one program), packing several items per line, and gofmt's
   aligned columns (renaming one field re-indents its neighbours).
+* **A signature breaks its parameters before its return type** (R1 follow-up; 05
+  §34.3). *Why:* by "last breaks first", `fn f(a: A) -> List[` ended the line inside
+  the return type; a reader looks for the type on one line after `->`.
 * **The C ABI** (review 2, U3; 04 §29): `bool` is C's `_Bool`; `copy struct`s cross by
   value by each system's rule; `?extern fn` crosses as a nullable function pointer;
   other optionals, results and enums do not. No unwinding; unwind tables are still

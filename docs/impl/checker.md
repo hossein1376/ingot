@@ -206,7 +206,10 @@ For `dest = f(a_1, ..., a_n)`, after the arguments are evaluated. `A_i = S(a_i)`
    `A_q` if `T` occurs in the type of `q` outside any borrow, and `inner⁺(A_q)` if it
    occurs inside one. `inner⁺(S)` is `inner*(inner(S))`: what is hidden inside the
    borrow, without the borrow's own origins (its loan, `Param(q)`), which are not a `T`. Then for every parameter `p` passed by `&mut` or `[]mut` whose type mentions
-   `T`, store `U_T` through `a_p` as in step 1.
+   `T`, store `U_T` through `a_p` as in step 1. When the call fixes `T` to a type that
+   is not and may not be a view (no borrow, slice, `dyn` or type parameter at any
+   depth), `U_T` is empty: a value of that type carries no origins, whatever the
+   argument it was read out of (02-memory §13.3).
 3. **Result.** `S(dest)` is the union of:
    * for each `from p`: `A_p ∪ inner*(A_p)`;
    * for each `from p.*`: `inner(A_p)`;

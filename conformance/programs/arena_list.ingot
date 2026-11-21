@@ -30,10 +30,10 @@ fn lower(b: u8) -> u8 {
 }
 
 /// The words of `text`: maximal runs of letters, as slices of the text itself.
-fn tokenize(arena: &Arena, text: []u8) -> List[
-    []u8,
-    &Arena,
-] ! AllocErr from arena, text {
+fn tokenize(
+    arena: &Arena,
+    text: []u8,
+) -> List[[]u8, &Arena] ! AllocErr from arena, text {
     var words = List[[]u8, &Arena].init(arena);
     errdefer { words.deinit(); }
     var i: i64 = 0;
@@ -68,10 +68,10 @@ fn same_word(a: []u8, b: []u8) -> bool {
 }
 
 /// One entry per distinct word, in the order of first appearance.
-fn tally(arena: &Arena, words: &List[[]u8, &Arena]) -> List[
-    Entry,
-    &Arena,
-] ! AllocErr from arena, words.* {
+fn tally(
+    arena: &Arena,
+    words: &List[[]u8, &Arena],
+) -> List[Entry, &Arena] ! AllocErr from arena, words.* {
     var entries = List[Entry, &Arena].init(arena);
     errdefer { entries.deinit(); }
     var w: i64 = 0;
@@ -131,10 +131,10 @@ fn sort_by_rank(slots: []mut &Entry) -> void {
 }
 
 /// Borrows of the entries, most frequent first.
-fn rank(arena: &Arena, entries: &List[Entry, &Arena]) -> List[
-    &Entry,
-    &Arena,
-] ! AllocErr from arena, entries {
+fn rank(
+    arena: &Arena,
+    entries: &List[Entry, &Arena],
+) -> List[&Entry, &Arena] ! AllocErr from arena, entries {
     var order = List[&Entry, &Arena].init(arena);
     errdefer { order.deinit(); }
     var i: i64 = 0;
@@ -163,9 +163,11 @@ fn push_number(s: &mut Str[&Arena], n: i64) -> void ! AllocErr {
 }
 
 /// `word=count` for the first `top` entries, separated by spaces.
-fn summary(arena: &Arena, order: &List[&Entry, &Arena], top: i64) -> Str[
-    &Arena,
-] ! AllocErr from arena {
+fn summary(
+    arena: &Arena,
+    order: &List[&Entry, &Arena],
+    top: i64,
+) -> Str[&Arena] ! AllocErr from arena {
     var s = Str[&Arena].init(arena);
     errdefer { s.deinit(); }
     var i: i64 = 0;

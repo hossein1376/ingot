@@ -394,7 +394,9 @@ construct, and each resulting line is then checked again the same way. There is 
 break after `=` or `=>`. When a line holds several lists or one-line blocks (a
 function's generic parameters and its parameters; a type's generic arguments and a
 struct literal's fields; two calls joined by `orelse`), the last one breaks first, and
-an earlier one only if the line still does not fit:
+an earlier one only if the line still does not fit. A function's result is the
+exception: its parameters break before any list in its return or error type, and the
+result follows the closing parenthesis (the `alloc_slice` example below):
 
 ```ingot
 var heap = MaxHeap[i64, 8].{

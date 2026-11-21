@@ -164,9 +164,10 @@ impl[T, A: Allocator] List[T, A] {
     }
 
     /// Appends `item`; on failure gives it back.
-    pub fn push_or_return(self: &mut List[T, A], item: T) -> void ! AllocFail[
-        T,
-    ] {
+    pub fn push_or_return(
+        self: &mut List[T, A],
+        item: T,
+    ) -> void ! AllocFail[T] {
         self.make_room(1) catch e => {
             fail AllocFail[T].{ error: e, value: item };
         };

@@ -240,6 +240,16 @@ impl Engine<'_> {
                 let merged = rest
                     .iter()
                     .fold(first.clone(), |current, edge| current.join(edge));
+                // A block's entry facts only ever shrink. The transfer is not monotone
+                // (a local with no facts can come out of a block with its type range,
+                // one with facts can come out with none), so without this two states can
+                // feed each other forever around nested loops. Each change now drops at
+                // least one fact from a finite set, so the loop ends; dropping facts is
+                // always sound.
+                let merged = match &ins[succ as usize] {
+                    Some(old) => old.join(&merged),
+                    None => merged,
+                };
                 if ins[succ as usize].as_ref() != Some(&merged) {
                     ins[succ as usize] = Some(merged);
                     queue.push_back(succ);

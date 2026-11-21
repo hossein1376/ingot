@@ -196,6 +196,7 @@ cost/load_has_no_check.ingot
 cost/loop_counter_overflow_has_no_check.ingot
 cost/negative_index_keeps_check.ingot
 cost/negative_lo_keeps_bound.ingot
+cost/nested_loop_growth.ingot
 cost/park_closure.ingot
 cost/park_dispatch_par.ingot
 cost/park_dispatch_seq.ingot
@@ -488,6 +489,8 @@ origins/store_needs_into_nested.fixed.ingot
 origins/store_needs_into_nested.ingot
 origins/stored_borrow_must_outlive.ingot
 origins/type_parameter_flow.ingot
+origins/type_parameter_flow_plain.ingot
+origins/type_parameter_flow_view.ingot
 origins/view_of_local.ingot
 ownership/array_element_move.ingot
 ownership/closure_capture_moves.ingot

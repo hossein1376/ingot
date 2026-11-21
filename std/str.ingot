@@ -50,16 +50,7 @@ impl[A: Allocator] Str[A] {
 
     /// Appends a copy of `text`.
     pub fn append(self: &mut Str[A], text: []u8) -> void ! AllocErr {
-        // One growth up front, then a push per byte that cannot allocate. `List.extend`
-        // does the same in one call, but a function that takes the slice as a parameter
-        // cannot call it without `into self` on the slice (E1204; checker.md section 10,
-        // "Widening through shared origins is too strict").
-        try self.buf.reserve(text.len);
-        var i: i64 = 0;
-        while i < text.len {
-            try self.buf.push(text[i]);
-            i += 1;
-        }
+        try self.buf.extend(text);
     }
 
     pub fn bytes(self: &Str[A]) -> []u8 from self {

@@ -32,6 +32,21 @@ fn a_long_parameter_list_breaks() {
 }
 
 #[test]
+fn a_long_result_breaks_the_parameters_first() {
+    case(
+        "result",
+        "fn tally(arena: &Arena, words: &List[[]u8, &Arena]) -> List[Entry, &Arena] ! AllocErr from arena { return f(); }\n",
+        "fn tally(\n    arena: &Arena,\n    words: &List[[]u8, &Arena],\n) -> List[Entry, &Arena] ! AllocErr from arena {\n    return f();\n}\n",
+    );
+    // Generic parameters still break only after the parameters.
+    case(
+        "result_generics",
+        "fn alloc_or_return[T](self: &FixedBuf, value: T) -> &mut T ! AllocFail[T] from self { return f(); }\n",
+        "fn alloc_or_return[T](\n    self: &FixedBuf,\n    value: T,\n) -> &mut T ! AllocFail[T] from self {\n    return f();\n}\n",
+    );
+}
+
+#[test]
 fn an_operator_chain_breaks_before_the_operator() {
     case(
         "operator",
