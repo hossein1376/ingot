@@ -1523,6 +1523,9 @@ struct FnGen<'a, 'p> {
     /// Allocations made while lowering. They are emitted in the entry block so an
     /// aggregate in a loop does not grow the frame on every iteration at `-O0`.
     entry_allocas: Vec<String>,
+    /// The locals that hold a known variant of an enum at this point of the current
+    /// block, by the variant's index. Atomic orders are read from it (`order_arg`).
+    known_variants: BTreeMap<ingot_cfg::model::Local, usize>,
 }
 
 impl<'p> Codegen<'p> {
@@ -1556,6 +1559,7 @@ impl<'p> Codegen<'p> {
             ret_abi,
             abi_params,
             entry_allocas: Vec::new(),
+            known_variants: BTreeMap::new(),
         };
         generator.generate()?;
         let text = generator.render();
@@ -2359,6 +2363,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
     }
 
     fn emit_block(&mut self, block: &BlockData) -> Result<(), BuildError> {
+        self.known_variants.clear();
         for stmt in &block.stmts {
             match &stmt.kind {
                 StmtKind::StorageStart(_) | StmtKind::StorageEnd(_) => {}
@@ -2486,12 +2491,56 @@ impl<'a, 'p> FnGen<'a, 'p> {
         if resolved == self.cg.program.decls.types.void
             || resolved == self.cg.program.decls.types.never
         {
+            // A builtin of type `void` (`@atomic_store`, `@fence`) is an effect, not a
+            // value to drop: it runs, and a builtin the back end lacks is reported.
+            if let Rvalue::Builtin { .. } = value {
+                self.rvalue(value, ty)?;
+            }
             return Ok(());
         }
         let (v, ll) = self.rvalue(value, ty)?;
         let addr = self.place_addr(place)?;
         self.emit(format!("store {ll} {v}, ptr {addr}"));
+        self.note_variant(place, value);
         Ok(())
+    }
+
+    /// Keeps `known_variants` current after `place = value`: a local set to a variant
+    /// with no payload, or to a copy of such a local, is known; any other write to a
+    /// local, or a borrow of it, makes it unknown.
+    fn note_variant(&mut self, place: &Place, value: &Rvalue) {
+        // Any borrow can reach a write: an exclusive one directly, a shared one through
+        // a raw pointer made from it.
+        if let Rvalue::Borrow {
+            place: borrowed, ..
+        } = value
+            && let PlaceBase::Local(l) = borrowed.base
+        {
+            self.known_variants.remove(&l);
+        }
+        let PlaceBase::Local(dest) = place.base else {
+            return;
+        };
+        let known = match value {
+            Rvalue::Aggregate {
+                kind: AggregateKind::Variant { index, .. },
+                fields,
+                ..
+            } if place.proj.is_empty() && fields.is_empty() => Some(*index),
+            Rvalue::Use(Operand::Place(from, _))
+                if place.proj.is_empty() && from.proj.is_empty() =>
+            {
+                match from.base {
+                    PlaceBase::Local(l) => self.known_variants.get(&l).copied(),
+                    PlaceBase::Static(_) => None,
+                }
+            }
+            _ => None,
+        };
+        match known {
+            Some(index) => self.known_variants.insert(dest, index),
+            None => self.known_variants.remove(&dest),
+        };
     }
 
     fn rvalue(&mut self, rvalue: &Rvalue, ty: TypeId) -> Result<(String, String), BuildError> {
@@ -3776,7 +3825,7 @@ impl<'a, 'p> FnGen<'a, 'p> {
                         ));
                     }
                 };
-                let sym = self.cg.item_global(def, ty, "const", None)?;
+                let sym = self.cg.item_global(def, ty, "const", None, false)?;
                 let ll = self.cg.llvm_ty(ty)?;
                 let out = self.fresh_tmp();
                 self.emit(format!("{out} = load {ll}, ptr {}", global_ref(&sym)));
@@ -4695,6 +4744,78 @@ fn int_max_literal(ll: &str, signed: bool) -> String {
     }
 }
 
+/// How a value of an `AtomicValue` type goes through an atomic instruction. The
+/// instruction works on the value's bytes as a plain integer or pointer of the type's
+/// size, and the register form of some types is not that: `bool` is `i1` in registers
+/// and one byte in memory, and a payload-free enum is a struct around its tag.
+struct AtomicRep {
+    /// The LLVM type of the value in registers.
+    reg: String,
+    /// The LLVM type the atomic instruction works on.
+    mem: String,
+    /// The alignment given to the instruction: the type's size, its natural alignment.
+    align: u64,
+    wrap: AtomicWrap,
+}
+
+enum AtomicWrap {
+    /// An integer or a pointer: the same in registers and in memory.
+    Plain,
+    /// `bool`: `zext` to a byte, `trunc` back.
+    Bool,
+    /// A payload-free enum: the tag is field 0 of the register struct.
+    Enum,
+}
+
+/// An `order` operand of an atomic builtin, as far as the back end knows it.
+enum OrderArg {
+    /// A variant known when the code is generated: its LLVM ordering.
+    Known(&'static str),
+    /// A value of the enum, read at run time: the tag, its LLVM type, and the LLVM
+    /// ordering of each tag.
+    Dynamic {
+        tag: String,
+        tag_ll: String,
+        arms: Vec<(i128, &'static str)>,
+    },
+}
+
+/// What `atomic_dispatch` calls for each combination of orders: it emits one atomic
+/// instruction and gives its value, if it has one.
+type AtomicLeaf<'f, 'a, 'p> =
+    dyn FnMut(&mut FnGen<'a, 'p>, &[&'static str]) -> Result<Option<String>, BuildError> + 'f;
+
+/// The LLVM ordering of an order variant of `std.sync` (02 §15).
+fn llvm_ordering(variant: &str) -> Option<&'static str> {
+    Some(match variant {
+        "relaxed" => "monotonic",
+        "acquire" => "acquire",
+        "release" => "release",
+        "acq_rel" => "acq_rel",
+        "seq_cst" => "seq_cst",
+        _ => return None,
+    })
+}
+
+/// The value an atomic instruction gave, when the builtin has a result.
+fn atomic_value(value: Option<String>) -> Result<String, BuildError> {
+    value
+        .ok_or_else(|| BuildError::Internal("an atomic instruction that gave no value".to_string()))
+}
+
+fn atomic_operand<'x>(
+    name: &str,
+    args: &'x [ingot_cfg::BuiltinArg],
+    i: usize,
+) -> Result<&'x Operand, BuildError> {
+    match args.get(i) {
+        Some(ingot_cfg::BuiltinArg::Value(v)) => Ok(v),
+        _ => Err(BuildError::Internal(format!(
+            "`@{name}` without its operand {i}"
+        ))),
+    }
+}
+
 impl<'a, 'p> FnGen<'a, 'p> {
     // ------------------------------------------------------------- builtins
 
@@ -4820,9 +4941,379 @@ impl<'a, 'p> FnGen<'a, 'p> {
                 }
                 Ok(("%arg0".to_string(), "ptr".to_string()))
             }
+            "atomic_load"
+            | "atomic_store"
+            | "atomic_swap"
+            | "atomic_cmpxchg"
+            | "atomic_cmpxchg_weak"
+            | "atomic_add"
+            | "atomic_sub"
+            | "atomic_and"
+            | "atomic_or"
+            | "atomic_xor"
+            | "fence" => self.atomic_builtin(name, args, result_ty),
             "debug" => self.cg.ni("`@debug` (R5)"),
             other => self.cg.ni(format!("the builtin `@{other}` (B2)")),
         }
+    }
+
+    // -------------------------------------------------------------- atomics
+
+    /// `@atomic_*` and `@fence` (02 §15, pipeline §7): one atomic instruction with the
+    /// given ordering. An order that is not known here becomes a branch over its values
+    /// with one instruction in each arm (`atomic_dispatch`).
+    fn atomic_builtin(
+        &mut self,
+        name: &str,
+        args: &[ingot_cfg::BuiltinArg],
+        result_ty: TypeId,
+    ) -> Result<(String, String), BuildError> {
+        let void = ("zeroinitializer".to_string(), "{}".to_string());
+        if name == "fence" {
+            let order = self.order_arg(atomic_operand(name, args, 0)?)?;
+            // A relaxed fence orders nothing, so it emits nothing.
+            self.atomic_dispatch(&[order], &mut Vec::new(), None, &mut |fg, ord| {
+                if ord[0] != "monotonic" {
+                    fg.emit(format!("fence {}", ord[0]));
+                }
+                Ok(None)
+            })?;
+            return Ok(void);
+        }
+        let (ptr, ptr_ll) = self.value(atomic_operand(name, args, 0)?)?;
+        if ptr_ll != "ptr" {
+            return Err(BuildError::Internal(format!(
+                "`@{name}` got a pointer operand that is not a pointer"
+            )));
+        }
+        // `T` is the loaded value's type, or the type of the first value operand.
+        let value_ty = if name == "atomic_load" {
+            result_ty
+        } else {
+            self.operand_ty(atomic_operand(name, args, 1)?)?
+        };
+        let rep = self.atomic_rep(value_ty)?;
+        let (mem, align) = (rep.mem.clone(), rep.align);
+        match name {
+            "atomic_load" => {
+                let order = self.order_arg(atomic_operand(name, args, 1)?)?;
+                let loaded =
+                    self.atomic_dispatch(&[order], &mut Vec::new(), Some(&mem), &mut |fg, ord| {
+                        let out = fg.fresh_tmp();
+                        fg.emit(format!(
+                            "{out} = load atomic {mem}, ptr {ptr} {}, align {align}",
+                            ord[0]
+                        ));
+                        Ok(Some(out))
+                    })?;
+                let v = self.atomic_from_mem(&rep, &atomic_value(loaded)?);
+                Ok((v, rep.reg))
+            }
+            "atomic_store" => {
+                let (v, _) = self.value(atomic_operand(name, args, 1)?)?;
+                let v = self.atomic_to_mem(&rep, &v)?;
+                let order = self.order_arg(atomic_operand(name, args, 2)?)?;
+                self.atomic_dispatch(&[order], &mut Vec::new(), None, &mut |fg, ord| {
+                    fg.emit(format!(
+                        "store atomic {mem} {v}, ptr {ptr} {}, align {align}",
+                        ord[0]
+                    ));
+                    Ok(None)
+                })?;
+                Ok(void)
+            }
+            "atomic_swap" | "atomic_add" | "atomic_sub" | "atomic_and" | "atomic_or"
+            | "atomic_xor" => {
+                let op = match name {
+                    "atomic_swap" => "xchg",
+                    other => &other["atomic_".len()..],
+                };
+                let (v, _) = self.value(atomic_operand(name, args, 1)?)?;
+                let v = self.atomic_to_mem(&rep, &v)?;
+                let order = self.order_arg(atomic_operand(name, args, 2)?)?;
+                let previous =
+                    self.atomic_dispatch(&[order], &mut Vec::new(), Some(&mem), &mut |fg, ord| {
+                        let out = fg.fresh_tmp();
+                        fg.emit(format!(
+                            "{out} = atomicrmw {op} ptr {ptr}, {mem} {v} {}, align {align}",
+                            ord[0]
+                        ));
+                        Ok(Some(out))
+                    })?;
+                let v = self.atomic_from_mem(&rep, &atomic_value(previous)?);
+                Ok((v, rep.reg))
+            }
+            "atomic_cmpxchg" | "atomic_cmpxchg_weak" => {
+                let weak = if name == "atomic_cmpxchg_weak" {
+                    "weak "
+                } else {
+                    ""
+                };
+                let (expected, _) = self.value(atomic_operand(name, args, 1)?)?;
+                let expected = self.atomic_to_mem(&rep, &expected)?;
+                let (new, _) = self.value(atomic_operand(name, args, 2)?)?;
+                let new = self.atomic_to_mem(&rep, &new)?;
+                let success = self.order_arg(atomic_operand(name, args, 3)?)?;
+                let failure = self.order_arg(atomic_operand(name, args, 4)?)?;
+                // LLVM accepts a failure order stronger than the success order, so
+                // neither is adjusted for the other.
+                let pair_ll = format!("{{ {mem}, i1 }}");
+                let pair = self.atomic_dispatch(
+                    &[success, failure],
+                    &mut Vec::new(),
+                    Some(&pair_ll),
+                    &mut |fg, ord| {
+                        let out = fg.fresh_tmp();
+                        let (success, failure) = (ord[0], ord[1]);
+                        fg.emit(format!(
+                            "{out} = cmpxchg {weak}ptr {ptr}, {mem} {expected}, {mem} {new} \
+                             {success} {failure}, align {align}"
+                        ));
+                        Ok(Some(out))
+                    },
+                )?;
+                let pair = atomic_value(pair)?;
+                let observed = self.fresh_tmp();
+                self.emit(format!("{observed} = extractvalue {pair_ll} {pair}, 0"));
+                let swapped = self.fresh_tmp();
+                self.emit(format!("{swapped} = extractvalue {pair_ll} {pair}, 1"));
+                let observed = self.atomic_from_mem(&rep, &observed);
+                self.cmpxchg_result(result_ty, &swapped, &observed, &rep.reg)
+            }
+            other => Err(BuildError::Internal(format!(
+                "`@{other}` is not an atomic builtin"
+            ))),
+        }
+    }
+
+    /// The `T ! T` of a compare-exchange: the previous value is `Ok` when the exchange
+    /// happened and the observed value is `Err` when it did not, and both are the one
+    /// value the instruction returned, so only the tag depends on `swapped`.
+    fn cmpxchg_result(
+        &mut self,
+        result_ty: TypeId,
+        swapped: &str,
+        observed: &str,
+        observed_ll: &str,
+    ) -> Result<(String, String), BuildError> {
+        let result_ty = self.cg.resolve_ty(result_ty);
+        let ll = self.cg.llvm_ty(result_ty)?;
+        let align = self.cg.layout(result_ty)?.align;
+        let Shape::Enum {
+            tag,
+            payload_offset,
+            variants,
+            ..
+        } = self.cg.types[&result_ty].shape.clone()
+        else {
+            return Err(BuildError::Internal(
+                "a compare-exchange whose result is not a result type".to_string(),
+            ));
+        };
+        let (ok, err) = match variants.as_slice() {
+            [ok, err] => (ok.tag, err.tag),
+            _ => {
+                return Err(BuildError::Internal(
+                    "a result type without two variants".to_string(),
+                ));
+            }
+        };
+        let slot = self.alloca(&ll, align);
+        self.emit(format!("store {ll} zeroinitializer, ptr {slot}"));
+        let chosen = self.fresh_tmp();
+        self.emit(format!(
+            "{chosen} = select i1 {swapped}, {tag} {}, {tag} {}",
+            int_literal(&tag, ok),
+            int_literal(&tag, err)
+        ));
+        self.emit(format!("store {tag} {chosen}, ptr {slot}"));
+        let payload = self.fresh_tmp();
+        self.emit(format!(
+            "{payload} = getelementptr i8, ptr {slot}, i64 {payload_offset}"
+        ));
+        self.emit(format!("store {observed_ll} {observed}, ptr {payload}"));
+        let out = self.fresh_tmp();
+        self.emit(format!("{out} = load {ll}, ptr {slot}"));
+        Ok((out, ll))
+    }
+
+    /// The register and memory forms of an atomic value's type.
+    fn atomic_rep(&mut self, ty: TypeId) -> Result<AtomicRep, BuildError> {
+        let ty = self.cg.resolve_ty(ty);
+        let reg = self.cg.llvm_ty(ty)?;
+        let layout = self.cg.layout(ty)?;
+        let (mem, wrap) = match self.cg.program.decls.types.kind(ty) {
+            TyKind::Int(_) | TyKind::RawPtr(..) => (reg.clone(), AtomicWrap::Plain),
+            TyKind::Bool => ("i8".to_string(), AtomicWrap::Bool),
+            _ => match self.cg.tag_only_enum(ty) {
+                Some(tag) => (tag, AtomicWrap::Enum),
+                None => {
+                    return Err(BuildError::Internal(
+                        "an atomic builtin on a type that is not an atomic value".to_string(),
+                    ));
+                }
+            },
+        };
+        // The cell of an atomic holds a value at its natural alignment, so the
+        // alignment the instruction promises is the size.
+        if layout.align < layout.size {
+            return self
+                .cg
+                .ni("an atomic value whose alignment is smaller than its size");
+        }
+        Ok(AtomicRep {
+            reg,
+            mem,
+            align: layout.size,
+            wrap,
+        })
+    }
+
+    fn atomic_to_mem(&mut self, rep: &AtomicRep, v: &str) -> Result<String, BuildError> {
+        Ok(match rep.wrap {
+            AtomicWrap::Plain => v.to_string(),
+            AtomicWrap::Bool => {
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = zext i1 {v} to i8"));
+                out
+            }
+            AtomicWrap::Enum => {
+                let v = self.as_ssa(v, &rep.reg, rep.align)?;
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = extractvalue {} {v}, 0", rep.reg));
+                out
+            }
+        })
+    }
+
+    fn atomic_from_mem(&mut self, rep: &AtomicRep, v: &str) -> String {
+        match rep.wrap {
+            AtomicWrap::Plain => v.to_string(),
+            AtomicWrap::Bool => {
+                let out = self.fresh_tmp();
+                self.emit(format!("{out} = trunc i8 {v} to i1"));
+                out
+            }
+            AtomicWrap::Enum => {
+                let out = self.fresh_tmp();
+                self.emit(format!(
+                    "{out} = insertvalue {} zeroinitializer, {} {v}, 0",
+                    rep.reg, rep.mem
+                ));
+                out
+            }
+        }
+    }
+
+    /// What is known about an `order` operand: a variant spelled out in this block (a
+    /// literal such as `.relaxed`, or a copy of one) or a `const` of the enum, else its
+    /// tag read at run time. The tag is field 0 of the enum's struct (`discriminant`).
+    fn order_arg(&mut self, op: &Operand) -> Result<OrderArg, BuildError> {
+        let ty = self.operand_ty(op)?;
+        let TyKind::Adt(def, _) = self.cg.program.decls.types.kind(ty).clone() else {
+            return Err(BuildError::Internal(
+                "an atomic order that is not an enum".to_string(),
+            ));
+        };
+        let sig = self.cg.program.decls.enum_sig(def).ok_or_else(|| {
+            BuildError::Internal("an atomic order that is not an enum".to_string())
+        })?;
+        let tag_ll = int_for_size(u64::from(sig.tag_ty.bits() / 8)).to_string();
+        let arms = sig
+            .variants
+            .iter()
+            .map(|v| {
+                llvm_ordering(&v.name)
+                    .map(|ordering| (v.tag, ordering))
+                    .ok_or_else(|| {
+                        BuildError::Internal(format!("`{}` is not an atomic order", v.name))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let known = match op {
+            Operand::Place(p, _) if p.proj.is_empty() => match p.base {
+                PlaceBase::Local(l) => self.known_variants.get(&l).copied(),
+                PlaceBase::Static(_) => None,
+            },
+            Operand::Const(Const::Named { def, .. }) => match self.cg.item_value(*def) {
+                Some(SemValue::Variant { index, .. }) => Some(index),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((_, ordering)) = known.and_then(|index| arms.get(index)) {
+            return Ok(OrderArg::Known(ordering));
+        }
+        let (v, ll) = self.value(op)?;
+        let v = self.as_ssa(&v, &ll, 1)?;
+        let tag = self.fresh_tmp();
+        self.emit(format!("{tag} = extractvalue {ll} {v}, 0"));
+        Ok(OrderArg::Dynamic { tag, tag_ll, arms })
+    }
+
+    /// Calls `leaf` with the LLVM orderings, once if every order is known, and
+    /// otherwise once in each arm of a `switch` over the tag of the first order that is
+    /// not (recursively, so two unknown orders give every pair). `leaf` emits one
+    /// instruction and gives its value, which is a `phi` of type `result_ll` where the
+    /// arms meet. The last variant is the default arm, so no arm is unreachable.
+    fn atomic_dispatch(
+        &mut self,
+        orders: &[OrderArg],
+        chosen: &mut Vec<&'static str>,
+        result_ll: Option<&str>,
+        leaf: &mut AtomicLeaf<'_, 'a, 'p>,
+    ) -> Result<Option<String>, BuildError> {
+        let Some(order) = orders.get(chosen.len()) else {
+            return leaf(self, chosen);
+        };
+        let (tag, tag_ll, arms) = match order {
+            OrderArg::Known(ordering) => {
+                chosen.push(ordering);
+                let out = self.atomic_dispatch(orders, chosen, result_ll, leaf);
+                chosen.pop();
+                return out;
+            }
+            OrderArg::Dynamic { tag, tag_ll, arms } => (tag, tag_ll, arms),
+        };
+        let join = self.fresh_label("atomic_join");
+        let labels: Vec<String> = arms
+            .iter()
+            .map(|_| self.fresh_label("atomic_arm"))
+            .collect();
+        let cases: String = arms
+            .iter()
+            .zip(&labels)
+            .take(arms.len().saturating_sub(1))
+            .map(|((value, _), label)| {
+                format!("{tag_ll} {}, label %{label} ", int_literal(tag_ll, *value))
+            })
+            .collect();
+        let default = labels.last().cloned().unwrap_or_else(|| join.clone());
+        self.emit(format!(
+            "switch {tag_ll} {tag}, label %{default} [ {cases}]"
+        ));
+        let mut incoming = Vec::new();
+        for ((_, ordering), label) in arms.iter().zip(labels) {
+            self.cur = self.new_block(label);
+            chosen.push(ordering);
+            let value = self.atomic_dispatch(orders, chosen, result_ll, leaf);
+            chosen.pop();
+            let value = value?;
+            // A nested dispatch ends in its own join block, not the one it began in.
+            incoming.push((value, self.blocks[self.cur].label.clone()));
+            self.emit(format!("br label %{join}"));
+        }
+        self.cur = self.new_block(join);
+        let Some(ll) = result_ll else {
+            return Ok(None);
+        };
+        let mut edges = Vec::new();
+        for (value, from) in incoming {
+            edges.push(format!("[ {}, %{from} ]", atomic_value(value)?));
+        }
+        let out = self.fresh_tmp();
+        self.emit(format!("{out} = phi {ll} {}", edges.join(", ")));
+        Ok(Some(out))
     }
 
     fn convert_builtin(
@@ -7345,6 +7836,7 @@ impl<'p> Codegen<'p> {
         ty: TypeId,
         kind: &str,
         align: Option<u64>,
+        writable: bool,
     ) -> Result<String, BuildError> {
         if let Some(sym) = self.item_globals.get(&def) {
             return Ok(sym.clone());
@@ -7361,6 +7853,9 @@ impl<'p> Codegen<'p> {
         let sym = format!("{kind}.{}", self.next_global);
         self.next_global += 1;
         let align = align.unwrap_or(layout.align).max(1);
+        // A static with interior mutability is written through `&`, so its global is
+        // not `constant` (the optimizer would fold every read).
+        let storage = if writable { "global" } else { "constant" };
         if Self::value_has_pointer(&value) {
             let ll = self.llvm_ty(ty)?;
             let init = self.const_init(&value, ty)?.ok_or_else(|| {
@@ -7370,7 +7865,7 @@ impl<'p> Codegen<'p> {
             })?;
             let _ = ll;
             self.globals
-                .push(format!("@{sym} = private constant {init}, align {align}"));
+                .push(format!("@{sym} = private {storage} {init}, align {align}"));
             self.item_globals.insert(def, sym.clone());
             return Ok(sym);
         }
@@ -7381,7 +7876,7 @@ impl<'p> Codegen<'p> {
             format!("c{}", llvm_string(&bytes))
         };
         self.globals.push(format!(
-            "@{sym} = private constant [{} x i8] {init}, align {align}",
+            "@{sym} = private {storage} [{} x i8] {init}, align {align}",
             layout.size
         ));
         self.item_globals.insert(def, sym.clone());
@@ -7389,7 +7884,8 @@ impl<'p> Codegen<'p> {
     }
 
     /// Whether a type contains `std.sync.Cell` by value (the one interior-mutable
-    /// language item). A static of such a type is R2 work.
+    /// language item). A borrow or pointer to a `Cell` does not count, and the
+    /// fields of a struct, the payloads of an enum and the captures of a closure do.
     fn interior_mutable(
         &mut self,
         ty: TypeId,
@@ -7413,12 +7909,39 @@ impl<'p> Codegen<'p> {
                 | TyKind::Slice(..)
                 | TyKind::Dyn(..)
                 | TyKind::DynFn(..)
+                | TyKind::FnPtr(_)
         ) {
             return Ok(false);
         }
-        let children = self.program.decls.types.children(ty);
-        for child in children {
-            if self.interior_mutable(child, seen)? {
+        // The parts held by value: the type arguments of `children` do not include the
+        // fields of a struct or the payloads of an enum, so those are walked here.
+        let parts: Vec<TypeId> = match kind {
+            TyKind::Adt(def, args) => {
+                let subst = self.program.decls.subst_for(def, &args);
+                match self.program.decls.item(def).cloned() {
+                    Some(ItemSig::Struct(sig)) => sig
+                        .fields
+                        .iter()
+                        .map(|f| self.program.decls.instantiate(f.ty, &subst))
+                        .collect(),
+                    Some(ItemSig::Enum(sig)) => sig
+                        .variants
+                        .iter()
+                        .filter_map(|v| v.payload)
+                        .map(|p| self.program.decls.instantiate(p, &subst))
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            }
+            TyKind::Closure(def, index, args) => self
+                .program
+                .decls
+                .closure_field_tys(def, index, &args)
+                .unwrap_or_default(),
+            _ => self.program.decls.types.children(ty),
+        };
+        for part in parts {
+            if self.interior_mutable(part, seen)? {
                 return Ok(true);
             }
         }
@@ -7441,10 +7964,8 @@ impl<'p> Codegen<'p> {
                 ));
             }
         };
-        if self.interior_mutable(ty, &mut BTreeSet::new())? {
-            return self.ni("a static with interior mutability (R2)");
-        }
-        let sym = self.item_global(def, ty, "static", align)?;
+        let writable = self.interior_mutable(ty, &mut BTreeSet::new())?;
+        let sym = self.item_global(def, ty, "static", align, writable)?;
         Ok(global_ref(&sym))
     }
 

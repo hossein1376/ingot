@@ -1,0 +1,155 @@
+//! expect: run
+//! section: 15, 20
+
+// An order is any expression of its type. These functions are not `inline`, so the order
+// they get is a parameter and the back end branches over its values. Each is called with
+// every order its operation allows (and `order_const` is a `const`, which is known).
+
+import std.Env;
+import std.sync.Atomic;
+import std.sync.AtomicOrder;
+import std.sync.LoadOrder;
+import std.sync.StoreOrder;
+
+const order_const: AtomicOrder = .acq_rel;
+
+noinline fn load_with(a: &Atomic[i64], order: LoadOrder) -> i64 {
+    return a.load(order);
+}
+
+noinline fn store_with(a: &Atomic[i64], value: i64, order: StoreOrder) {
+    a.store(value, order);
+}
+
+noinline fn add_with(a: &Atomic[i64], delta: i64, order: AtomicOrder) -> i64 {
+    return a.add(delta, order);
+}
+
+noinline fn swap_with(
+    a: &Atomic[bool],
+    value: bool,
+    order: AtomicOrder,
+) -> bool {
+    return a.swap(value, order);
+}
+
+noinline fn exchange_with(
+    a: &Atomic[u8],
+    expected: u8,
+    new: u8,
+    success: AtomicOrder,
+    failure: LoadOrder,
+) -> u8 ! u8 {
+    return try a.compare_exchange(expected, new, success, failure);
+}
+
+noinline fn exchange_failure_only(
+    a: &Atomic[u8],
+    expected: u8,
+    new: u8,
+    failure: LoadOrder,
+) -> u8 ! u8 {
+    return try a.compare_exchange_weak(expected, new, .seq_cst, failure);
+}
+
+fn loads() {
+    let a = Atomic[i64].init(42);
+    @assert(load_with(&a, .relaxed) == 42);
+    @assert(load_with(&a, .acquire) == 42);
+    @assert(load_with(&a, .seq_cst) == 42);
+}
+
+fn stores() {
+    let a = Atomic[i64].init(0);
+    store_with(&a, 1, .relaxed);
+    @assert(a.load(.relaxed) == 1);
+    store_with(&a, 2, .release);
+    @assert(a.load(.relaxed) == 2);
+    store_with(&a, 3, .seq_cst);
+    @assert(a.load(.relaxed) == 3);
+}
+
+fn read_modify_write() {
+    let a = Atomic[i64].init(0);
+    @assert(add_with(&a, 1, .relaxed) == 0);
+    @assert(add_with(&a, 10, .acquire) == 1);
+    @assert(add_with(&a, 100, .release) == 11);
+    @assert(add_with(&a, 1000, .acq_rel) == 111);
+    @assert(add_with(&a, 10000, .seq_cst) == 1111);
+    @assert(a.load(.relaxed) == 11111);
+    @assert(a.add(1, order_const) == 11111);
+
+    let b = Atomic[bool].init(false);
+    @assert(!swap_with(&b, true, .relaxed));
+    @assert(swap_with(&b, false, .acquire));
+    @assert(!swap_with(&b, true, .release));
+    @assert(swap_with(&b, false, .acq_rel));
+    @assert(!swap_with(&b, true, .seq_cst));
+    @assert(b.load(.relaxed));
+}
+
+/// Every pair of orders, with both an exchange that succeeds and one that fails.
+fn exchanges() {
+    let a = Atomic[u8].init(0);
+    var n: u8 = 0;
+    for success in 0..5 {
+        for failure in 0..3 {
+            let s = success_order(success);
+            let f = failure_order(failure);
+            match exchange_with(&a, n, n + 1, s, f) {
+                .ok(previous) => { @assert(previous == n); }
+                .err(_) => { @assert(false); }
+            }
+            n += 1;
+            match exchange_with(&a, n + 100, 0, s, f) {
+                .ok(_) => { @assert(false); }
+                .err(observed) => { @assert(observed == n); }
+            }
+        }
+    }
+    @assert(a.load(.relaxed) == 15);
+
+    // One order known and the other not, in both positions.
+    match exchange_failure_only(&a, 15, 16, .relaxed) {
+        .ok(previous) => { @assert(previous == 15); }
+        .err(_) => { @assert(a.load(.relaxed) == 15); }
+    }
+    match exchange_failure_only(&a, 99, 0, .acquire) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed >= 15); }
+    }
+}
+
+noinline fn success_order(i: i64) -> AtomicOrder {
+    if i == 0 {
+        return .relaxed;
+    }
+    if i == 1 {
+        return .acquire;
+    }
+    if i == 2 {
+        return .release;
+    }
+    if i == 3 {
+        return .acq_rel;
+    }
+    return .seq_cst;
+}
+
+noinline fn failure_order(i: i64) -> LoadOrder {
+    if i == 0 {
+        return .relaxed;
+    }
+    if i == 1 {
+        return .acquire;
+    }
+    return .seq_cst;
+}
+
+pub fn main(env: &Env) -> u8 {
+    loads();
+    stores();
+    read_modify_write();
+    exchanges();
+    return 0;
+}

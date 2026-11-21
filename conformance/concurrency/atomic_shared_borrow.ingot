@@ -1,0 +1,34 @@
+//! expect: run
+//! section: 13.6, 15, 20
+
+// An `&Atomic[i64]` is a shared borrow, and the callee writes through it.
+
+import std.Env;
+import std.sync.Atomic;
+
+fn add_through(a: &Atomic[i64], delta: i64) -> i64 {
+    return a.add(delta, .acq_rel);
+}
+
+fn set_through(a: &Atomic[bool]) {
+    a.store(true, .release);
+}
+
+pub fn main(env: &Env) -> u8 {
+    let counter = Atomic[i64].init(1);
+    @assert(add_through(&counter, 2) == 1);
+    @assert(add_through(&counter, 4) == 3);
+    @assert(counter.load(.relaxed) == 7);
+
+    let flag = Atomic[bool].init(false);
+    set_through(&flag);
+    @assert(flag.load(.acquire));
+
+    // Two shared borrows at once, both writing.
+    let first = &counter;
+    let second = &counter;
+    _ = add_through(first, 1);
+    _ = add_through(second, 1);
+    @assert(counter.load(.relaxed) == 9);
+    return 0;
+}

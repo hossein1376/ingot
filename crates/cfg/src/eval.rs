@@ -1835,6 +1835,9 @@ impl<'a> Evaluator<'a> {
             Rvalue::Aggregate {
                 kind, ty, fields, ..
             } => {
+                // In a generic function the literal's type names its type parameters
+                // (`Cell[T].{ .. }`); the value carries the instance's type.
+                let ty = &self.subst_ty(host, *ty);
                 let mut vals = Vec::with_capacity(fields.len());
                 for f in fields {
                     vals.push(self.operand(host, fi, f)?);

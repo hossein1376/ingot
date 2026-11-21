@@ -1,0 +1,91 @@
+//! expect: run
+//! section: 8, 15, 20
+
+// The other `AtomicValue` types: `bool`, a raw pointer and a payload-free `copy enum`.
+// A `bool` is an `i1` in registers and a byte in memory, and an enum is its tag; each
+// goes through the same instructions as an integer.
+
+import std.Env;
+import std.sync.Atomic;
+
+copy enum Color: u8 {
+    red,
+    green,
+    blue,
+}
+
+copy enum Wide: u32 {
+    low,
+    high = 70000,
+}
+
+fn bool_ops() {
+    let a = Atomic[bool].init(false);
+    @assert(!a.load(.relaxed));
+    a.store(true, .seq_cst);
+    @assert(a.load(.acquire));
+    @assert(a.swap(false, .acq_rel));
+    @assert(!a.load(.relaxed));
+    match a.compare_exchange(false, true, .seq_cst, .seq_cst) {
+        .ok(previous) => { @assert(!previous); }
+        .err(_) => { @assert(false); }
+    }
+    match a.compare_exchange(false, true, .seq_cst, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed); }
+    }
+    @assert(a.load(.relaxed));
+}
+
+fn pointer_ops() {
+    var x: i64 = 11;
+    var y: i64 = 22;
+    let px = &mut x as *mut i64;
+    let py = &mut y as *mut i64;
+    let a = Atomic[*mut i64].init(px);
+    @assert(a.load(.relaxed) == px);
+    a.store(py, .release);
+    @assert(a.load(.acquire) == py);
+    @assert(a.swap(px, .seq_cst) == py);
+    match a.compare_exchange(py, px, .seq_cst, .relaxed) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == px); }
+    }
+    match a.compare_exchange(px, py, .acq_rel, .acquire) {
+        .ok(previous) => { @assert(previous == px); }
+        .err(_) => { @assert(false); }
+    }
+    let q = a.load(.relaxed);
+    unsafe("q is the address of y, which is live and not borrowed here") {
+        @assert(q.* == 22);
+    }
+}
+
+fn enum_ops() {
+    let a = Atomic[Color].init(.green);
+    @assert(a.load(.relaxed) == .green);
+    a.store(.blue, .release);
+    @assert(a.load(.acquire) == .blue);
+    @assert(a.swap(.red, .acq_rel) == .blue);
+    match a.compare_exchange(.green, .blue, .seq_cst, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == .red); }
+    }
+    match a.compare_exchange(.red, .green, .seq_cst, .seq_cst) {
+        .ok(previous) => { @assert(previous == .red); }
+        .err(_) => { @assert(false); }
+    }
+    @assert(a.load(.relaxed) == .green);
+
+    let w = Atomic[Wide].init(.low);
+    w.store(.high, .seq_cst);
+    @assert(w.load(.seq_cst) == .high);
+    @assert(w.swap(.low, .relaxed) == .high);
+}
+
+pub fn main(env: &Env) -> u8 {
+    bool_ops();
+    pointer_ops();
+    enum_ops();
+    return 0;
+}

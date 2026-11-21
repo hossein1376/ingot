@@ -1,0 +1,25 @@
+//! expect: run
+//! section: 15
+
+// `@fence` is safe, takes any `AtomicOrder`, and a relaxed one does nothing.
+
+import std.Env;
+import std.sync.AtomicOrder;
+
+noinline fn fence_with(order: AtomicOrder) {
+    @fence(order);
+}
+
+pub fn main(env: &Env) -> u8 {
+    @fence(.relaxed);
+    @fence(.acquire);
+    @fence(.release);
+    @fence(.acq_rel);
+    @fence(.seq_cst);
+    fence_with(.relaxed);
+    fence_with(.acquire);
+    fence_with(.release);
+    fence_with(.acq_rel);
+    fence_with(.seq_cst);
+    return 0;
+}

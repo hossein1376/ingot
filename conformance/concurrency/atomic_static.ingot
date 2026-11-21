@@ -1,0 +1,70 @@
+//! expect: run
+//! section: 4.5, 13.6, 15, 20
+
+// A static whose type holds a `Cell` is a writable global that `&` borrows and the
+// atomic operations write: a counter, a flag with an initial value, and a struct and an
+// array of atomics.
+
+import std.Env;
+import std.sync.Atomic;
+
+static count: Atomic[i64] = Atomic[i64].init(0);
+static ready: Atomic[bool] = Atomic[bool].init(true);
+static limit: Atomic[u8] = Atomic[u8].init(200);
+
+struct Stats {
+    hits: Atomic[i64],
+    misses: Atomic[i64],
+    armed: Atomic[bool],
+}
+
+static stats: Stats = Stats.{
+    hits: Atomic[i64].init(100),
+    misses: Atomic[i64].init(0),
+    armed: Atomic[bool].init(false),
+};
+
+static slots: [3]Atomic[i64] = [3]Atomic[i64].{
+    Atomic[i64].init(1),
+    Atomic[i64].init(2),
+    Atomic[i64].init(3),
+};
+
+fn bump_all() {
+    var i: i64 = 0;
+    while i < 3 {
+        _ = slots[i].add(10, .relaxed);
+        i += 1;
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    var i: i64 = 0;
+    while i < 1000 {
+        _ = count.add(1, .relaxed);
+        i += 1;
+    }
+    @assert(count.load(.relaxed) == 1000);
+
+    @assert(ready.load(.relaxed));
+    @assert(ready.swap(false, .seq_cst));
+    @assert(!ready.load(.relaxed));
+
+    _ = limit.add(100, .relaxed);
+    @assert(limit.load(.relaxed) == 44);
+
+    @assert(stats.hits.load(.relaxed) == 100);
+    _ = stats.hits.add(5, .relaxed);
+    _ = stats.misses.sub(1, .relaxed);
+    stats.armed.store(true, .release);
+    @assert(stats.hits.load(.relaxed) == 105);
+    @assert(stats.misses.load(.relaxed) == -1);
+    @assert(stats.armed.load(.acquire));
+
+    bump_all();
+    bump_all();
+    @assert(slots[0].load(.relaxed) == 21);
+    @assert(slots[1].load(.relaxed) == 22);
+    @assert(slots[2].load(.relaxed) == 23);
+    return 0;
+}

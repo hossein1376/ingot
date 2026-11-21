@@ -1,0 +1,93 @@
+//! expect: run
+//! section: 15, 20
+
+// Compare-exchange: the `ok` value is the previous value when the exchange happened,
+// the `err` value is the value observed when it did not, and a failure order may be
+// stronger than the success order. `compare_exchange_weak` in a retry loop.
+
+import std.Env;
+import std.sync.Atomic;
+
+fn strong() {
+    let a = Atomic[i64].init(10);
+    match a.compare_exchange(10, 20, .seq_cst, .relaxed) {
+        .ok(previous) => { @assert(previous == 10); }
+        .err(_) => { @assert(false); }
+    }
+    @assert(a.load(.relaxed) == 20);
+    match a.compare_exchange(10, 30, .acq_rel, .acquire) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 20); }
+    }
+    @assert(a.load(.relaxed) == 20);
+    match a.compare_exchange(20, 40, .relaxed, .seq_cst) {
+        .ok(previous) => { @assert(previous == 20); }
+        .err(_) => { @assert(false); }
+    }
+    match a.compare_exchange(20, 50, .release, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 40); }
+    }
+    @assert(a.load(.relaxed) == 40);
+}
+
+fn small_integers() {
+    let a = Atomic[u8].init(255);
+    match a.compare_exchange(255, 0, .seq_cst, .seq_cst) {
+        .ok(previous) => { @assert(previous == 255); }
+        .err(_) => { @assert(false); }
+    }
+    match a.compare_exchange(255, 1, .seq_cst, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 0); }
+    }
+    let b = Atomic[i32].init(-5);
+    match b.compare_exchange(-5, 5, .acquire, .acquire) {
+        .ok(previous) => { @assert(previous == -5); }
+        .err(_) => { @assert(false); }
+    }
+    @assert(b.load(.relaxed) == 5);
+}
+
+/// `x = x * 2`, retrying while another thread (or a spurious failure) gets in the way.
+fn double(a: &Atomic[i64]) -> i64 {
+    var seen = a.load(.relaxed);
+    var previous: i64 = 0;
+    var done = false;
+    while !done {
+        match a.compare_exchange_weak(seen, seen * 2, .acq_rel, .relaxed) {
+            .ok(p) => {
+                previous = p;
+                done = true;
+            }
+            .err(now) => { seen = now; }
+        }
+    }
+    return previous;
+}
+
+fn weak() {
+    let a = Atomic[i64].init(3);
+    @assert(double(&a) == 3);
+    @assert(double(&a) == 6);
+    @assert(a.load(.relaxed) == 12);
+}
+
+/// A weak exchange that must fail: the values differ, so it fails whatever the hardware
+/// does, and gives the observed value.
+fn weak_mismatch() {
+    let a = Atomic[i64].init(1);
+    match a.compare_exchange_weak(2, 3, .seq_cst, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 1); }
+    }
+    @assert(a.load(.relaxed) == 1);
+}
+
+pub fn main(env: &Env) -> u8 {
+    strong();
+    small_integers();
+    weak();
+    weak_mismatch();
+    return 0;
+}

@@ -238,6 +238,10 @@ code alone.
 * **Guards are not `Send`** (*user*, std design). The language cannot say "not `Send`",
   so a guard holds a `[0]*u8` marker and `unsafe impl Sync` adds back what is wanted.
 
+* **R2 builds `Cell`, `Atomic`, `Mutex` and `Guard` only** (*user*, 2026-11-21).
+  `RwLock`, `Once` and `WaitGroup` come with parking (R3), where their waits are real;
+  in the inline stage they would be rewritten. `Chan` needs parking anyway.
+
 ## 7. Check removal and cost
 
 * **Facts and their sources** (review 1, C1–C5; pipeline §6): an assignment of a

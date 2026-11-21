@@ -44,7 +44,14 @@ borrows/temporary_lives_too_long.ingot
 borrows/two_exclusive.ingot
 borrows/two_phase_receiver.ingot
 borrows/two_shared_borrows.ingot
+concurrency/atomic_cmpxchg.ingot
+concurrency/atomic_dynamic_order.ingot
+concurrency/atomic_fence.ingot
 concurrency/atomic_not_sync.ingot
+concurrency/atomic_ops_int.ingot
+concurrency/atomic_ops_other.ingot
+concurrency/atomic_shared_borrow.ingot
+concurrency/atomic_static.ingot
 concurrency/atomic_value_bound.ingot
 concurrency/atomic_value_eq.ingot
 concurrency/atomic_value_kinds.ingot

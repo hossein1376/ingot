@@ -270,6 +270,13 @@ pub fn par_for_split[S: Split, C: Sync](
 ) -> void
 ```
 
+A `par for` over a range or a slice uses `par_for_range`. Phase 8 lowers the loop body
+to a function of one item (the capture record, the item, the index when written); the
+back end generates the chunk function `body` from it, which loops over `lo..hi` with the
+loop's step and calls the item body, inlined. For a slice the range is `0..len`, the
+slice is a field of the capture record, and the chunk function forms each item (`&mut
+xs[i]`, `&xs[i]` or the element) itself. Only a `par.Split` uses `par_for_split`.
+
 `exec.par` uses the same chunk shape, each chunk run as `exec.simd`. Both return after
 every iteration has finished. The body may run on any worker and in
 any order. Iterations are never duplicated. The runtime splits a range or a `Split`

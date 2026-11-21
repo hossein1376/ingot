@@ -17,7 +17,12 @@ steps R2, R3 and R4).
    chunks in order. An operation that would have to park runs other pending records
    instead, and traps T13 when there are none. This is enough for `scope`, `spawn`,
    `join`, `par for`, uncontended locks and the three concurrency `run` tests
-   (`concurrency/spawn_join`, `par_for_disjoint`, `par_for_atomic`).
+   (`concurrency/spawn_join`, `par_for_disjoint`, `par_for_atomic`). A task record and
+   its argument and result record come from a region the runtime reserves from the
+   operating system (`Vm`), never from the general heap, and go back to a free list at
+   `join` or, for a statement-form spawn, when the task finishes; a scope's pending
+   records are a list in its `ScopeState`. The current task is found through the OS
+   thread-local slot from the start, so stages 2 and 3 change no caller.
 2. **Parking** (R3). Stacks with guard pages, taken from a cache; the stack switch (one
    assembly file per target, `rt.md` §2); wait queues with tickets and `select`
    (03-concurrency §21, `rt.md` §3); channels, timers, the test clock; T11 (stack

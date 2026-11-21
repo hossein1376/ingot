@@ -165,3 +165,142 @@ unsafe impl[T: AtomicValue + Send] Sync for Atomic[T] {}
 unsafe impl[T: Owned + Send] Send for Mutex[T] {}
 
 unsafe impl[T: Owned + Send] Sync for Mutex[T] {}
+
+static test_counter: Atomic[i64] = Atomic[i64].init(0);
+
+noinline fn add_with(a: &Atomic[i64], delta: i64, order: AtomicOrder) -> i64 {
+    return a.add(delta, order);
+}
+
+noinline fn load_with(a: &Atomic[i64], order: LoadOrder) -> i64 {
+    return a.load(order);
+}
+
+noinline fn exchange_with(
+    a: &Atomic[i64],
+    expected: i64,
+    new: i64,
+    success: AtomicOrder,
+    failure: LoadOrder,
+) -> i64 ! i64 {
+    return try a.compare_exchange(expected, new, success, failure);
+}
+
+test "load, store, swap and the read-modify-write operations give the previous value" {
+    let a = Atomic[i64].init(5);
+    @assert(a.load(.relaxed) == 5);
+    a.store(7, .release);
+    @assert(a.load(.acquire) == 7);
+    @assert(a.swap(9, .acq_rel) == 7);
+    @assert(a.add(3, .relaxed) == 9);
+    @assert(a.sub(2, .seq_cst) == 12);
+    @assert(a.and(6, .relaxed) == 10);
+    @assert(a.or(5, .relaxed) == 2);
+    @assert(a.xor(2, .relaxed) == 7);
+    @assert(a.into_inner() == 5);
+}
+
+test "add and sub wrap" {
+    let a = Atomic[u8].init(250);
+    @assert(a.add(10, .relaxed) == 250);
+    @assert(a.load(.relaxed) == 4);
+    @assert(a.sub(5, .relaxed) == 4);
+    @assert(a.load(.relaxed) == 255);
+    let b = Atomic[i64].init(9223372036854775807);
+    @assert(b.add(1, .relaxed) == 9223372036854775807);
+    @assert(b.load(.relaxed) == -9223372036854775808);
+}
+
+test "bool, a raw pointer and a payload-free enum are atomic values" {
+    let flag = Atomic[bool].init(false);
+    @assert(!flag.swap(true, .seq_cst));
+    @assert(flag.load(.relaxed));
+
+    var x: i64 = 1;
+    var y: i64 = 2;
+    let px = &mut x as *mut i64;
+    let py = &mut y as *mut i64;
+    let p = Atomic[*mut i64].init(px);
+    @assert(p.swap(py, .acq_rel) == px);
+    @assert(p.load(.acquire) == py);
+
+    let order = Atomic[LoadOrder].init(.relaxed);
+    order.store(.seq_cst, .seq_cst);
+    @assert(order.load(.relaxed) == .seq_cst);
+}
+
+test "compare_exchange gives the previous value, or the observed one as the error" {
+    let a = Atomic[i64].init(10);
+    match a.compare_exchange(10, 20, .seq_cst, .relaxed) {
+        .ok(previous) => { @assert(previous == 10); }
+        .err(_) => { @assert(false); }
+    }
+    match a.compare_exchange(10, 30, .acq_rel, .seq_cst) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 20); }
+    }
+    @assert(a.load(.relaxed) == 20);
+}
+
+test "compare_exchange_weak in a retry loop" {
+    let a = Atomic[i64].init(3);
+    var seen = a.load(.relaxed);
+    var done = false;
+    while !done {
+        match a.compare_exchange_weak(seen, seen * 2, .acq_rel, .relaxed) {
+            .ok(_) => { done = true; }
+            .err(now) => { seen = now; }
+        }
+    }
+    @assert(a.load(.relaxed) == 6);
+}
+
+test "an order that is a parameter takes each of its values" {
+    let a = Atomic[i64].init(0);
+    @assert(add_with(&a, 1, .relaxed) == 0);
+    @assert(add_with(&a, 2, .acquire) == 1);
+    @assert(add_with(&a, 4, .release) == 3);
+    @assert(add_with(&a, 8, .acq_rel) == 7);
+    @assert(add_with(&a, 16, .seq_cst) == 15);
+    @assert(load_with(&a, .relaxed) == 31);
+    @assert(load_with(&a, .acquire) == 31);
+    @assert(load_with(&a, .seq_cst) == 31);
+    match exchange_with(&a, 31, 32, .release, .seq_cst) {
+        .ok(previous) => { @assert(previous == 31); }
+        .err(_) => { @assert(false); }
+    }
+    match exchange_with(&a, 31, 0, .seq_cst, .acquire) {
+        .ok(_) => { @assert(false); }
+        .err(observed) => { @assert(observed == 32); }
+    }
+}
+
+test "a fence takes any order" {
+    @fence(.relaxed);
+    @fence(.acquire);
+    @fence(.release);
+    @fence(.acq_rel);
+    @fence(.seq_cst);
+}
+
+test "a static atomic is one counter for the whole program" {
+    var i: i64 = 0;
+    while i < 100 {
+        _ = test_counter.add(1, .relaxed);
+        i += 1;
+    }
+    @assert(test_counter.load(.relaxed) == 100);
+}
+
+test "get_mut and Cell" {
+    var a = Atomic[i64].init(1);
+    let m = a.get_mut();
+    m.* = 2;
+    @assert(a.load(.relaxed) == 2);
+    let c = Cell[i64].init(4);
+    let p = c.get();
+    unsafe("p points at the cell's contents, which nothing else borrows") {
+        p.* += 1;
+    }
+    @assert(c.into_inner() == 5);
+}

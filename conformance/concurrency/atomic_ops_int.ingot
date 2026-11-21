@@ -1,0 +1,68 @@
+//! expect: run
+//! section: 15, 20
+
+// Every `Atomic` operation on integers, with the results the previous-value rule gives:
+// each read-modify-write returns the value from before the operation, and `add` and
+// `sub` wrap instead of trapping.
+
+import std.Env;
+import std.sync.Atomic;
+
+fn i64_ops() {
+    let a = Atomic[i64].init(5);
+    @assert(a.load(.relaxed) == 5);
+    a.store(7, .release);
+    @assert(a.load(.acquire) == 7);
+    @assert(a.swap(9, .acq_rel) == 7);
+    @assert(a.add(3, .relaxed) == 9);
+    @assert(a.load(.seq_cst) == 12);
+    @assert(a.sub(2, .seq_cst) == 12);
+    @assert(a.and(6, .relaxed) == 10);
+    @assert(a.or(5, .relaxed) == 2);
+    @assert(a.xor(2, .relaxed) == 7);
+    @assert(a.load(.relaxed) == 5);
+    a.store(-8, .seq_cst);
+    @assert(a.add(-4, .relaxed) == -8);
+    @assert(a.into_inner() == -12);
+}
+
+fn u8_wraps() {
+    let a = Atomic[u8].init(250);
+    @assert(a.add(10, .relaxed) == 250);
+    @assert(a.load(.relaxed) == 4);
+    @assert(a.sub(5, .relaxed) == 4);
+    @assert(a.load(.relaxed) == 255);
+    @assert(a.and(0xf0, .acquire) == 255);
+    @assert(a.xor(0xff, .release) == 0xf0);
+    @assert(a.or(0x81, .acq_rel) == 0x0f);
+    @assert(a.swap(1, .seq_cst) == 0x8f);
+    @assert(a.load(.relaxed) == 1);
+}
+
+fn i32_wraps() {
+    let a = Atomic[i32].init(2147483647);
+    @assert(a.add(1, .relaxed) == 2147483647);
+    @assert(a.load(.relaxed) == -2147483648);
+    @assert(a.sub(1, .relaxed) == -2147483648);
+    @assert(a.load(.relaxed) == 2147483647);
+    a.store(-1, .relaxed);
+    @assert(a.and(0xff, .relaxed) == -1);
+    @assert(a.load(.relaxed) == 255);
+}
+
+fn u16_and_u64() {
+    let a = Atomic[u16].init(65535);
+    @assert(a.add(2, .relaxed) == 65535);
+    @assert(a.load(.relaxed) == 1);
+    let b = Atomic[u64].init(0);
+    @assert(b.sub(1, .relaxed) == 0);
+    @assert(b.load(.relaxed) == 18446744073709551615);
+}
+
+pub fn main(env: &Env) -> u8 {
+    i64_ops();
+    u8_wraps();
+    i32_wraps();
+    u16_and_u64();
+    return 0;
+}

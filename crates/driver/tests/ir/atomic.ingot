@@ -1,0 +1,39 @@
+import std.Env;
+import std.sync.Atomic;
+import std.sync.AtomicOrder;
+import std.sync.LoadOrder;
+
+static hits: Atomic[i64] = Atomic[i64].init(7);
+static table: [2]i64 = [2]i64.{ 1, 2 };
+
+fn load_relaxed(p: *mut i64) -> i64 {
+    unsafe("the caller passes a live, aligned i64") {
+        return @atomic_load(p, .relaxed);
+    }
+}
+
+fn add_any(p: *mut i64, order: AtomicOrder) -> i64 {
+    unsafe("the caller passes a live, aligned i64") {
+        return @atomic_add(p, 1, order);
+    }
+}
+
+fn exchange_any(
+    p: *mut i64,
+    order: AtomicOrder,
+    failure: LoadOrder,
+) -> i64 ! i64 {
+    unsafe("the caller passes a live, aligned i64") {
+        return try @atomic_cmpxchg(p, 1, 2, order, failure);
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    var x: i64 = 0;
+    let p = &mut x as *mut i64;
+    _ = load_relaxed(p);
+    _ = add_any(p, .seq_cst);
+    _ = exchange_any(p, .acq_rel, .acquire) catch e => e;
+    _ = hits.add(table[1], .relaxed);
+    return 0;
+}

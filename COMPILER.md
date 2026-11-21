@@ -479,7 +479,7 @@ platform's.
 | ~~The pinned LLVM version~~ Settled: upstream LLVM 22 (Homebrew `llvm@22` on macOS). Apple clang does not read its IR, and the reverse; B1 checks the version at start-up | done |
 | `alwaysinline` honored at `-O0` | Confirmed in B1: LLVM 22.1.8 keeps `alwaysinline` at `-O0` (the call disappears) and keeps `noinline` (the symbol and call remain). |
 | Inline stack probes on aarch64 and on Windows | B1 (aarch64): **confirmed**. LLVM 22 emits inline probes on `arm64-apple-macosx` when a function carries the attribute group `{ "probe-stack"="inline-asm" "stack-probe-size"="16384" }`: at `-O0` a 64 KiB `alloca` gets an inline probe loop, and at `-O2` four `sub sp, #16384; str xzr, [sp]` pairs. Every function the back end defines carries that group, so `rt.stack_probe` is not needed on aarch64. The `-mstack-arg-probe` and `-mstack-probe-size` driver flags are x86/Windows and do nothing here. T3 must settle Windows. |
-| LLVM no longer requiring a compare-exchange failure order no stronger than success | R2 |
+| ~~LLVM no longer requiring a compare-exchange failure order no stronger than success~~ Settled in R2: LLVM 22.1.8 accepts `cmpxchg ... monotonic seq_cst` and `weak ... release acquire` at `-O2` | done |
 | `minimumNumber`/`maximumNumber` intrinsics in the pinned version; the x86 cost of the float `@min`/`@max` rule | B4 |
 | ~~Which linker flags make a Mach-O byte-identical~~ Settled in B3: none today. `-reproducible` changes no byte, `-random_uuid` breaks identity, and the artifact file name must stay fixed (see "Reproducible output"). The debug map's temporary object path is B7's to avoid | done |
 
@@ -534,7 +534,9 @@ diff. "Haiku" and "Sonnet" name the subagent that does the work.
 | R1b | Sonnet | `std.mem` (`Heap` on the system allocator, `Vm`, `Arena`, `FixedBuf`, `Box`, `copy`, `fill`, `eq`) with `test` blocks; `ingot test std` in the gate | done (73bb77d) |
 | R1c | Sonnet | `std.list` and `std.str` (`docs/std/list.md`, `str.md`) with `test` blocks | done (b5a9da4) |
 | B4, B5 | — | Vectors, masks and the §26 builtins; the kernel IR, `exec.seq`, `exec.simd` | `simd/*`, `kernels/saxpy` |
-| R2 | — | Atomics in the back end; `Cell`, `Atomic`, `Mutex`; the inline scheduler | all 19 run/trap tests |
+| R2a | Sonnet | Atomics in the back end: every `@atomic_*` builtin and `@fence`, typed orders (a constant order is one instruction, a variable one a branch over its values); a `static` whose type contains a `Cell` as a writable global | single-task atomic tests under both pipelines; `ingot test std` covers `Atomic` |
+| R2b | Sonnet | The inline scheduler (`sched.md` stage 1) and its compiler side: `rt`'s `scope_enter`, `spawn`, `task_join`, `scope_wait`, cancellation, `par_for_range` and `start_tasks`; `std.task`'s `Scope` and `Task.join`; spawn thunks and the `par for` chunk function (a range or a slice) in the back end | `concurrency/spawn_join`, `par_for_disjoint`, `par_for_atomic`, `borrowed_until_scope_ends`, `join_keeps_borrow`, and new run tests, under both pipelines |
+| R2c | — | `Mutex` and `Guard` (a contended lock runs pending records, then traps T13); the `lock` cost item. `RwLock`, `Once` and `WaitGroup` wait for R3 (*user*) | new run and trap tests; R2 marked done |
 | R3, R4 | — | Parking (stacks, switch, wait queues, `select`, `Chan`, timers, `--seed`, T11, T13); workers and `exec.par` | new concurrency run tests |
 | B6, B7, R5 | — | The full C ABI; line tables and the optimizer cost items; `io`, `fmt`, `fs`, `net` | their tests |
 | T2, T3, G1 | — | The Linux and Windows targets; Metal, then Vulkan | the suite on each target |
