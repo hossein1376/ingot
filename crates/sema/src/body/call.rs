@@ -6,7 +6,7 @@ use super::{Checker, CtxKind, FnCtx};
 use crate::defs::{DefId, DefKind};
 use crate::hir::{self, ExprId, ExprKind, Res};
 use crate::sigs::*;
-use crate::traits::{MethodCandidate, MethodSource};
+use crate::traits::{ImplMatch, MethodCandidate, MethodSource};
 use crate::ty::*;
 use crate::typed::*;
 use ingot_diag::source::Span;
@@ -929,6 +929,7 @@ impl Checker<'_, '_, '_> {
         // Drop candidates whose impl's own bounds do not hold (method_candidates does
         // not check them), and functions that are not methods when one is needed.
         let mut kept: Vec<MethodCandidate> = Vec::new();
+        let mut unmet: Vec<ImplMatch> = Vec::new();
         for c in found {
             let is_method = self.cx.d.fn_sig(c.method).is_some_and(|f| f.is_method());
             if need_method && !is_method {
@@ -938,7 +939,7 @@ impl Checker<'_, '_, '_> {
                 MethodSource::Inherent(m) | MethodSource::Impl { matched: m, .. } => {
                     match self.cx.d.impl_bounds_hold(m) {
                         Tri::Yes => kept.push(c),
-                        Tri::No => {}
+                        Tri::No => unmet.push(m.clone()),
                         Tri::Unknown => {
                             self.ni(format!(
                                 "whether the bounds of an `impl` hold for `{}` (the specification does not define it)",
@@ -972,7 +973,12 @@ impl Checker<'_, '_, '_> {
         match ifaces.len() {
             1 => Some(kept.swap_remove(0)),
             0 => {
-                self.no_such_method(t0, name, name_span);
+                // The function exists, in an impl whose bounds this type misses: say
+                // which bound, not that there is no such function.
+                match unmet.first() {
+                    Some(m) => self.unmet_impl_bound(t0, name, name_span, m),
+                    None => self.no_such_method(t0, name, name_span),
+                }
                 None
             }
             _ => {
@@ -1003,6 +1009,56 @@ impl Checker<'_, '_, '_> {
                 None
             }
         }
+    }
+
+    /// E0801 for a method of an `impl` whose bounds `t0` does not meet, naming the first
+    /// bound that fails (`List[Word, Heap].extend` under `impl[T: Copy, ..]`).
+    pub(crate) fn unmet_impl_bound(
+        &mut self,
+        t0: TypeId,
+        name: &str,
+        name_span: Span,
+        m: &ImplMatch,
+    ) {
+        let generics = self.cx.d.generics_of(m.impl_def).to_vec();
+        let ipath = self
+            .cx
+            .sources
+            .get(self.cx.file_of(m.impl_def))
+            .path
+            .clone();
+        for g in &generics {
+            let Some(GenericArg::Ty(arg)) = m.subst.get(g.def).cloned() else {
+                continue;
+            };
+            for (j, b) in g.bounds.iter().enumerate() {
+                if *b == Bound::Poison {
+                    continue;
+                }
+                let bound = self.cx.d.subst_bound(b, &m.subst);
+                if self.cx.d.satisfies(arg, &bound) != Tri::No {
+                    continue;
+                }
+                let tname = self.name(t0);
+                let at = self.name(arg);
+                let bn = self.cx.bound_name(&bound);
+                let bspan = g.bound_spans.get(j).copied().unwrap_or(g.span);
+                self.err(
+                    "E0801",
+                    format!(
+                        "`{tname}.{name}` needs `{at}` to satisfy the bound `{bn}` of `{}`, \
+                         which its `impl` declares",
+                        g.name
+                    ),
+                    name_span,
+                )
+                .relate_in("signature", &ipath, bspan);
+                return;
+            }
+        }
+        // `impl_bounds_hold` said no, so some bound fails; this is only reached if
+        // the two disagree.
+        self.no_such_method(t0, name, name_span);
     }
 
     /// E0314, or E0802 for a function that an interface declares but the bounds of a

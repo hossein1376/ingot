@@ -1,0 +1,32 @@
+//! expect: reject
+//! section: 4.4, 8
+
+// A method of an `impl` whose bounds the receiver's type does not meet is E0801 at the
+// method name, whether it is called on a value, called as `Type.name(..)` or named as
+// a function value. It is not reported as a missing function.
+
+struct Word {
+    text: []u8,
+}
+
+struct Holder[T] {
+    v: T,
+}
+
+impl[T: Copy] Holder[T] {
+    fn get(self: &Holder[T]) -> T {
+        return self.v;
+    }
+}
+
+fn on_value(h: &Holder[Word]) -> i64 {
+    return h.get().text.len; //~ E0801
+}
+
+fn by_type(h: &Holder[Word]) -> i64 {
+    return Holder[Word].get(h).text.len; //~ E0801
+}
+
+fn as_value() -> void {
+    _ = Holder[Word].get; //~ E0801
+}

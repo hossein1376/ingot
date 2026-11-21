@@ -394,10 +394,12 @@ fn an_inherent_method_wins_over_an_interface_method() {
 #[test]
 fn the_bounds_of_an_impl_are_checked_for_the_receiver() {
     // `impl[K: Hash] Show for Pair[K, K]`: `Pair[Plain]` has no `show` because `Plain`
-    // is not `Hash`.
+    // is not `Hash`, which is E0801 naming that bound, not an unknown function.
     let text = "interface Show { fn show(self: &Self) -> i64; }\nstruct Pair[A, B] { a: A, b: B }\nstruct Plain { n: i64 }\nimpl[K: Hash] Show for Pair[K, K] { fn show(self: &Pair[K, K]) -> i64 { return 1; } }\nfn good(p: &Pair[i64, i64]) -> i64 {\n    return p.show();\n}\nfn bad(p: &Pair[Plain, Plain]) -> i64 {\n    return p.show();\n}\n";
     let b = build(text);
-    assert_eq!(b.codes(), vec![("E0314".to_string(), 9)]);
+    assert_eq!(b.codes(), vec![("E0801".to_string(), 9)]);
+    let m = &b.bodies.diagnostics[0].message;
+    assert!(m.contains("`Plain`") && m.contains("`Hash`"), "{m}");
 }
 
 #[test]

@@ -224,7 +224,7 @@ A file with any E01xx or E02xx error is not analyzed further. Other files still 
 
 | Code | Name | Reported when | Primary span | Fix |
 |---|---|---|---|---|
-| E0801 | `bound_not_satisfied` | a type argument does not have a bound's property or implement its interface. This includes a view type where `Owned` is required, and the type of an `impl I for T` that does not implement a supertrait of `I` | the argument, or the `impl` (`signature`: the bound) | — |
+| E0801 | `bound_not_satisfied` | a type argument does not have a bound's property or implement its interface. This includes a view type where `Owned` is required, the type of an `impl I for T` that does not implement a supertrait of `I`, and a function of an `impl` whose bounds the type it is called on or named through does not meet (`l.extend(xs)` on a `List[T, A]` whose `T` is not `Copy`) | the argument, the `impl`, or the function's name (`signature`: the bound) | — |
 | E0802 | `missing_bound` | a generic body uses an operation on `T` that its bounds do not grant | the operation (`declared`: the parameter) | add the one built-in bound that grants it, if there is exactly one |
 | E0803 | `cannot_infer_type_argument` | a type parameter is not determined by the argument types | the callee name | — |
 | E0804 | `wrong_type_argument_count` | too few or too many generic arguments | the argument list | — |

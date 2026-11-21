@@ -339,6 +339,7 @@ format/format_linear_argument.ingot
 format/format_malformed.ingot
 format/format_not_literal.ingot
 generics/bound_not_satisfied_at_call.ingot
+generics/bound_not_satisfied_by_impl.ingot
 generics/cannot_infer_type_argument.ingot
 generics/const_parameter_uppercase.ingot
 generics/const_parameter_values.ingot

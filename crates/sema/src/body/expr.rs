@@ -1256,7 +1256,7 @@ impl Checker<'_, '_, '_> {
                 }
             }
         }
-        if let Some(v) = self.inherent_method_value(e, t, name, explicit) {
+        if let Some(v) = self.inherent_method_value(e, t, name, name_span, explicit) {
             return v;
         }
         let cands = self.cx.d.method_candidates(t, name);
@@ -1275,6 +1275,7 @@ impl Checker<'_, '_, '_> {
         e: ExprId,
         t: TypeId,
         name: &str,
+        name_span: Span,
         explicit: Option<&[hir::GenericArg]>,
     ) -> Option<(TypeId, ExprRes)> {
         let mut found = None;
@@ -1288,6 +1289,20 @@ impl Checker<'_, '_, '_> {
             }
         }
         let (method, m) = found?;
+        match self.cx.d.impl_bounds_hold(&m) {
+            Tri::Yes => {}
+            Tri::No => {
+                self.unmet_impl_bound(t, name, name_span, &m);
+                return Some((self.poison(), ExprRes::None));
+            }
+            Tri::Unknown => {
+                self.ni(format!(
+                    "whether the bounds of an `impl` hold for `{}` (the specification does not define it)",
+                    self.name(t)
+                ));
+                return Some((self.poison(), ExprRes::None));
+            }
+        }
         self.cx.ensure_sig(method);
         let c = MethodCandidate {
             method,
