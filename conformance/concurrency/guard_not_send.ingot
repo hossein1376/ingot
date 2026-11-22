@@ -1,0 +1,17 @@
+//! expect: reject
+//! section: 18, 20
+
+import std.sync.Guard;
+import std.sync.Mutex;
+
+fn finish(g: Guard[i64]) -> void {
+    g.unlock();
+}
+
+fn f() {
+    let m = Mutex[i64].init(0);
+    let g = m.lock();
+    scope s {
+        spawn finish(g) in s; //~ E1401
+    }
+}

@@ -1,0 +1,16 @@
+//! expect: cost
+//! section: 18, 31
+
+// `Task.join` waits for its task, so a call of it is a park point; it is a method of
+// `impl[R] Task[R]`, found by its path as written (`std.task.Task.join`).
+
+fn work(n: i64) -> i64 {
+    return n;
+}
+
+fn run() -> i64 {
+    scope s { //~ park_point
+        let h = spawn work(1) in s; //~ task_spawn
+        return h.join(); //~ park_point
+    }
+}

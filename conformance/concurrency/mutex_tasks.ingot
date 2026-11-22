@@ -1,0 +1,56 @@
+//! expect: run
+//! section: 18, 20
+
+import std.Env;
+import std.sync.Mutex;
+
+struct Totals {
+    count: i64,
+    sum: i64,
+}
+
+fn bump(counter: &Mutex[i64]) -> void {
+    var g = counter.lock();
+    let n = g.get();
+    n.* += 1;
+    g.unlock();
+}
+
+fn record(totals: &Mutex[Totals], n: i64) -> void {
+    var g = totals.lock();
+    let t = g.get();
+    t.count += 1;
+    t.sum += n;
+    g.unlock();
+}
+
+// A task of the outer scope that opens a scope of its own. Its tasks update the same
+// two locks as the tasks of the outer scope.
+fn nested(counter: &Mutex[i64], totals: &Mutex[Totals]) -> void {
+    scope inner {
+        spawn bump(counter) in inner;
+        spawn record(totals, 100) in inner;
+        spawn bump(counter) in inner;
+    }
+}
+
+pub fn main(env: &Env) -> u8 {
+    let counter = Mutex[i64].init(0);
+    let totals = Mutex[Totals].init(Totals.{ count: 0, sum: 0 });
+    scope s {
+        var i: i64 = 0;
+        while i < 8 {
+            spawn bump(&counter) in s;
+            spawn record(&totals, i) in s;
+            i += 1;
+        }
+        spawn nested(&counter, &totals) in s;
+        spawn nested(&counter, &totals) in s;
+    }
+    // 8 tasks of the outer loop and 4 of the two nested scopes add to the counter.
+    @assert(counter.into_inner() == 12);
+    // 8 records of 0..8 and 2 records of 100.
+    let t = totals.into_inner();
+    @assert(t.count == 10 && t.sum == 228);
+    return 0;
+}

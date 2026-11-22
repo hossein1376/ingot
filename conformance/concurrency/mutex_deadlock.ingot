@@ -1,0 +1,30 @@
+//! expect: run
+//! exit: 101
+//! stderr: <runtime>:0:0: trap T13: deadlock: all 3 tasks are waiting
+//! section: 18, 22
+
+import std.Env;
+import std.sync.Mutex;
+
+fn child(m: &Mutex[i64]) -> void {
+    let g = m.lock();
+    g.unlock();
+}
+
+// Holds the lock while it runs a task that wants the same lock, and waits for that task.
+fn holder(m: &Mutex[i64]) -> void {
+    let g = m.lock();
+    scope inner {
+        let h = spawn child(m) in inner;
+        h.join();
+    }
+    g.unlock();
+}
+
+pub fn main(env: &Env) -> u8 {
+    let m = Mutex[i64].init(0);
+    scope s {
+        spawn holder(&m) in s;
+    }
+    return 0;
+}

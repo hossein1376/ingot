@@ -1,6 +1,8 @@
 // std.sync (spec sections 13.6, 20, 21 and 35). "Contents are `Owned`": a type with
 // interior mutability holds no borrow.
 
+import std.sys.rt;
+
 /// The cell of section 13.6: the one language item whose contents may be written
 /// through a shared borrow, in `unsafe` (section 15).
 pub struct Cell[T: Owned] {
@@ -153,7 +155,108 @@ impl[T: AtomicValue + Int] Atomic[T] {
     }
 }
 
-pub struct Mutex[T: Owned] {}
+/// A lock around a `T`: `state` is 0 while the lock is free and 1 while a guard holds it.
+/// While state is 1, the holder's guard is the only borrow of the cell's contents.
+pub struct Mutex[T: Owned] {
+    cell: Cell[T],
+    state: Atomic[u8],
+}
+
+impl[T: Owned] Mutex[T] {
+    pub fn init(value: T) -> Mutex[T] {
+        return Mutex[T].{
+            cell: Cell[T].init(value),
+            state: Atomic[u8].init(0),
+        };
+    }
+
+    /// Takes the lock, waiting for it. While it is held, the wait runs one pending record
+    /// of the current task's scopes (`rt.run_pending`), and when there is none the program
+    /// traps T13. Does not observe cancellation (section 22).
+    ///
+    /// Why this is the stage 1 wait (docs/std/sched.md): one task runs at a time, and a
+    /// task that holds a guard has not finished, so it is on this stack: this task, or one
+    /// further down. Such a holder cannot finish before this call returns, so running a
+    /// pending record cannot release the lock. The loop runs the records anyway, because
+    /// the runtime promises that other pending work runs before T13. A later stage can
+    /// park the task here instead.
+    pub fn lock(self: &Mutex[T]) -> Guard[T] from self {
+        while !self.try_take() {
+            if !rt.run_pending() {
+                rt.deadlock_trap();
+            }
+        }
+        return self.guard();
+    }
+
+    /// Takes the lock if it is free. Gives `.none`, without waiting, while it is held.
+    pub fn try_lock(self: &Mutex[T]) -> ?Guard[T] from self {
+        if self.try_take() {
+            return .some(self.guard());
+        }
+        return .none;
+    }
+
+    pub fn get_mut(self: &mut Mutex[T]) -> &mut T from self {
+        return &mut self.cell.value;
+    }
+
+    pub fn into_inner(self: Mutex[T]) -> T {
+        let Mutex[T].{ cell, state: _ } = self;
+        return cell.into_inner();
+    }
+
+    /// One attempt, which changes state from 0 to 1 or changes nothing. The success order
+    /// is acquire, so the writes of the holder that released the lock are visible here.
+    fn try_take(self: &Mutex[T]) -> bool {
+        match self.state.compare_exchange(0, 1, .acquire, .relaxed) {
+            .ok(_) => { return true; }
+            .err(_) => { return false; }
+        }
+    }
+
+    /// The guard of a lock this task has just taken.
+    fn guard(self: &Mutex[T]) -> Guard[T] from self {
+        let value = unsafe("state is 1 and the caller has just taken the lock, so the guard is the only borrow of the cell's contents until unlock") {
+            @borrow_from_raw(self.cell.get())
+        };
+        return Guard[T].{ mutex: self, value: value, not_send: [0]*u8.{} };
+    }
+}
+
+impl[T: Discard + Owned] Mutex[T] {
+    /// Ends the lock. Nothing is freed: the state is one byte, and `T` is `Discard`.
+    pub fn deinit(self: Mutex[T]) -> void {
+        let Mutex[T].{ cell: _, state: _ } = self;
+    }
+}
+
+/// A linear view of a held lock: `unlock` is the only way to release it. The `[0]*u8`
+/// field makes it not `Send`, because the language cannot say "not `Send`".
+pub linear struct Guard[T: Owned] {
+    mutex: &Mutex[T],
+    value: &mut T,
+    not_send: [0]*u8,
+}
+
+impl[T: Owned] Guard[T] {
+    pub fn get(self: &mut Guard[T]) -> &mut T from self {
+        return &mut self.value.*;
+    }
+
+    /// Releases the lock. The store is a release, so the next holder's acquire sees every
+    /// write made through this guard.
+    pub fn unlock(self: Guard[T]) -> void {
+        let Guard[T].{ mutex, value: _, not_send: _ } = self;
+        mutex.state.store(0, .release);
+    }
+}
+
+// The guard is `Sync` when `T` is `Send` and `Sync`, as sync.md section 8 says. A `&Guard`
+// gives only `&Mutex` (which is `Sync` for `T: Send`) and shared reads of the `T` behind
+// `value` (which `T: Sync` allows). The contents change only through `get` and `unlock`,
+// and both take the guard by `&mut` or by value.
+unsafe impl[T: Owned + Send + Sync] Sync for Guard[T] {}
 
 // Section 20: `Atomic[T]` and `Mutex[T]` are `Send` and `Sync` when `T: Send`. These
 // rows are given with `unsafe impl` (section 20) rather than derived from the fields:
@@ -303,4 +406,96 @@ test "get_mut and Cell" {
         p.* += 1;
     }
     @assert(c.into_inner() == 5);
+}
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn bump(m: &Mutex[i64]) -> void {
+    var g = m.lock();
+    let n = g.get();
+    n.* += 1;
+    g.unlock();
+}
+
+fn shift(m: &Mutex[Pair]) -> void {
+    var g = m.lock();
+    let p = g.get();
+    p.a += 1;
+    p.b -= 1;
+    g.unlock();
+}
+
+test "lock, write through get, unlock, lock again and read" {
+    let m = Mutex[i64].init(10);
+    var g = m.lock();
+    let v = g.get();
+    v.* = 20;
+    g.unlock();
+    var h = m.lock();
+    @assert(h.get().* == 20);
+    h.unlock();
+    m.deinit();
+}
+
+test "try_lock gives none while a guard is held, and a guard after unlock" {
+    let m = Mutex[i64].init(1);
+    let g = m.lock();
+    match m.try_lock() {
+        .some(other) => {
+            other.unlock();
+            @assert(false);
+        }
+        .none => {}
+    }
+    g.unlock();
+    match m.try_lock() {
+        .some(again) => { again.unlock(); }
+        .none => { @assert(false); }
+    }
+    m.deinit();
+}
+
+test "get_mut and into_inner give the contents" {
+    var m = Mutex[i64].init(4);
+    let v = m.get_mut();
+    v.* += 1;
+    @assert(m.into_inner() == 5);
+}
+
+test "a struct is the contents of a lock, and deinit drops it" {
+    let m = Mutex[Pair].init(Pair.{ a: 1, b: 2 });
+    shift(&m);
+    var g = m.lock();
+    let p = g.get();
+    @assert(p.a == 2 && p.b == 1);
+    g.unlock();
+    m.deinit();
+}
+
+test "tasks of one scope each lock, add and unlock" {
+    let m = Mutex[i64].init(0);
+    scope s {
+        var i: i64 = 0;
+        while i < 10 {
+            spawn bump(&m) in s;
+            i += 1;
+        }
+    }
+    @assert(m.into_inner() == 10);
+}
+
+test "tasks of one scope share a Mutex of a struct" {
+    let m = Mutex[Pair].init(Pair.{ a: 0, b: 0 });
+    scope s {
+        var i: i64 = 0;
+        while i < 5 {
+            spawn shift(&m) in s;
+            i += 1;
+        }
+    }
+    let p = m.into_inner();
+    @assert(p.a == 5 && p.b == -5);
 }

@@ -1,0 +1,16 @@
+//! expect: cost
+//! section: 31
+
+import std.sync.Mutex;
+
+fn take(m: &Mutex[i64]) -> void {
+    let g = m.lock(); //~ lock //~ park_point
+    g.unlock();
+}
+
+fn probe(m: &Mutex[i64]) -> void {
+    match m.try_lock() { //~ lock
+        .some(g) => { g.unlock(); }
+        .none => {}
+    }
+}

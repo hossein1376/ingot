@@ -150,6 +150,14 @@ pub fn scope_canceled(state: *ScopeState) -> bool
 
 pub fn task_canceled() -> bool
 
+/// Runs one pending record of a scope the current task is inside (its innermost open
+/// scope, or else its home scope, then each enclosing scope), and gives true; false when
+/// there is none. The wait of a contended `Mutex.lock` in stage 1 (sched.md).
+pub fn run_pending() -> bool
+
+/// T13 for `std.sync`: a lock that cannot be taken, with nothing left to run.
+pub fn deadlock_trap() -> never
+
 pub fn yield_now() -> void
 
 pub copy enum QosClass: u8 { performance, efficiency }

@@ -9,7 +9,7 @@
 use crate::model::*;
 use crate::removal::{CostItem, CostKind};
 use ingot_diag::source::Span;
-use ingot_sema::defs::{DefId, Sema};
+use ingot_sema::defs::{DefId, DefKind, Sema};
 use ingot_sema::sigs::{Bound, Declarations, ItemSig};
 use ingot_sema::ty::{GenericArg, Subst, TyKind, TypeId};
 use ingot_sema::typed::{FnSource, InterfaceVia};
@@ -141,7 +141,7 @@ fn add_call(
             item.allocator = allocator_arg(decls, sema, def, &alloc_args);
             items.push(item);
         }
-        if is_lock_call(sema, def) {
+        if is_lock_call(decls, sema, def) {
             items.push(item(id, cfg, CostKind::Lock, span));
         }
     }
@@ -213,8 +213,23 @@ fn indirect_kind(decls: &mut Declarations, cfg: &Cfg, target: &CallTarget) -> Op
 }
 
 /// The lock functions of pipeline §8, recognized by path.
-fn is_lock_call(sema: &Sema, def: DefId) -> bool {
-    lock_path(&sema.qualified_name(def))
+fn is_lock_call(decls: &Declarations, sema: &Sema, def: DefId) -> bool {
+    lock_path(&source_path(decls, sema, def))
+}
+
+/// The path a function is written with: `std.sync.Mutex.lock` for a method of
+/// `impl[T] Mutex[T]`, not the definition's own name, which runs through the `impl` item
+/// (`std.sync.impl.lock`) and so never matched the paths of pipeline §8.
+fn source_path(decls: &Declarations, sema: &Sema, def: DefId) -> String {
+    let d = sema.def(def);
+    if let Some(parent) = d.parent
+        && sema.def(parent).kind == DefKind::Impl
+        && let Some(sig) = decls.impl_sig(parent)
+        && let TyKind::Adt(target, _) = decls.types.kind(sig.target)
+    {
+        return format!("{}.{}", sema.qualified_name(*target), d.name);
+    }
+    sema.qualified_name(def)
 }
 
 fn lock_path(q: &str) -> bool {
@@ -237,8 +252,8 @@ fn parks_on_lock(q: &str) -> bool {
     )
 }
 
-fn is_park_entry(sema: &Sema, def: DefId) -> bool {
-    park_path(&sema.qualified_name(def))
+fn is_park_entry(decls: &Declarations, sema: &Sema, def: DefId) -> bool {
+    park_path(&source_path(decls, sema, def))
 }
 
 fn park_path(q: &str) -> bool {
@@ -341,8 +356,8 @@ fn term_park(
         }
         Terminator::Call { target, .. } => {
             if let CallTarget::Fn { fn_ref, .. } = target
-                && (is_park_entry(sema, fn_ref.def)
-                    || parks_on_lock(&sema.qualified_name(fn_ref.def)))
+                && (is_park_entry(decls, sema, fn_ref.def)
+                    || parks_on_lock(&source_path(decls, sema, fn_ref.def)))
             {
                 return true;
             }

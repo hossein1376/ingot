@@ -67,8 +67,11 @@ concurrency/cell_interior.ingot
 concurrency/cell_not_sync.ingot
 concurrency/constant_par_for.ingot
 concurrency/constant_spawn.ingot
+concurrency/guard_not_send.ingot
 concurrency/join_keeps_borrow.ingot
 concurrency/lock_holds_owned_only.ingot
+concurrency/mutex_deadlock.ingot
+concurrency/mutex_tasks.ingot
 concurrency/nested_scope_releases.ingot
 concurrency/not_a_scope.ingot
 concurrency/not_send.ingot
@@ -213,6 +216,7 @@ cost/indirect_extern.ingot
 cost/indirect_fn.ingot
 cost/len_plus_one_keeps_bound.ingot
 cost/load_has_no_check.ingot
+cost/lock.ingot
 cost/loop_counter_overflow_has_no_check.ingot
 cost/negative_index_keeps_check.ingot
 cost/negative_lo_keeps_bound.ingot
@@ -220,6 +224,7 @@ cost/nested_loop_growth.ingot
 cost/park_closure.ingot
 cost/park_dispatch_par.ingot
 cost/park_dispatch_seq.ingot
+cost/park_join.ingot
 cost/park_par_for.ingot
 cost/park_transitive.ingot
 cost/raw_pointer_does_not_keep_check.ingot

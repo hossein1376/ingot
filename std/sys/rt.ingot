@@ -828,6 +828,17 @@ fn chain_length(task: *mut TaskRecord) -> i64 {
     return n;
 }
 
+/// The T13 entry of `std.sync`: a lock that cannot be taken while no pending record is
+/// left to run (sched.md stage 1). The count is the tasks on this stack. With no
+/// scheduler (`start`) the thread runs one task, so the count is at least one.
+pub fn deadlock_trap() -> never {
+    var waiting = chain_length(current());
+    if waiting == 0 {
+        waiting = 1;
+    }
+    deadlock(waiting);
+}
+
 /// Waits for this task without consuming the handle: it runs now if it has not run.
 /// A task that is running further up this stack cannot finish before this call returns.
 pub fn task_wait(task: TaskRef) -> void {
@@ -848,6 +859,35 @@ pub fn task_join(task: TaskRef) -> void {
     task_wait(task);
     unlink(task.record);
     release(task.record);
+}
+
+/// Runs one pending record of a scope the current task is inside, on this stack, and
+/// gives true. Gives false when there is none, or when no scheduler runs. The scopes
+/// searched are the task's innermost open scope, or else its home scope, and then each
+/// `parent` up the chain. Each of them is open, since its block has not been left. A
+/// contended `Mutex.lock` calls this before it traps (std.sync). The record stays linked,
+/// so the join of its handle, or the scope's wait, still finds it and recycles it.
+pub fn run_pending() -> bool {
+    let task = current();
+    if is_null(task) {
+        return false;
+    }
+    unsafe("task is the live record of this thread's task, and each scope on its chain is open, so its list is live") {
+        let open = task.*.open;
+        var at = if is_null(open) { task.*.home } else { open };
+        while !is_null(at) {
+            var record = at.*.first;
+            while !is_null(record) {
+                if record.*.state == task_pending {
+                    run_record(record);
+                    return true;
+                }
+                record = record.*.next;
+            }
+            at = at.*.parent;
+        }
+    }
+    return false;
 }
 
 /// Waits for every task spawned in the scope, then closes it. A task may spawn more into
